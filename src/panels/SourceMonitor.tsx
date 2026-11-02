@@ -8,7 +8,7 @@ import { formatTimecode } from "../lib/time";
 import type { MediaAsset } from "../lib/types";
 import { useEditor } from "../state/editor";
 import { useProject } from "../state/project";
-import { attachPlayer, source, sourceDuration, sourceFps, useSource } from "../state/source";
+import { attachPlayer, NO_MARKS, source, sourceDuration, sourceFps, useSource } from "../state/source";
 import { setMediaDragRange, startMediaDrag } from "../ui/dnd";
 import { cx, IconButton, PanelHeader, Select } from "../ui/primitives";
 
@@ -41,8 +41,8 @@ function Waveform({ asset }: { asset: MediaAsset }) {
 
 export function SourceMonitor() {
   const { media, time, rate, recent } = useSource();
-  const marks = useSource((s) => (s.media ? s.marks[s.media] : undefined)) ?? { in: null, out: null };
   const asset = useProject((s) => (media ? s.mediaById.get(media) : undefined)) ?? null;
+  const marks = asset?.marks ?? NO_MARKS;
   const names = useProject((s) => s.mediaById);
   const useProxies = useEditor((s) => s.useProxies);
   const playerRef = useRef<HTMLVideoElement | HTMLAudioElement | null>(null);

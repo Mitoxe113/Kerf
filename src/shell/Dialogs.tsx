@@ -1,3 +1,4 @@
+import { CurveDialog } from "./CurveEditor";
 import { useEffect, useMemo, useState } from "react";
 import { comboOf, DEFAULT_PROFILE, formatCombo, keymapFile, keysFor, parseKeymapFile, profileChanged, recording, useKeymap } from "../actions/keymap";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
@@ -603,6 +604,8 @@ export function Dialogs() {
       return <ExportLogDialog job={dialog.job} title={dialog.title} onClose={close} />;
     case "normalize":
       return <NormalizeDialog clips={dialog.clips} onClose={close} />;
+    case "curve":
+      return <CurveDialog sequence={dialog.sequence} clip={dialog.clip} params={dialog.params} at={dialog.at} onClose={close} />;
     case "saveWorkspace":
       return <SaveWorkspace onClose={close} />;
     case "about":

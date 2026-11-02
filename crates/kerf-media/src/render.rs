@@ -21,7 +21,7 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
-use kerf_core::model::{Clip, Ease, Keyframe, MediaKind, MediaStatus, Param, Project, Sequence, TrackKind};
+use kerf_core::model::{Clip, Ease, Keyframe, MediaKind, MediaStatus, Param, Project, Sequence, TrackKind, VideoInfo};
 use kerf_core::time::{Frame, Rational};
 use serde::{Deserialize, Serialize};
 
@@ -127,7 +127,9 @@ fn segment(c: &Clip, t0: Frame, t1: Frame) -> Option<Segment> {
 /// FFmpeg expression for `param` of `clip` over variable `var`, which counts
 /// `unit`s (1 = frames, frame duration = seconds) from the start of the
 /// rendered segment (`head` frames into the clip). Uses the same easing
-/// polynomials as `Ease::apply`, so export matches the preview.
+/// polynomials as `Ease::apply`, so export matches the preview; Bezier
+/// curves are approximated by linear pieces (one per frame, at most
+/// `BEZIER_STEPS`).
 fn param_expr(clip: &Clip, param: Param, head: Frame, var: &str, unit: f64) -> String {
     let keys = clip.keys_of(param);
     let (Some(first), Some(last)) = (keys.first(), keys.last()) else { return num(clip.base_value(param) as f64) };
@@ -136,29 +138,96 @@ fn param_expr(clip: &Clip, param: Param, head: Frame, var: &str, unit: f64) -> S
     for w in keys.windows(2).rev() {
         let (a, b) = (w[0], w[1]);
         let (ta, tb) = (pos(&a), pos(&b));
+        let (va, dv) = (a.value as f64, (b.value - a.value) as f64);
         let u = format!("(({var}-{})/{})", num(ta), num((tb - ta).max(1e-9)));
-        let eased = match a.ease {
-            Ease::Linear => u.clone(),
-            Ease::EaseIn => format!("{u}*{u}"),
-            Ease::EaseOut => format!("{u}*(2-{u})"),
-            Ease::EaseInOut => format!("{u}*{u}*(3-2*{u})"),
-            Ease::Hold => "0".into(),
+        let inner = match a.ease {
+            Ease::Bezier { .. } => {
+                let steps = ((b.at - a.at) as f64 / clip.speed).ceil().clamp(4.0, BEZIER_STEPS as f64) as usize;
+                let mut pw = num(b.value as f64);
+                for i in (0..steps).rev() {
+                    let (u0, u1) = (i as f64 / steps as f64, (i + 1) as f64 / steps as f64);
+                    let (x0, x1) = (ta + (tb - ta) * u0, ta + (tb - ta) * u1);
+                    let (y0, y1) = (va + dv * a.ease.apply(u0), va + dv * a.ease.apply(u1));
+                    pw = format!(
+                        "if(lt({var},{}),{}+({})*({var}-{})/{},{pw})",
+                        num(x1),
+                        num(y0),
+                        num(y1 - y0),
+                        num(x0),
+                        num((x1 - x0).max(1e-9))
+                    );
+                }
+                pw
+            }
+            ease => {
+                let eased = match ease {
+                    Ease::EaseIn => format!("{u}*{u}"),
+                    Ease::EaseOut => format!("{u}*(2-{u})"),
+                    Ease::EaseInOut => format!("{u}*{u}*(3-2*{u})"),
+                    Ease::Hold => "0".into(),
+                    _ => u.clone(),
+                };
+                format!("{}+({})*{eased}", num(va), num(dv))
+            }
         };
-        e = format!("if(lt({var},{}),{}+({})*{eased},{e})", num(tb), num(a.value as f64), num((b.value - a.value) as f64));
+        e = format!("if(lt({var},{}),{inner},{e})", num(tb));
     }
     format!("if(lt({var},{}),{},{e})", num(pos(first)), num(first.value as f64))
 }
 
-/// `sendcmd` script setting `target`'s alpha multiplier once per output frame
-/// where animated opacity changes (colorchannelmixer has no expressions).
-fn opacity_commands(clip: &Clip, seg: &Segment, frame_s: f64, target: &str) -> String {
+const BEZIER_STEPS: usize = 32;
+
+/// `sendcmd` script updating the clip's `colorchannelmixer` (colour matrix
+/// and alpha) on every output frame where animated colour or opacity changes;
+/// the mixer has no expressions.
+fn mixer_commands(clip: &Clip, seg: &Segment, frame_s: f64, target: &str) -> String {
+    const NAMES: [&str; 9] = ["rr", "rg", "rb", "gr", "gg", "gb", "br", "bg", "bb"];
     let mut out = Vec::new();
-    let mut last = f32::NAN;
+    let mut last: Option<[f32; 10]> = None;
     for i in 0..seg.len {
-        let v = (clip.param_at(Param::Opacity, (seg.head + i) as f64) * 1000.0).round() / 1000.0;
-        if v != last {
-            out.push(format!("{} {target} aa {}", num(i as f64 * frame_s), num(v as f64)));
-            last = v;
+        let local = (seg.head + i) as f64;
+        let m = clip.color_at(local).matrix();
+        let mut v = [0f32; 10];
+        for (j, cell) in m.iter().flatten().enumerate() {
+            v[j] = (cell * 10_000.0).round() / 10_000.0;
+        }
+        v[9] = (clip.param_at(Param::Opacity, local) * 1000.0).round() / 1000.0;
+        if last != Some(v) {
+            let changed = |j: usize| last.is_none_or(|l| l[j] != v[j]);
+            let mut cmds: Vec<String> =
+                NAMES.iter().enumerate().filter(|(j, _)| changed(*j)).map(|(j, n)| format!("{target} {n} {}", num(v[j] as f64))).collect();
+            if changed(9) {
+                cmds.push(format!("{target} aa {}", num(v[9] as f64)));
+            }
+            out.push(format!("{} {}", num(i as f64 * frame_s), cmds.join(",")));
+            last = Some(v);
+        }
+    }
+    out.join(";")
+}
+
+/// `colorlevels` options realising contrast `slope` about mid-grey.
+fn levels(slope: f64) -> [(&'static str, f64); 4] {
+    let (imin, imax, omin, omax) = if slope >= 1.0 {
+        (0.5 - 0.5 / slope, 0.5 + 0.5 / slope, 0.0, 1.0)
+    } else {
+        (0.0, 1.0, 0.5 - 0.5 * slope, 0.5 + 0.5 * slope)
+    };
+    [("imin", imin), ("imax", imax), ("omin", omin), ("omax", omax)]
+}
+
+/// `sendcmd` script for animated contrast on a named `colorlevels`.
+fn levels_commands(clip: &Clip, seg: &Segment, frame_s: f64, target: &str) -> String {
+    let mut out = Vec::new();
+    let mut last = f64::NAN;
+    for i in 0..seg.len {
+        let k = clip.color_at((seg.head + i) as f64).contrast_slope() as f64;
+        let k = (k * 10_000.0).round() / 10_000.0;
+        if k != last {
+            let cmds: Vec<String> =
+                levels(k).iter().flat_map(|(n, v)| ["r", "g", "b"].map(|c| format!("{target} {c}{n} {}", num(*v)))).collect();
+            out.push(format!("{} {}", num(i as f64 * frame_s), cmds.join(",")));
+            last = k;
         }
     }
     out.join(";")
@@ -186,6 +255,15 @@ fn perspective(clip: &Clip, head: Frame, cw: f64, ch: f64, fit: f64, w: f64, h: 
         opts.push(format!("y{i}='{}+{y}+({s})*(({du})*sin({r})+({dv})*cos({r}))'", num(h / 2.0)));
     }
     format!("perspective={}:interpolation=cubic:sense=destination:eval=frame", opts.join(":"))
+}
+
+/// The preview (Chromium) decodes video without a colour matrix tag as
+/// BT.709 from 720 lines up and as BT.601 below; FFmpeg always assumes
+/// BT.601. Untagged HD input is therefore tagged BT.709 before the RGB
+/// conversion so export and preview show the same colours.
+fn assumed_color(v: &VideoInfo) -> Option<String> {
+    (v.color.space.is_none() && v.height >= 720)
+        .then(|| format!("setparams=colorspace=bt709:range={}", v.color.range.as_deref().unwrap_or("tv")))
 }
 
 fn num(v: f64) -> String {
@@ -320,11 +398,20 @@ pub fn plan(
             let k = inputs;
             inputs += 1;
             let mut f: Vec<String> = Vec::new();
+            if let Some(p) = info.video.as_ref().filter(|_| !image).and_then(assumed_color) {
+                f.push(p);
+            }
             f.push(format!("setpts=(PTS-STARTPTS)/{}", num(clip.speed)));
             f.push(format!("fps={}", rate_str(of)));
-            let mixer = if fading { format!("colorchannelmixer@op{k}") } else { "colorchannelmixer".into() };
-            if fading {
-                f.push(format!("sendcmd=c='{}'", opacity_commands(clip, &seg, frame_s, &mixer)));
+            let dynamic = fading || clip.color_animated();
+            let mixer = if dynamic { format!("colorchannelmixer@op{k}") } else { "colorchannelmixer".into() };
+            if dynamic {
+                f.push(format!("sendcmd=c='{}'", mixer_commands(clip, &seg, frame_s, &mixer)));
+            }
+            let contrast_keys = !clip.keys_of(Param::Contrast).is_empty();
+            let lv = format!("colorlevels@cl{k}");
+            if contrast_keys {
+                f.push(format!("sendcmd=c='{}'", levels_commands(clip, &seg, frame_s, &lv)));
             }
             if t.crop_left > 0.0 || t.crop_right > 0.0 || t.crop_top > 0.0 || t.crop_bottom > 0.0 {
                 f.push(format!(
@@ -344,9 +431,9 @@ pub fn plan(
                 f.push(format!("scale={sw}:{sh}:flags=bicubic"));
                 f.push("format=rgba".into());
             }
-            let col = &clip.color;
-            let needs_mixer = !col.is_identity() || clip.opacity < 1.0 || fading;
-            let alpha = if fading { clip.param_at(Param::Opacity, seg.head as f64) } else { clip.opacity };
+            let col = clip.color_at(seg.head as f64);
+            let needs_mixer = !col.is_identity() || clip.opacity < 1.0 || dynamic;
+            let alpha = clip.param_at(Param::Opacity, seg.head as f64);
             if needs_mixer {
                 let m = col.matrix();
                 f.push(format!(
@@ -363,17 +450,11 @@ pub fn plan(
                     num(alpha as f64)
                 ));
             }
-            if col.contrast != 0.0 {
-                let k = col.contrast_slope() as f64;
-                let (imin, imax, omin, omax) = if k >= 1.0 {
-                    (0.5 - 0.5 / k, 0.5 + 0.5 / k, 0.0, 1.0)
-                } else {
-                    (0.0, 1.0, 0.5 - 0.5 * k, 0.5 + 0.5 * k)
-                };
-                let (imin, imax, omin, omax) = (num(imin), num(imax), num(omin), num(omax));
-                f.push(format!(
-                    "colorlevels=rimin={imin}:gimin={imin}:bimin={imin}:rimax={imax}:gimax={imax}:bimax={imax}:romin={omin}:gomin={omin}:bomin={omin}:romax={omax}:gomax={omax}:bomax={omax}"
-                ));
+            if col.contrast != 0.0 || contrast_keys {
+                let opts: Vec<String> =
+                    levels(col.contrast_slope() as f64).iter().flat_map(|(n, v)| ["r", "g", "b"].map(|c| format!("{c}{n}={}", num(*v)))).collect();
+                let name = if contrast_keys { lv.as_str() } else { "colorlevels" };
+                f.push(format!("{name}={}", opts.join(":")));
             }
             if clip.fade_in > seg.head {
                 f.push(format!("fade=t=in:st=0:d={}:alpha=1", num(sf.frames_to_seconds(clip.fade_in - seg.head))));
@@ -772,6 +853,7 @@ mod tests {
                     pix_fmt: Some("yuv420p".into()),
                     bit_rate: None,
                     rotation: 0,
+                    color: Default::default(),
                 }),
                 audio: Some(AudioInfo { codec: "aac".into(), channels: 2, sample_rate: 48_000, channel_layout: None, bit_rate: None }),
             }),
@@ -782,6 +864,7 @@ mod tests {
             note: String::new(),
             imported_at: 0,
             derived: Derived::default(),
+            marks: Default::default(),
         });
         let seq = p.active_sequence;
         apply(
@@ -871,6 +954,119 @@ mod tests {
         assert!(tall.graph.contains("pad=1920:3414:(ow-iw)/2:(oh-ih)/2:color=black"), "{}", tall.graph);
         assert!(tall.graph.contains("scale=1080:1920"), "{}", tall.graph);
         assert_eq!((tall.width, tall.height), (1080, 1920));
+    }
+
+    /// Evaluates the subset of FFmpeg's expression language that `param_expr`
+    /// emits (nested `if(lt(a,b),x,y)` with + - * / and parentheses).
+    fn eval_expr(e: &str, var: &str, v: f64) -> f64 {
+        fn parse(s: &mut &str, var: &str, v: f64) -> f64 {
+            let mut acc = term(s, var, v);
+            loop {
+                if let Some(r) = s.strip_prefix('+') {
+                    *s = r;
+                    acc += term(s, var, v);
+                } else if let Some(r) = s.strip_prefix('-') {
+                    *s = r;
+                    acc -= term(s, var, v);
+                } else {
+                    return acc;
+                }
+            }
+        }
+        fn term(s: &mut &str, var: &str, v: f64) -> f64 {
+            let mut acc = atom(s, var, v);
+            loop {
+                if let Some(r) = s.strip_prefix('*') {
+                    *s = r;
+                    acc *= atom(s, var, v);
+                } else if let Some(r) = s.strip_prefix('/') {
+                    *s = r;
+                    acc /= atom(s, var, v);
+                } else {
+                    return acc;
+                }
+            }
+        }
+        fn atom(s: &mut &str, var: &str, v: f64) -> f64 {
+            if let Some(r) = s.strip_prefix("if(lt(") {
+                *s = r;
+                let a = parse(s, var, v);
+                *s = &s[1..];
+                let b = parse(s, var, v);
+                *s = &s[2..];
+                let x = parse(s, var, v);
+                *s = &s[1..];
+                let y = parse(s, var, v);
+                *s = &s[1..];
+                return if a < b { x } else { y };
+            }
+            if let Some(r) = s.strip_prefix('(') {
+                *s = r;
+                let x = parse(s, var, v);
+                *s = &s[1..];
+                return x;
+            }
+            if let Some(r) = s.strip_prefix(var) {
+                *s = r;
+                return v;
+            }
+            if let Some(r) = s.strip_prefix('-') {
+                *s = r;
+                return -atom(s, var, v);
+            }
+            let end = s.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(s.len());
+            let n = s[..end].parse().unwrap();
+            *s = &s[end..];
+            n
+        }
+        let mut s = e;
+        parse(&mut s, var, v)
+    }
+
+    #[test]
+    fn bezier_keys_are_approximated_closely_in_expressions() {
+        let mut c = Clip::new(uuid::Uuid::new_v4(), "c", 0, 100, 0);
+        let curve = Ease::Bezier { x1: 0.34, y1: 1.56, x2: 0.64, y2: 1.0 };
+        c.keys.insert(Param::X, vec![Keyframe { at: 10, value: 0.0, ease: curve }, Keyframe { at: 60, value: 200.0, ease: Ease::Linear }]);
+        let e = param_expr(&c, Param::X, 0, "in", 1.0);
+        let mut worst = 0f64;
+        for i in 0..=80 {
+            let f = i as f64;
+            worst = worst.max((eval_expr(&e, "in", f) - c.param_at(Param::X, f) as f64).abs());
+        }
+        // 16 linear pieces over 50 frames: well under a pixel.
+        assert!(worst < 0.5, "max error {worst}");
+    }
+
+    #[test]
+    fn animated_colour_drives_the_mixer_per_frame() {
+        let (mut p, seq) = project_with_clip();
+        let clip = p.sequence(seq).unwrap().tracks[0].clips[0].clone();
+        let s = p.sequence_mut(seq).unwrap();
+        let c = &mut s.tracks[0].clips[0];
+        c.keys.insert(Param::Exposure, vec![Keyframe { at: clip.source_in, value: -1.0, ease: Ease::Linear }, Keyframe { at: clip.source_in + 10, value: 0.0, ease: Ease::Linear }]);
+        c.keys.insert(Param::Contrast, vec![Keyframe { at: clip.source_in, value: 0.5, ease: Ease::Hold }]);
+        let plan = plan(&p, p.sequence(seq).unwrap(), &settings(), Path::new("C:/tmp"), &[]).unwrap();
+        let g = &plan.graph;
+        assert!(g.contains("sendcmd=c='0 colorchannelmixer@op0 rr 0.5"), "{g}");
+        assert!(g.contains("colorchannelmixer@op0=rr=0.5:"), "starts at -1 EV: {g}");
+        assert!(g.contains("sendcmd=c='0 colorlevels@cl0 rimin 0.166667"), "{g}");
+        assert!(g.contains("colorlevels@cl0=rimin=0.166667"), "{g}");
+    }
+
+    #[test]
+    fn untagged_hd_is_read_as_bt709() {
+        let (mut p, seq) = project_with_clip();
+        let g = plan(&p, p.sequence(seq).unwrap(), &settings(), Path::new("C:/tmp"), &[]).unwrap().graph;
+        assert!(g.contains("[0:v:0]setparams=colorspace=bt709:range=tv,"), "{g}");
+        let v = p.media[0].info.as_mut().unwrap().video.as_mut().unwrap();
+        v.color.space = Some("smpte170m".into());
+        let g = plan(&p, p.sequence(seq).unwrap(), &settings(), Path::new("C:/tmp"), &[]).unwrap().graph;
+        assert!(!g.contains("setparams"), "tagged input keeps its own matrix: {g}");
+        let v = p.media[0].info.as_mut().unwrap().video.as_mut().unwrap();
+        (v.color.space, v.height) = (None, 480);
+        let g = plan(&p, p.sequence(seq).unwrap(), &settings(), Path::new("C:/tmp"), &[]).unwrap().graph;
+        assert!(!g.contains("setparams"), "untagged SD stays BT.601: {g}");
     }
 
     #[test]

@@ -2,7 +2,7 @@
 // Keys are stored on the source position so they follow the picture when a
 // clip is trimmed, slipped or split.
 
-import type { Clip, Ease, Keyframe, KeyParam, Transform } from "./types";
+import type { Clip, ColorAdjust, ColorParam, Ease, Keyframe, KeyParam, Transform } from "./types";
 
 export const EASES: { value: Ease; label: string }[] = [
   { value: "linear", label: "Linear" },
@@ -12,10 +12,52 @@ export const EASES: { value: Ease; label: string }[] = [
   { value: "hold", label: "Halten" },
 ];
 
-export const VIDEO_PARAMS: KeyParam[] = ["x", "y", "scale", "rotation", "opacity"];
+export const COLOR_PARAMS: ColorParam[] = ["exposure", "contrast", "saturation", "temperature", "tint"];
+export const MOTION_PARAMS: KeyParam[] = ["x", "y", "scale", "rotation", "opacity"];
+export const VIDEO_PARAMS: KeyParam[] = [...MOTION_PARAMS, ...COLOR_PARAMS];
+
+/** Default control points of a new custom curve (CSS "ease"). */
+export const DEFAULT_BEZIER = { x1: 0.25, y1: 0.1, x2: 0.25, y2: 1 };
+
+export const isBezier = (e: Ease | undefined): e is Extract<Ease, { bezier: unknown }> => typeof e === "object" && e !== null && "bezier" in e;
+
+export const sameEase = (a: Ease | undefined, b: Ease | undefined) => JSON.stringify(a ?? "linear") === JSON.stringify(b ?? "linear");
+
+/**
+ * y of the cubic Bezier (0,0) (x1,y1) (x2,y2) (1,1) at x = u; mirrors
+ * kerf_core::model::bezier (Newton steps, bisection fallback).
+ */
+export function bezier(x1: number, y1: number, x2: number, y2: number, u: number): number {
+  const curve = (a: number, b: number, t: number) => {
+    const m = 1 - t;
+    return 3 * m * m * t * a + 3 * m * t * t * b + t * t * t;
+  };
+  const slope = (a: number, b: number, t: number) => {
+    const m = 1 - t;
+    return 3 * m * m * a + 6 * m * t * (b - a) + 3 * t * t * (1 - b);
+  };
+  let t = u;
+  for (let i = 0; i < 8; i++) {
+    const err = curve(x1, x2, t) - u;
+    if (Math.abs(err) < 1e-7) return curve(y1, y2, t);
+    const d = slope(x1, x2, t);
+    if (Math.abs(d) < 1e-6) break;
+    t = Math.min(1, Math.max(0, t - err / d));
+  }
+  let lo = 0;
+  let hi = 1;
+  t = u;
+  for (let i = 0; i < 40; i++) {
+    if (curve(x1, x2, t) < u) lo = t;
+    else hi = t;
+    t = 0.5 * (lo + hi);
+  }
+  return curve(y1, y2, t);
+}
 
 export function ease(e: Ease, u: number): number {
   u = Math.min(1, Math.max(0, u));
+  if (isBezier(e)) return bezier(e.bezier.x1, e.bezier.y1, e.bezier.x2, e.bezier.y2, u);
   switch (e) {
     case "easeIn":
       return u * u;
@@ -65,6 +107,8 @@ export function baseValue(c: Clip, p: KeyParam): number {
       return c.opacity;
     case "volume":
       return c.volumeDb;
+    default:
+      return c.color[p];
   }
 }
 
@@ -74,11 +118,14 @@ export function paramAt(c: Clip, p: KeyParam, local: number): number {
   return keys.length ? evalKeys(keys, sourceAt(c, local)) : baseValue(c, p);
 }
 
-/** Transform, opacity and volume of `c` at timeline frame `frame`. */
-export function animate(c: Clip, frame: number): { transform: Transform; opacity: number; volumeDb: number } {
-  if (!hasKeys(c)) return { transform: c.transform, opacity: c.opacity, volumeDb: c.volumeDb };
+/** Transform, opacity, colour and volume of `c` at timeline frame `frame`. */
+export function animate(c: Clip, frame: number): { transform: Transform; opacity: number; volumeDb: number; color: ColorAdjust } {
+  if (!hasKeys(c)) return { transform: c.transform, opacity: c.opacity, volumeDb: c.volumeDb, color: c.color };
   const local = frame - c.start;
+  const color = { ...c.color };
+  for (const p of COLOR_PARAMS) if (isAnimated(c, p)) color[p] = paramAt(c, p, local);
   return {
+    color,
     transform: {
       ...c.transform,
       x: paramAt(c, "x", local),

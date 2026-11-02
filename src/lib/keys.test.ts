@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { animate, ease, evalKeys, paramAt, upsertKey } from "./keys";
+import { animate, bezier, ease, evalKeys, paramAt, upsertKey } from "./keys";
 import type { Clip, Keyframe } from "./types";
 
 const key = (at: number, value: number, e: Keyframe["ease"] = "linear"): Keyframe => ({ at, value, ease: e });
@@ -26,6 +26,23 @@ describe("keyframes", () => {
     expect(paramAt(c, "x", 10)).toBeCloseTo(20);
     expect(animate(c, 110).transform.x).toBeCloseTo(20);
     expect(paramAt(c, "y", 10)).toBeUndefined();
+  });
+
+  it("evaluates custom curves like the engine", () => {
+    // Same reference points as kerf_core::model::tests (sampled from WebView2).
+    expect(bezier(0.25, 0.1, 0.25, 1, 0.25)).toBeCloseTo(0.408511, 5);
+    expect(bezier(0.25, 0.1, 0.25, 1, 0.5)).toBeCloseTo(0.802403, 5);
+    expect(bezier(0.25, 0.1, 0.25, 1, 0.75)).toBeCloseTo(0.960459, 5);
+    expect(bezier(0.42, 0, 0.58, 1, 0.37)).toBeCloseTo(0.285158, 5);
+    expect(bezier(0.3, 0.3, 0.7, 0.7, 0.37)).toBeCloseTo(0.37, 6);
+    expect(ease({ bezier: { x1: 0.34, y1: 1.56, x2: 0.64, y2: 1 } }, 0.6)).toBeGreaterThan(1);
+  });
+
+  it("animates colour", () => {
+    const color = { exposure: 0, contrast: 0, saturation: 1, temperature: 0, tint: 0 };
+    const c = { start: 0, sourceIn: 0, speed: 1, duration: 50, transform: {}, opacity: 1, volumeDb: 0, color, keys: { saturation: [key(0, 0), key(40, 2)] } } as unknown as Clip;
+    expect(animate(c, 10).color.saturation).toBeCloseTo(0.5);
+    expect(animate(c, 10).color.exposure).toBe(0);
   });
 
   it("keeps keys sorted and unique", () => {

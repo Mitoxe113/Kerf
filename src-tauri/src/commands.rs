@@ -312,6 +312,7 @@ pub fn media_import(app: AppHandle, state: State<'_, AppState>, paths: Vec<Strin
                 note: String::new(),
                 imported_at: now,
                 derived: Derived::default(),
+                marks: Default::default(),
             }
         })
         .collect();
@@ -594,6 +595,7 @@ pub fn freeze_frame(app: AppHandle, state: State<'_, AppState>, sequence: Uuid, 
         note: String::new(),
         imported_at: now_ms(),
         derived: Derived::default(),
+        marks: Default::default(),
     };
     let id = asset.id;
     let mut s = lock(&state.session);

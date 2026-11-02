@@ -170,6 +170,7 @@ mod tests {
             note: String::new(),
             imported_at: 0,
             derived: Derived::default(),
+            marks: Default::default(),
         });
         let mid = p.media[0].id;
         let seq = &mut p.sequences[0];

@@ -544,7 +544,7 @@ export class PlaybackEngine {
         matrix: quadMatrix(p, W, H),
         crop: [t.cropLeft, t.cropTop, t.cropRight, t.cropBottom],
         opacity: a.opacity * fadeGain(c, frame),
-        color: c.color,
+        color: a.color,
       });
     }
     return out;

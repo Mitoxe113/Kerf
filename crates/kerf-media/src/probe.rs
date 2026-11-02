@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use kerf_core::model::{AudioInfo, MediaInfo, MediaKind, VideoInfo};
+use kerf_core::model::{AudioInfo, ColorTags, MediaInfo, MediaKind, VideoInfo};
 use kerf_core::time::Rational;
 use serde::Deserialize;
 
@@ -46,6 +46,10 @@ struct ProbeStream {
     sample_rate: Option<String>,
     channels: Option<u32>,
     channel_layout: Option<String>,
+    color_space: Option<String>,
+    color_range: Option<String>,
+    color_transfer: Option<String>,
+    color_primaries: Option<String>,
     #[serde(default)]
     disposition: Disposition,
     #[serde(default)]
@@ -83,6 +87,14 @@ pub fn probe(tools: &Tools, path: &Path) -> Result<(MediaKind, MediaInfo), Media
     cmd.args(["-print_format", "json", "-show_format", "-show_streams"]).arg(path_arg(path));
     let out = run(cmd, "ffprobe")?;
     parse(&out.stdout, path)
+}
+
+/// A colour tag, `None` when the file leaves it unspecified.
+fn tag(s: &Option<String>) -> Option<String> {
+    s.as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty() && !matches!(*v, "unknown" | "unspecified" | "reserved"))
+        .map(str::to_string)
 }
 
 fn num<T: std::str::FromStr>(s: &Option<String>) -> Option<T> {
@@ -155,6 +167,12 @@ pub(crate) fn parse(json: &[u8], path: &Path) -> Result<(MediaKind, MediaInfo), 
             pix_fmt: s.pix_fmt.clone(),
             bit_rate: num(&s.bit_rate),
             rotation: rotation.rem_euclid(360),
+            color: ColorTags {
+                space: tag(&s.color_space),
+                range: tag(&s.color_range),
+                transfer: tag(&s.color_transfer),
+                primaries: tag(&s.color_primaries),
+            },
         }
     });
     let audio = audio.map(|s| AudioInfo {

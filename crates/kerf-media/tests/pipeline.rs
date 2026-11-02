@@ -67,6 +67,7 @@ fn import(tools: &Tools, path: &Path, cache: &Path) -> MediaAsset {
         note: String::new(),
         imported_at: 0,
         derived,
+        marks: Default::default(),
     }
 }
 
@@ -382,6 +383,58 @@ fn keyframed_position_opacity_and_volume_render() {
     let (q, loud) = (audio_rms(&tools, &file, 0.05), audio_rms(&tools, &file, 1.7));
     eprintln!("rms start {q:.4} end {loud:.4}");
     assert!(loud > q * 10.0, "volume ramps up");
+}
+
+#[test]
+fn animated_colour_renders() {
+    let Some(tools) = tools() else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("grey.mp4");
+    ffmpeg(&tools, &["-f", "lavfi", "-i", "color=c=0x808080:s=320x180:r=25:d=2", "-c:v", "libx264", "-preset", "ultrafast", "-y", &src.to_string_lossy()]);
+    let asset = import(&tools, &src, &dir.path().join("cache"));
+    let mut p = Project::new("c", 0);
+    let id = asset.id;
+    p.media.push(asset);
+    let seq = p.active_sequence;
+    let settings = SequenceSettings { width: 320, height: 180, fps: Rational::new(25, 1), sample_rate: 48_000 };
+    kerf_core::ops::apply(&mut p, &EditCommand::UpdateSequenceSettings { sequence: seq, settings }).unwrap();
+    let out = kerf_core::ops::apply(&mut p, &EditCommand::PlaceMedia {
+        sequence: seq, media: id, video_track: None, audio_track: None, at: 0,
+        mode: PlaceMode::Overwrite, source_in: None, source_out: None, match_sequence: false,
+    })
+    .unwrap();
+    let v = out.created[0];
+    // -2 EV brightening to 0 EV on a custom curve; contrast held (mid-grey stays put).
+    let curve = Ease::Bezier { x1: 0.42, y1: 0.0, x2: 0.58, y2: 1.0 };
+    for (param, keys) in [
+        (Param::Exposure, vec![Keyframe { at: 0, value: -2.0, ease: curve }, Keyframe { at: 40, value: 0.0, ease: Ease::Linear }]),
+        (Param::Contrast, vec![Keyframe { at: 0, value: 0.6, ease: Ease::Hold }]),
+    ] {
+        kerf_core::ops::apply(&mut p, &EditCommand::SetKeyframes { sequence: seq, clip: v, param, keys }).unwrap();
+    }
+    let file = dir.path().join("colour.mp4");
+    let export = ExportSettings {
+        output: file.clone(),
+        video_codec: VideoCodec::H264,
+        hardware: false,
+        width: 320,
+        height: 180,
+        fps: Rational::new(25, 1),
+        rate: RateControl::Quality { crf: 12 },
+        audio_codec: AudioCodec::Aac,
+        audio_bitrate_kbps: 128,
+        sample_rate: 48_000,
+        audio_channels: 2,
+        use_in_out: false,
+    };
+    let plan = render::plan(&p, p.sequence(seq).unwrap(), &export, dir.path(), &[]).unwrap();
+    render::render(&tools, &plan, &AtomicBool::new(false), |_| {}).expect("render with colour keys");
+    let (dark, mid, end) = (mean_luma(&tools, &file, 0.0), mean_luma(&tools, &file, 0.8), mean_luma(&tools, &file, 1.8));
+    eprintln!("luma {dark:.1} {mid:.1} {end:.1}");
+    // 128 at 0 EV; -2 EV is a quarter, pushed further down by the contrast about 50 %.
+    assert!(dark < 30.0, "starts dark");
+    assert!(mid > dark + 15.0 && mid < end - 5.0, "brightens along the curve");
+    assert!((end - 128.0).abs() < 6.0, "ends unchanged: {end}");
 }
 
 #[test]

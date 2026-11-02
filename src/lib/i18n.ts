@@ -36,6 +36,7 @@ const EDIT_LABELS: Record<string, string> = {
   removeMarker: "Marker löschen",
   setInOut: "In/Out",
   updateMedia: "Medien-Metadaten",
+  setSourceMarks: "Quell-In/Out",
   liftRange: "Herausheben",
   extractRange: "Extrahieren",
   replaceMedia: "Clip ersetzen",

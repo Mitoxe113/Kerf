@@ -25,6 +25,21 @@ export interface VideoInfo {
   pixFmt: string | null;
   bitRate: number | null;
   rotation: number;
+  /** Colour tags of the file (ffprobe names); null = untagged. */
+  color?: ColorTags;
+}
+
+export interface ColorTags {
+  space: string | null;
+  range: string | null;
+  transfer: string | null;
+  primaries: string | null;
+}
+
+/** Source monitor In/Out, seconds of media time. */
+export interface SourceMarks {
+  in: number | null;
+  out: number | null;
 }
 
 export interface AudioInfo {
@@ -74,6 +89,7 @@ export interface MediaAsset {
   note: string;
   importedAt: number;
   derived: Derived;
+  marks?: SourceMarks;
 }
 
 export interface Bin {
@@ -134,8 +150,12 @@ export interface Clip {
   keys: Partial<Record<KeyParam, Keyframe[]>>;
 }
 
-export type KeyParam = "x" | "y" | "scale" | "rotation" | "opacity" | "volume";
-export type Ease = "linear" | "easeIn" | "easeOut" | "easeInOut" | "hold";
+export type ColorParam = "exposure" | "contrast" | "saturation" | "temperature" | "tint";
+export type KeyParam = "x" | "y" | "scale" | "rotation" | "opacity" | "volume" | ColorParam;
+export interface BezierEase {
+  bezier: { x1: number; y1: number; x2: number; y2: number };
+}
+export type Ease = "linear" | "easeIn" | "easeOut" | "easeInOut" | "hold" | BezierEase;
 export interface Keyframe {
   /** Source position in sequence frames at speed 1 (like `sourceIn`). */
   at: Frame;
@@ -266,6 +286,7 @@ export type EditCommand =
   | { type: "renameMedia"; media: Uuid; name: string }
   | { type: "setMediaFavorite"; media: Uuid[]; favorite: boolean }
   | { type: "updateMedia"; media: Uuid[]; patch: MediaPatch }
+  | { type: "setSourceMarks"; media: Uuid; marks: SourceMarks }
   | { type: "moveMediaToBin"; media: Uuid[]; bin: Uuid | null }
   | { type: "relinkMedia"; media: Uuid; path: string }
   | { type: "createBin"; name: string; parent: Uuid | null }

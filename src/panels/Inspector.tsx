@@ -1,11 +1,11 @@
 import { ChevronLeft, ChevronRight, Diamond, RotateCcw, Timer } from "lucide-react";
 import { useState, useSyncExternalStore } from "react";
-import { baseValue, EASES, hasKeys, VIDEO_PARAMS, isAnimated, keysOf, localOf, paramAt, playheadKeyPos, removeKey, upsertKey } from "../lib/keys";
+import { baseValue, COLOR_PARAMS, EASES, hasKeys, isAnimated, isBezier, keysOf, localOf, MOTION_PARAMS, paramAt, playheadKeyPos, removeKey, sameEase, upsertKey } from "../lib/keys";
 import { engine } from "../engine/playback";
 import { IDENTITY_COLOR, IDENTITY_TRANSFORM } from "../engine/math";
 import { codecLabel, formatBytes } from "../lib/media";
 import { formatRate, formatTimecode, parseTimecode } from "../lib/time";
-import type { Clip, ClipPatch, ColorAdjust, Keyframe, KeyParam, Sequence, Transform } from "../lib/types";
+import type { Clip, ClipPatch, ColorAdjust, ColorParam, Keyframe, KeyParam, Sequence, Transform } from "../lib/types";
 import { findClip, locate } from "../timeline/geometry";
 import { useEditor } from "../state/editor";
 import { edit, useActiveSequence, useProject } from "../state/project";
@@ -102,7 +102,7 @@ export function Inspector() {
           )}
         </div>
         {active === "clip" && <VideoSection seq={seq} clips={video} commit={commit} />}
-        {active === "color" && <ColorSection clips={video} preview={preview} commit={commit} />}
+        {active === "color" && <ColorSection seq={seq} clips={video} commit={commit} />}
         {active === "audio" && <AudioSection seq={seq} clips={audio} preview={preview} commit={commit} />}
         <TimingSection seq={seq} clips={clips} commit={commit} />
       </div>
@@ -125,7 +125,13 @@ function useKeyFrame(c: Clip): number {
 
 /** Static-value patch for one property. */
 const basePatch = (x: Clip, p: KeyParam, v: number): ClipPatch =>
-  p === "opacity" ? { opacity: v } : p === "volume" ? { volumeDb: v } : { transform: { ...x.transform, [p]: v } };
+  p === "opacity"
+    ? { opacity: v }
+    : p === "volume"
+      ? { volumeDb: v }
+      : (COLOR_PARAMS as KeyParam[]).includes(p)
+        ? { color: { ...x.color, [p]: v } }
+        : { transform: { ...x.transform, [p]: v } };
 
 const setKeys = (seq: Sequence, c: Clip, p: KeyParam, keys: Keyframe[]) => edit({ type: "setKeyframes", sequence: seq.id, clip: c.id, param: p, keys });
 
@@ -194,7 +200,7 @@ function KeyNav({ seq, clips, params, frame }: { seq: Sequence; clips: Clip[]; p
     openContextMenu(e, [
       ...EASES.map((x) => ({
         label: x.label,
-        checked: current === x.value,
+        checked: sameEase(current, x.value),
         onSelect: async () => {
           for (const p of params) {
             const k = keysOf(c, p).find((k) => k.at === at);
@@ -202,6 +208,11 @@ function KeyNav({ seq, clips, params, frame }: { seq: Sequence; clips: Clip[]; p
           }
         },
       })),
+      {
+        label: "Eigene Kurve …",
+        checked: isBezier(current),
+        onSelect: () => useEditor.getState().set({ dialog: { kind: "curve", sequence: seq.id, clip: c.id, params, at } }),
+      },
       { separator: true },
       { label: "Keyframe löschen", danger: true, onSelect: () => void toggleKey() },
     ]);
@@ -260,10 +271,10 @@ function VideoSection({ seq, clips, commit }: { seq: Sequence; clips: Clip[]; co
       clips.forEach((x) => engine.setOverride(x.id, null));
     },
   });
-  const changed = JSON.stringify(t) !== JSON.stringify(IDENTITY_TRANSFORM) || c.opacity !== 1 || clips.some((x) => VIDEO_PARAMS.some((p) => isAnimated(x, p)));
+  const changed = JSON.stringify(t) !== JSON.stringify(IDENTITY_TRANSFORM) || c.opacity !== 1 || clips.some((x) => MOTION_PARAMS.some((p) => isAnimated(x, p)));
   const reset = async () => {
     await commit(clips, { transform: IDENTITY_TRANSFORM, opacity: 1 });
-    for (const x of clips) for (const p of VIDEO_PARAMS) if (isAnimated(x, p)) await setKeys(seq, x, p, []);
+    for (const x of clips) for (const p of MOTION_PARAMS) if (isAnimated(x, p)) await setKeys(seq, x, p, []);
   };
   return (
     <Section
@@ -305,7 +316,7 @@ function VideoSection({ seq, clips, commit }: { seq: Sequence; clips: Clip[]; co
   );
 }
 
-const COLOR_FIELDS: { key: keyof ColorAdjust; label: string; min: number; max: number; center: number; unit: string; scale: number; precision: number }[] = [
+const COLOR_FIELDS: { key: keyof ColorAdjust & ColorParam; label: string; min: number; max: number; center: number; unit: string; scale: number; precision: number }[] = [
   { key: "exposure", label: "Belichtung", min: -4, max: 4, center: 0, unit: " EV", scale: 1, precision: 2 },
   { key: "contrast", label: "Kontrast", min: -1, max: 1, center: 0, unit: "", scale: 100, precision: 0 },
   { key: "saturation", label: "Sättigung", min: 0, max: 2, center: 1, unit: " %", scale: 100, precision: 0 },
@@ -313,11 +324,19 @@ const COLOR_FIELDS: { key: keyof ColorAdjust; label: string; min: number; max: n
   { key: "tint", label: "Tönung", min: -1, max: 1, center: 0, unit: "", scale: 100, precision: 0 },
 ];
 
-function ColorSection({ clips, preview, commit }: { clips: Clip[]; preview: Preview; commit: Commit }) {
+function ColorSection({ seq, clips, commit }: { seq: Sequence; clips: Clip[]; commit: Commit }) {
   const c = clips[0].color;
+  const frame = useKeyFrame(clips[0]);
   const [bypass, setBypass] = useState(false);
-  const changed = JSON.stringify(c) !== JSON.stringify(IDENTITY_COLOR);
-  const patch = (key: keyof ColorAdjust, v: number) => ({ color: { ...c, [key]: v } });
+  const keyed = clips.some((x) => COLOR_PARAMS.some((p) => isAnimated(x, p)));
+  const changed = JSON.stringify(c) !== JSON.stringify(IDENTITY_COLOR) || keyed;
+  // "Before" also hides animated colour: the override drops the colour keys.
+  const withoutColorKeys = (x: Clip) => Object.fromEntries(Object.entries(x.keys ?? {}).filter(([p]) => !(COLOR_PARAMS as string[]).includes(p)));
+  const showBefore = () => clips.forEach((x) => engine.setOverride(x.id, { color: IDENTITY_COLOR, keys: withoutColorKeys(x) }));
+  const reset = async () => {
+    await commit(clips, { color: IDENTITY_COLOR });
+    for (const x of clips) for (const p of COLOR_PARAMS) if (isAnimated(x, p)) await setKeys(seq, x, p, []);
+  };
   return (
     <Section
       title="Farbkorrektur"
@@ -327,7 +346,7 @@ function ColorSection({ clips, preview, commit }: { clips: Clip[]; preview: Prev
             className={cx("h-5 rounded-xs px-1.5 text-[10.5px]", bypass ? "bg-signal text-signal-ink" : "bg-field text-fg-3 hover:text-fg-2")}
             onPointerDown={() => {
               setBypass(true);
-              preview(clips, { color: IDENTITY_COLOR });
+              showBefore();
             }}
             onPointerUp={() => {
               setBypass(false);
@@ -342,36 +361,31 @@ function ColorSection({ clips, preview, commit }: { clips: Clip[]; preview: Prev
           >
             Vorher
           </button>
-          <IconButton icon={<RotateCcw size={12} />} size={22} label="Zurücksetzen" disabled={!changed} onClick={() => void commit(clips, { color: IDENTITY_COLOR })} />
+          <IconButton icon={<RotateCcw size={12} />} size={22} label="Zurücksetzen" disabled={!changed} onClick={() => void reset()} />
         </div>
       }
     >
-      {COLOR_FIELDS.map((f) => (
-        <Field key={f.key} label={f.label}>
-          <Slider
-            label={f.label}
-            value={c[f.key]}
-            min={f.min}
-            max={f.max}
-            center={f.center}
-            onPreview={(v) => preview(clips, patch(f.key, v))}
-            onCommit={(v) => void commit(clips, patch(f.key, v))}
-            onReset={() => void commit(clips, patch(f.key, f.center))}
-          />
-          <NumberField
-            label={f.label}
-            value={c[f.key] * f.scale}
-            min={f.min * f.scale}
-            max={f.max * f.scale}
-            step={f.scale === 1 ? 0.01 : 0.5}
-            precision={f.precision}
-            unit={f.unit}
-            width={62}
-            onPreview={(v) => preview(clips, patch(f.key, v / f.scale))}
-            onCommit={(v) => void commit(clips, patch(f.key, v / f.scale))}
-          />
-        </Field>
-      ))}
+      {COLOR_FIELDS.map((f) => {
+        const p = useParam(seq, clips, f.key, frame);
+        return (
+          <Field key={f.key} label={f.label}>
+            <Slider label={f.label} value={p.value} min={f.min} max={f.max} center={f.center} onPreview={p.onPreview} onCommit={(v) => void p.onCommit(v)} onReset={() => void p.onCommit(f.center)} />
+            <NumberField
+              label={f.label}
+              value={p.value * f.scale}
+              min={f.min * f.scale}
+              max={f.max * f.scale}
+              step={f.scale === 1 ? 0.01 : 0.5}
+              precision={f.precision}
+              unit={f.unit}
+              width={62}
+              onPreview={(v) => p.onPreview(v / f.scale)}
+              onCommit={(v) => p.onCommit(v / f.scale)}
+            />
+            <KeyNav seq={seq} clips={clips} params={[f.key]} frame={frame} />
+          </Field>
+        );
+      })}
       <p className="pt-1 text-[10.5px] leading-relaxed text-fg-4">Vorschau und Export verwenden dieselbe Farbmatrix (Rec.709-Luma), Kontrast um 50 % Grau.</p>
     </Section>
   );

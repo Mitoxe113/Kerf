@@ -111,6 +111,8 @@ pub enum EditCommand {
     RenameMedia { media: Uuid, name: String },
     SetMediaFavorite { media: Vec<Uuid>, favorite: bool },
     UpdateMedia { media: Vec<Uuid>, patch: MediaPatch },
+    /// In/Out of the source monitor (seconds of media time), saved with the project.
+    SetSourceMarks { media: Uuid, marks: SourceMarks },
     MoveMediaToBin { media: Vec<Uuid>, bin: Option<Uuid> },
     RelinkMedia { media: Uuid, path: PathBuf },
     CreateBin { name: String, parent: Option<Uuid> },
@@ -201,6 +203,7 @@ impl EditCommand {
             C::RenameMedia { .. } => "renameMedia",
             C::SetMediaFavorite { .. } => "setMediaFavorite",
             C::UpdateMedia { .. } => "updateMedia",
+            C::SetSourceMarks { .. } => "setSourceMarks",
             C::MoveMediaToBin { .. } => "moveMediaToBin",
             C::RelinkMedia { .. } => "relinkMedia",
             C::CreateBin { .. } => "createBin",
@@ -390,6 +393,20 @@ pub fn apply(project: &mut Project, cmd: &EditCommand) -> Result<EditOutcome> {
                 }
                 out.changed |= before != (asset.favorite, asset.label, asset.tags.clone(), asset.note.clone());
             }
+            out.media_changed = out.changed;
+        }
+        C::SetSourceMarks { media, marks } => {
+            let asset = project.media_mut(*media).ok_or(EditError::MediaNotFound)?;
+            let len = asset.info.as_ref().map_or(f64::INFINITY, |i| i.duration);
+            let clean = |v: Option<f64>| v.filter(|t| t.is_finite()).map(|t| t.clamp(0.0, len));
+            let mut m = SourceMarks { in_point: clean(marks.in_point), out_point: clean(marks.out_point) };
+            if let (Some(i), Some(o)) = (m.in_point, m.out_point) {
+                if o <= i {
+                    m.out_point = None;
+                }
+            }
+            out.changed = asset.marks != m;
+            asset.marks = m;
             out.media_changed = out.changed;
         }
         C::MoveMediaToBin { media, bin } => {
@@ -1376,7 +1393,7 @@ fn set_keyframes(seq: &mut Sequence, clip: Uuid, param: Param, keys: &[Keyframe]
         return Err(EditError::TrackLocked);
     }
     let audio = seq.tracks[ti].kind == TrackKind::Audio;
-    if audio != (param == Param::Volume) {
+    if audio != param.is_audio() {
         return Err(EditError::Invalid("property does not apply to this clip".into()));
     }
     let (lo, hi) = param.range();
@@ -1385,7 +1402,7 @@ fn set_keyframes(seq: &mut Sequence, clip: Uuid, param: Param, keys: &[Keyframe]
         if !k.value.is_finite() {
             return Err(EditError::Invalid("keyframe value".into()));
         }
-        let k = Keyframe { value: k.value.clamp(lo, hi), ..*k };
+        let k = Keyframe { value: k.value.clamp(lo, hi), ease: k.ease.sanitized(), ..*k };
         match clean.iter_mut().find(|x| x.at == k.at) {
             Some(x) => *x = k,
             None => clean.push(k),
@@ -1664,6 +1681,7 @@ mod tests {
                     pix_fmt: None,
                     bit_rate: None,
                     rotation: 0,
+                    color: Default::default(),
                 }),
                 audio: audio.then(|| AudioInfo {
                     codec: "aac".into(),
@@ -1680,6 +1698,7 @@ mod tests {
             note: String::new(),
             imported_at: 0,
             derived: Derived::default(),
+            marks: Default::default(),
         }
     }
 
@@ -2044,6 +2063,41 @@ mod tests {
         assert_eq!(fx.v1().clips[0].keys_of(Param::Opacity)[0].value, 1.0, "clamped");
         let out = fx.run(EditCommand::SetKeyframes { sequence: fx.seq, clip: v, param: Param::Opacity, keys: vec![] });
         assert!(out.changed && fx.v1().clips[0].keys.is_empty());
+    }
+
+    #[test]
+    fn colour_keys_and_custom_curves() {
+        let mut fx = Fx::new(10.0, true);
+        let ids = fx.place(0, Some(0), Some(100), PlaceMode::Overwrite);
+        let (v, a) = (ids[0], ids[1]);
+        let curve = Ease::Bezier { x1: 3.0, y1: 5.0, x2: f32::NAN, y2: 0.5 };
+        let keys = vec![Keyframe { at: 0, value: -9.0, ease: curve }, Keyframe { at: 50, value: 1.0, ease: Ease::Linear }];
+        fx.run(EditCommand::SetKeyframes { sequence: fx.seq, clip: v, param: Param::Exposure, keys: keys.clone() });
+        let c = &fx.v1().clips[0];
+        let k = c.keys_of(Param::Exposure);
+        assert_eq!(k[0].value, -4.0, "clamped to the exposure range");
+        assert_eq!(k[0].ease, Ease::Bezier { x1: 1.0, y1: 2.0, x2: 0.0, y2: 0.5 }, "control points clamped, NaN dropped");
+        assert!(c.color_animated());
+        assert_eq!(c.color_at(0.0).exposure, -4.0);
+        assert_eq!(c.color_at(80.0).exposure, 1.0);
+        // Colour is a picture property: audio clips reject it.
+        assert!(apply(&mut fx.p, &EditCommand::SetKeyframes { sequence: fx.seq, clip: a, param: Param::Saturation, keys }).is_err());
+    }
+
+    #[test]
+    fn source_marks_are_saved_and_clamped() {
+        let mut fx = Fx::new(10.0, false);
+        let m = fx.media;
+        let out = fx.run(EditCommand::SetSourceMarks { media: m, marks: SourceMarks { in_point: Some(-3.0), out_point: Some(42.0) } });
+        assert_eq!(out.label, "setSourceMarks");
+        assert_eq!(fx.p.media(m).unwrap().marks, SourceMarks { in_point: Some(0.0), out_point: Some(10.0) });
+        // Out before In is dropped; the same marks again are no change.
+        fx.run(EditCommand::SetSourceMarks { media: m, marks: SourceMarks { in_point: Some(6.0), out_point: Some(2.0) } });
+        assert_eq!(fx.p.media(m).unwrap().marks, SourceMarks { in_point: Some(6.0), out_point: None });
+        let same = apply(&mut fx.p, &EditCommand::SetSourceMarks { media: m, marks: SourceMarks { in_point: Some(6.0), out_point: None } }).unwrap();
+        assert!(!same.changed);
+        let json = serde_json::to_string(&fx.p.media(m).unwrap().marks).unwrap();
+        assert_eq!(json, r#"{"in":6.0,"out":null}"#);
     }
 
     #[test]

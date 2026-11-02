@@ -1,24 +1,20 @@
 // Source monitor: one media item at a time, played by a plain <video>/<audio>
 // element (no compositing needed), with its own In/Out marks per media item.
-// Marks live for the session, in seconds of source time.
+// Marks are saved with the media in the project (seconds of source time).
 
 import { create } from "zustand";
 import { placeMedia, seq } from "../actions/editing";
 import { engine } from "../engine/playback";
 import { fpsOf } from "../lib/time";
-import type { MediaAsset, Uuid } from "../lib/types";
+import type { MediaAsset, SourceMarks, Uuid } from "../lib/types";
 import { useEditor } from "./editor";
 import { edit, useProject } from "./project";
 import { toast } from "./toasts";
 
-export interface SourceMarks {
-  in: number | null;
-  out: number | null;
-}
+export type { SourceMarks };
 
 interface SourceStore {
   media: Uuid | null;
-  marks: Record<Uuid, SourceMarks>;
   /** Current position in seconds. */
   time: number;
   /** 0 = paused; negative = reverse shuttle. */
@@ -27,7 +23,7 @@ interface SourceStore {
   recent: Uuid[];
 }
 
-export const useSource = create<SourceStore>(() => ({ media: null, marks: {}, time: 0, rate: 0, recent: [] }));
+export const useSource = create<SourceStore>(() => ({ media: null, time: 0, rate: 0, recent: [] }));
 
 let player: HTMLMediaElement | null = null;
 let reverseRaf = 0;
@@ -53,11 +49,19 @@ export function sourceFps(a: MediaAsset | null = sourceAsset()): number {
 
 export const sourceDuration = (a: MediaAsset | null = sourceAsset()): number => (a && a.kind !== "image" ? (a.info?.duration ?? 0) : 0);
 
-export const marksOf = (id: Uuid | null): SourceMarks => (id && useSource.getState().marks[id]) || { in: null, out: null };
+export const NO_MARKS: SourceMarks = { in: null, out: null };
+
+export const marksOf = (id: Uuid | null): SourceMarks => (id && useProject.getState().mediaById.get(id)?.marks) || NO_MARKS;
+
+function saveMarks(id: Uuid, m: SourceMarks) {
+  const now = marksOf(id);
+  if (now.in === m.in && now.out === m.out) return;
+  void edit({ type: "setSourceMarks", media: id, marks: m });
+}
 
 function setMarks(m: SourceMarks) {
   const id = useSource.getState().media;
-  if (id) useSource.setState((s) => ({ marks: { ...s.marks, [id]: m } }));
+  if (id) saveMarks(id, m);
 }
 
 function stopReverse() {
@@ -74,9 +78,9 @@ export const source = {
     useSource.setState((s) => ({
       media: id,
       time: opts.at ?? (s.media === id ? s.time : (marksOf(id).in ?? 0)),
-      marks: opts.marks ? { ...s.marks, [id]: opts.marks } : s.marks,
       recent: [id, ...s.recent.filter((x) => x !== id)].slice(0, 12),
     }));
+    if (opts.marks) saveMarks(id, opts.marks);
     useEditor.getState().focusPanel("source");
     // Monitor shortcuts (Space, I/O, J/K/L) now act on the source.
     useEditor.getState().set({ focusedPanel: "source" });

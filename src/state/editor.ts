@@ -2,7 +2,7 @@
 // workspaces. View preferences persist per user in localStorage.
 
 import { create } from "zustand";
-import type { PasteItem, Uuid } from "../lib/types";
+import type { KeyParam, PasteItem, Uuid } from "../lib/types";
 
 export type ToolId = "select" | "razor" | "ripple" | "roll" | "slip" | "slide" | "hand" | "zoom";
 export type PanelId = "media" | "monitor" | "inspector" | "timeline" | "meters" | "scopes" | "export" | "mixer" | "history" | "source";
@@ -125,6 +125,7 @@ export type Dialog =
   | { kind: "recovery" }
   | { kind: "versions" }
   | { kind: "normalize"; clips: Uuid[] }
+  | { kind: "curve"; sequence: Uuid; clip: Uuid; params: KeyParam[]; at: number }
   | { kind: "palette"; query: string }
   | { kind: "preferences" }
   | { kind: "exportLog"; job: Uuid; title: string }

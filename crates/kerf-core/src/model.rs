@@ -147,6 +147,17 @@ pub struct MediaAsset {
     /// Machine-local derived data (thumbnails, peaks, proxies). Regenerable.
     #[serde(default)]
     pub derived: Derived,
+    /// In/Out marks set in the source monitor, seconds of media time.
+    #[serde(default)]
+    pub marks: SourceMarks,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SourceMarks {
+    #[serde(rename = "in")]
+    pub in_point: Option<f64>,
+    #[serde(rename = "out")]
+    pub out_point: Option<f64>,
 }
 
 impl MediaAsset {
@@ -192,6 +203,19 @@ pub struct VideoInfo {
     pub bit_rate: Option<u64>,
     /// Display rotation from container metadata, degrees.
     pub rotation: i32,
+    #[serde(default)]
+    pub color: ColorTags,
+}
+
+/// Colour description of a video stream as tagged in the file (ffprobe names,
+/// e.g. `bt709`, `smpte170m`, `tv`). `None` = not tagged.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ColorTags {
+    pub space: Option<String>,
+    pub range: Option<String>,
+    pub transfer: Option<String>,
+    pub primaries: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -534,7 +558,27 @@ impl Clip {
             Param::Rotation => self.transform.rotation,
             Param::Opacity => self.opacity,
             Param::Volume => self.volume_db,
+            Param::Exposure => self.color.exposure,
+            Param::Contrast => self.color.contrast,
+            Param::Saturation => self.color.saturation,
+            Param::Temperature => self.color.temperature,
+            Param::Tint => self.color.tint,
         }
+    }
+
+    /// Colour correction at clip-local timeline frame `local` (animated or static).
+    pub fn color_at(&self, local: f64) -> ColorAdjust {
+        ColorAdjust {
+            exposure: self.param_at(Param::Exposure, local),
+            contrast: self.param_at(Param::Contrast, local),
+            saturation: self.param_at(Param::Saturation, local),
+            temperature: self.param_at(Param::Temperature, local),
+            tint: self.param_at(Param::Tint, local),
+        }
+    }
+
+    pub fn color_animated(&self) -> bool {
+        Param::COLOR.iter().any(|p| !self.keys_of(*p).is_empty())
     }
 }
 
@@ -701,10 +745,32 @@ pub enum Param {
     Opacity,
     /// dB.
     Volume,
+    Exposure,
+    Contrast,
+    Saturation,
+    Temperature,
+    Tint,
 }
 
 impl Param {
-    pub const ALL: [Param; 6] = [Param::X, Param::Y, Param::Scale, Param::Rotation, Param::Opacity, Param::Volume];
+    pub const ALL: [Param; 11] = [
+        Param::X,
+        Param::Y,
+        Param::Scale,
+        Param::Rotation,
+        Param::Opacity,
+        Param::Volume,
+        Param::Exposure,
+        Param::Contrast,
+        Param::Saturation,
+        Param::Temperature,
+        Param::Tint,
+    ];
+    pub const COLOR: [Param; 5] = [Param::Exposure, Param::Contrast, Param::Saturation, Param::Temperature, Param::Tint];
+
+    pub fn is_audio(self) -> bool {
+        self == Param::Volume
+    }
 
     /// Allowed value range.
     pub fn range(self) -> (f32, f32) {
@@ -714,12 +780,15 @@ impl Param {
             Param::Rotation => (-36_000.0, 36_000.0),
             Param::Opacity => (0.0, 1.0),
             Param::Volume => (-96.0, 24.0),
+            Param::Exposure => (-4.0, 4.0),
+            Param::Contrast | Param::Temperature | Param::Tint => (-1.0, 1.0),
+            Param::Saturation => (0.0, 2.0),
         }
     }
 }
 
 /// Interpolation from a key to the next one.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Ease {
     #[default]
@@ -732,6 +801,9 @@ pub enum Ease {
     EaseInOut,
     /// Keeps the value until the next key.
     Hold,
+    /// Custom curve between (0,0) and (1,1) with two control points, like CSS
+    /// `cubic-bezier()`. x is time (kept in 0..1), y is progress (may overshoot).
+    Bezier { x1: f32, y1: f32, x2: f32, y2: f32 },
 }
 
 impl Ease {
@@ -745,8 +817,63 @@ impl Ease {
             Ease::EaseOut => u * (2.0 - u),
             Ease::EaseInOut => u * u * (3.0 - 2.0 * u),
             Ease::Hold => 0.0,
+            Ease::Bezier { x1, y1, x2, y2 } => bezier(x1 as f64, y1 as f64, x2 as f64, y2 as f64, u),
         }
     }
+
+    /// Clamps control points to the editable range.
+    pub fn sanitized(self) -> Self {
+        match self {
+            Ease::Bezier { x1, y1, x2, y2 } => Ease::Bezier {
+                x1: finite(x1).clamp(0.0, 1.0),
+                y1: finite(y1).clamp(-1.0, 2.0),
+                x2: finite(x2).clamp(0.0, 1.0),
+                y2: finite(y2).clamp(-1.0, 2.0),
+            },
+            e => e,
+        }
+    }
+}
+
+fn finite(v: f32) -> f32 {
+    if v.is_finite() { v } else { 0.0 }
+}
+
+/// y of the cubic Bezier (0,0) (x1,y1) (x2,y2) (1,1) at x = `u`. x(t) is
+/// monotonic for x1, x2 in 0..1, so a few Newton steps with a bisection
+/// fallback find t. Mirrored in `src/lib/keys.ts`.
+pub fn bezier(x1: f64, y1: f64, x2: f64, y2: f64, u: f64) -> f64 {
+    let curve = |a: f64, b: f64, t: f64| {
+        let m = 1.0 - t;
+        3.0 * m * m * t * a + 3.0 * m * t * t * b + t * t * t
+    };
+    let slope = |a: f64, b: f64, t: f64| {
+        let m = 1.0 - t;
+        3.0 * m * m * a + 6.0 * m * t * (b - a) + 3.0 * t * t * (1.0 - b)
+    };
+    let mut t = u;
+    for _ in 0..8 {
+        let err = curve(x1, x2, t) - u;
+        if err.abs() < 1e-7 {
+            return curve(y1, y2, t);
+        }
+        let d = slope(x1, x2, t);
+        if d.abs() < 1e-6 {
+            break;
+        }
+        t = (t - err / d).clamp(0.0, 1.0);
+    }
+    let (mut lo, mut hi) = (0.0, 1.0);
+    t = u;
+    for _ in 0..40 {
+        if curve(x1, x2, t) < u {
+            lo = t;
+        } else {
+            hi = t;
+        }
+        t = 0.5 * (lo + hi);
+    }
+    curve(y1, y2, t)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -774,4 +901,35 @@ pub fn eval_keys(keys: &[Keyframe], at: f64) -> f32 {
         }
     }
     keys[keys.len() - 1].value
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bezier_curves_match_known_points() {
+        // On the diagonal the curve is linear.
+        for u in [0.0, 0.2, 0.5, 0.9, 1.0] {
+            assert!((bezier(0.3, 0.3, 0.7, 0.7, u) - u).abs() < 1e-6);
+        }
+        // CSS "ease" and "ease-in-out", sampled from WebView2 (Web Animations API).
+        let e = |u| bezier(0.25, 0.1, 0.25, 1.0, u);
+        for (u, want) in [(0.25, 0.408511), (0.5, 0.802403), (0.75, 0.960459)] {
+            assert!((e(u) - want).abs() < 1e-5, "{u}: {}", e(u));
+        }
+        assert!((bezier(0.42, 0.0, 0.58, 1.0, 0.37) - 0.285158).abs() < 1e-5);
+        // Overshoot goes past 1 and comes back.
+        let back = |u| bezier(0.34, 1.56, 0.64, 1.0, u);
+        assert!(back(0.6) > 1.0 && (back(1.0) - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn bezier_ease_serializes_as_tagged_object() {
+        let e = Ease::Bezier { x1: 0.25, y1: 0.1, x2: 0.25, y2: 1.0 };
+        let json = serde_json::to_string(&e).unwrap();
+        assert_eq!(json, r#"{"bezier":{"x1":0.25,"y1":0.1,"x2":0.25,"y2":1.0}}"#);
+        assert_eq!(serde_json::from_str::<Ease>(&json).unwrap(), e);
+        assert_eq!(serde_json::from_str::<Ease>(r#""easeIn""#).unwrap(), Ease::EaseIn);
+    }
 }
