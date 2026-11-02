@@ -140,7 +140,9 @@ function useKeyFrame(c: Clip): number {
 const basePatch = (x: Clip, p: KeyParam, v: number): ClipPatch =>
   p === "opacity"
     ? { opacity: v }
-    : p === "volume"
+    : p === "speed"
+      ? { speed: v }
+      : p === "volume"
       ? { volumeDb: v }
       : (COLOR_PARAMS as KeyParam[]).includes(p)
         ? { color: { ...x.color, [p]: v } }
@@ -210,8 +212,10 @@ function KeyNav({ seq, clips, params, frame }: { seq: Sequence; clips: Clip[]; p
     if (!onKey) return;
     e.preventDefault();
     const current = keysOf(c, params[0]).find((k) => k.at === at)?.ease;
+    // Speed ramps are linear in time or hold (kerf_core::timemap).
+    const speed = params.includes("speed");
     openContextMenu(e, [
-      ...EASES.map((x) => ({
+      ...EASES.filter((x) => !speed || x.value === "linear" || x.value === "hold").map((x) => ({
         label: x.label,
         checked: sameEase(current, x.value),
         onSelect: async () => {
@@ -221,11 +225,15 @@ function KeyNav({ seq, clips, params, frame }: { seq: Sequence; clips: Clip[]; p
           }
         },
       })),
-      {
-        label: "Eigene Kurve …",
-        checked: isBezier(current),
-        onSelect: () => useEditor.getState().set({ dialog: { kind: "curve", sequence: seq.id, clip: c.id, params, at } }),
-      },
+      ...(speed
+        ? []
+        : [
+            {
+              label: "Eigene Kurve …",
+              checked: isBezier(current),
+              onSelect: () => useEditor.getState().set({ dialog: { kind: "curve", sequence: seq.id, clip: c.id, params, at } }),
+            },
+          ]),
       { separator: true },
       { label: "Keyframe löschen", danger: true, onSelect: () => void toggleKey() },
     ]);
@@ -513,6 +521,18 @@ function TransitionSection({ seq, clip }: { seq: Sequence; clip: Clip }) {
   );
 }
 
+/** Speed in %, animatable (speed ramps); a ramp keeps the source range and changes the length. */
+function SpeedField({ seq, clips }: { seq: Sequence; clips: Clip[] }) {
+  const frame = useKeyFrame(clips[0]);
+  const ps = useParam(seq, clips, "speed", frame);
+  return (
+    <>
+      <NumberField label="Geschwindigkeit" value={ps.value * 100} min={10} max={1600} step={1} unit=" %" width={76} onCommit={(v) => void ps.onCommit(v / 100)} />
+      <KeyNav seq={seq} clips={clips} params={["speed"]} frame={frame} />
+    </>
+  );
+}
+
 function TimingSection({ seq, clips, commit }: { seq: Sequence; clips: Clip[]; commit: Commit }) {
   const c = clips[0];
   const fps = seq.settings.fps;
@@ -551,7 +571,10 @@ function TimingSection({ seq, clips, commit }: { seq: Sequence; clips: Clip[]; c
         </>
       )}
       <Field label="Geschwindigkeit">
-        <NumberField label="Geschwindigkeit" value={c.speed * 100} min={10} max={1600} step={1} unit=" %" width={76} onCommit={(v) => void commit(clips, { speed: v / 100 })} />
+        <SpeedField seq={seq} clips={clips} />
+      </Field>
+      <Field label="Rückwärts">
+        <Toggle label="Rückwärts" checked={!!c.reverse} onChange={(v) => void commit(clips, { reverse: v })} />
       </Field>
       <Field label="Einblenden">
         <NumberField label="Einblenden" value={c.fadeIn} min={0} step={1} unit=" F" width={66} onCommit={(v) => void commit(clips, { fadeIn: Math.round(v) })} />

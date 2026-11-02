@@ -3,6 +3,7 @@
 // mirrors only make the ghost stop where the engine will stop.
 
 import type { Clip, MediaAsset, Sequence, Track, TrackKind, TransitionKind, Uuid } from "../lib/types";
+import { framesBetween, sourceOut } from "../lib/keys";
 import { fpsOf } from "../lib/time";
 import { TRACK_HEIGHTS, type TrackSize } from "../state/editor";
 
@@ -160,8 +161,10 @@ export function mediaLength(asset: MediaAsset | undefined, seq: Sequence): numbe
   return Math.max(1, Math.floor(asset.info.duration * fpsOf(seq.settings.fps) + 1e-6));
 }
 
-const sourceOut = (c: Clip) => c.sourceIn + Math.round(c.duration * c.speed);
-const tl = (src: number, speed: number) => Math.floor(src / speed + 1e-9);
+/** Frames the clip's start can move earlier (kerf_core Clip::room_before). */
+const roomBefore = (c: Clip, len: number) => (c.reverse ? framesBetween(c, sourceOut(c), len) : framesBetween(c, 0, c.sourceIn));
+/** Frames the clip's end can move later (Clip::room_after). */
+const roomAfter = (c: Clip, len: number) => (c.reverse ? framesBetween(c, 0, c.sourceIn) : framesBetween(c, sourceOut(c), len));
 /** `delta` limited to [lo, hi]; 0 when the range is empty (never -0). */
 const clampDelta = (lo: number, hi: number, delta: number) => (lo > hi ? 0 : Math.max(lo, Math.min(hi, delta)) + 0);
 
@@ -178,11 +181,11 @@ export function clampTrim(
   let hi = Infinity;
   if (edge === "start") {
     hi = Math.min(hi, c.duration - 1);
-    if (len !== null) lo = Math.max(lo, -tl(c.sourceIn, c.speed));
+    if (len !== null) lo = Math.max(lo, -roomBefore(c, len));
     if (!ripple) lo = Math.max(lo, (ci > 0 ? track.clips[ci - 1].start + track.clips[ci - 1].duration : 0) - c.start);
   } else {
     lo = Math.max(lo, 1 - c.duration);
-    if (len !== null) hi = Math.min(hi, tl(len - sourceOut(c), c.speed));
+    if (len !== null) hi = Math.min(hi, roomAfter(c, len));
     const next = track.clips[ci + 1];
     if (!ripple && next) hi = Math.min(hi, next.start - (c.start + c.duration));
   }
@@ -195,15 +198,15 @@ export function clampRoll(track: Track, ci: number, delta: number, lenL: number 
   if (!r || r.start !== l.start + l.duration) return 0;
   let lo = 1 - l.duration;
   let hi = r.duration - 1;
-  if (lenL !== null) hi = Math.min(hi, tl(lenL - sourceOut(l), l.speed));
-  if (lenR !== null) lo = Math.max(lo, -tl(r.sourceIn, r.speed));
+  if (lenL !== null) hi = Math.min(hi, roomAfter(l, lenL));
+  if (lenR !== null) lo = Math.max(lo, -roomBefore(r, lenR));
   return clampDelta(lo, hi, delta);
 }
 
 export function clampSlip(c: Clip, delta: number, len: number | null): number {
   if (len === null) return 0;
-  const lo = -tl(c.sourceIn, c.speed);
-  const hi = tl(len - sourceOut(c), c.speed);
+  const lo = -framesBetween(c, 0, c.sourceIn);
+  const hi = framesBetween(c, sourceOut(c), len);
   return clampDelta(lo, hi, delta);
 }
 
@@ -221,11 +224,11 @@ export function clampSlide(
   let hi = Infinity;
   if (p && p.start + p.duration === c.start) {
     lo = Math.max(lo, 1 - p.duration);
-    if (lenPrev !== null) hi = Math.min(hi, tl(lenPrev - sourceOut(p), p.speed));
+    if (lenPrev !== null) hi = Math.min(hi, roomAfter(p, lenPrev));
   } else lo = Math.max(lo, (p ? p.start + p.duration : 0) - c.start);
   if (n && n.start === c.start + c.duration) {
     hi = Math.min(hi, n.duration - 1);
-    if (lenNext !== null) lo = Math.max(lo, -tl(n.sourceIn, n.speed));
+    if (lenNext !== null) lo = Math.max(lo, -roomBefore(n, lenNext));
   } else if (n) hi = Math.min(hi, n.start - (c.start + c.duration));
   return clampDelta(lo, hi, delta);
 }

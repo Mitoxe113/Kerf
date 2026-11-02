@@ -371,28 +371,29 @@ fn param_expr(clip: &Clip, param: Param, head: Frame, var: &str, unit: f64) -> S
     let keys = clip.keys_of(param);
     let (Some(first), Some(last)) = (keys.first(), keys.last()) else { return num(clip.base_value(param) as f64) };
     let pos = |k: &Keyframe| (clip.local_of(k.at) - head as f64) * unit;
-    let mut e = num(last.value as f64);
-    for w in keys.windows(2).rev() {
+    // Pieces between neighbouring keys as (from, to, expression), in timeline
+    // order; a reversed clip meets its keys from the last to the first.
+    let mut pieces: Vec<(f64, f64, String)> = Vec::new();
+    for w in keys.windows(2) {
         let (a, b) = (w[0], w[1]);
         let (ta, tb) = (pos(&a), pos(&b));
         let (va, dv) = (a.value as f64, (b.value - a.value) as f64);
-        let u = format!("(({var}-{})/{})", num(ta), num((tb - ta).max(1e-9)));
+        let span = if (tb - ta).abs() < 1e-9 { 1e-9 } else { tb - ta };
+        let u = format!("(({var}-{})/{})", num(ta), num(span));
         let inner = match a.ease {
             Ease::Bezier { .. } => {
-                let steps = ((b.at - a.at) as f64 / clip.speed).ceil().clamp(4.0, BEZIER_STEPS as f64) as usize;
-                let mut pw = num(b.value as f64);
-                for i in (0..steps).rev() {
-                    let (u0, u1) = (i as f64 / steps as f64, (i + 1) as f64 / steps as f64);
-                    let (x0, x1) = (ta + (tb - ta) * u0, ta + (tb - ta) * u1);
-                    let (y0, y1) = (va + dv * a.ease.apply(u0), va + dv * a.ease.apply(u1));
-                    pw = format!(
-                        "if(lt({var},{}),{}+({})*({var}-{})/{},{pw})",
-                        num(x1),
-                        num(y0),
-                        num(y1 - y0),
-                        num(x0),
-                        num((x1 - x0).max(1e-9))
-                    );
+                let steps = ((tb - ta).abs() / unit).ceil().clamp(4.0, BEZIER_STEPS as f64) as usize;
+                let mut pts: Vec<(f64, f64)> = (0..=steps)
+                    .map(|i| {
+                        let u = i as f64 / steps as f64;
+                        (ta + (tb - ta) * u, va + dv * a.ease.apply(u))
+                    })
+                    .collect();
+                pts.sort_by(|p, q| p.0.total_cmp(&q.0));
+                let mut pw = num(pts[pts.len() - 1].1);
+                for s in pts.windows(2).rev() {
+                    let ((x0, y0), (x1, y1)) = (s[0], s[1]);
+                    pw = format!("if(lt({var},{}),{}+({})*({var}-{})/{},{pw})", num(x1), num(y0), num(y1 - y0), num(x0), num((x1 - x0).max(1e-9)));
                 }
                 pw
             }
@@ -407,9 +408,53 @@ fn param_expr(clip: &Clip, param: Param, head: Frame, var: &str, unit: f64) -> S
                 format!("{}+({})*{eased}", num(va), num(dv))
             }
         };
-        e = format!("if(lt({var},{}),{inner},{e})", num(tb));
+        pieces.push((ta.min(tb), ta.max(tb), inner));
     }
-    format!("if(lt({var},{}),{},{e})", num(pos(first)), num(first.value as f64))
+    pieces.sort_by(|p, q| p.0.total_cmp(&q.0));
+    let (before, after) = if clip.reverse { (last, first) } else { (first, last) };
+    let mut e = num(after.value as f64);
+    for (_, to, inner) in pieces.into_iter().rev() {
+        e = format!("if(lt({var},{}),{inner},{e})", num(to));
+    }
+    format!("if(lt({var},{}),{},{e})", num(pos(before)), num(before.value as f64))
+}
+
+/// FFmpeg expression for the clip-local timeline position of source position
+/// `s` (an expression in sequence frames), through the clip's speed keys.
+fn local_expr(clip: &Clip, s: &str) -> String {
+    let warp = clip.warp();
+    let w = warp.expr(s, fine);
+    let w0 = fine(warp.w(clip.source_in as f64));
+    if clip.reverse { format!("({w0}+{}-({w}))", clip.duration) } else { format!("(({w})-{w0})") }
+}
+
+/// Speed changes of a warped clip as an `asendcmd` script for `stages`
+/// chained `atempo` filters named `{name}{j}`, each taking the n-th root.
+/// `at` maps seconds of the filter's input to the source position.
+fn tempo_commands(clip: &Clip, at: impl Fn(f64) -> f64, input_s: f64, name: &str, stages: usize) -> (f64, String) {
+    const STEP_S: f64 = 0.04;
+    let tempo = |t: f64| clip.speed_at(clip.local_at(at(t))).powf(1.0 / stages as f64);
+    let steps = ((input_s / STEP_S).ceil() as usize).clamp(1, 20_000);
+    let mut out = Vec::new();
+    let mut last = f64::NAN;
+    for i in 1..steps {
+        let v = (tempo((i as f64 + 0.5) * STEP_S) * 10_000.0).round() / 10_000.0;
+        if v != last {
+            let cmds: Vec<String> = (0..stages).map(|j| format!("{name}{j} tempo {}", num(v))).collect();
+            out.push(format!("{} {}", num(i as f64 * STEP_S), cmds.join(",")));
+            last = v;
+        }
+    }
+    (tempo(0.5 * STEP_S), out.join(";"))
+}
+
+/// atempo stages a speed range needs (each stage handles 0.5..100).
+fn tempo_stages(lo: f64, hi: f64) -> usize {
+    let mut n = 1;
+    while lo.powf(1.0 / n as f64) < 0.5 || hi.powf(1.0 / n as f64) > 100.0 {
+        n += 1;
+    }
+    n
 }
 
 const BEZIER_STEPS: usize = 32;
@@ -713,6 +758,59 @@ fn stereo_pan(pan: f64) -> [[f64; 2]; 2] {
     }
 }
 
+struct WarpedAudio {
+    /// `-ss`, `-t` and `-i` (the path follows).
+    args: Vec<OsString>,
+    filters: Vec<String>,
+}
+
+/// Reading and timing the sound of a warped clip in `seg`: the source range
+/// is cut exactly, reversed if the clip is, and stretched by `atempo` stages
+/// whose tempo follows the speed keys (`asendcmd` every 40 ms of source).
+/// None when the segment shows no part of the media.
+fn warped_audio(clip: &Clip, seg: &Segment, sf: Rational, media_s: f64, sr: u32, mono: bool, k: usize) -> Option<WarpedAudio> {
+    let sfps = sf.as_f64();
+    let total = media_s * sfps;
+    let (qa, qb) = (clip.source_at(seg.head as f64), clip.source_at((seg.head + seg.len) as f64));
+    let (lo, hi) = (qa.min(qb).max(0.0), qa.max(qb).min(total));
+    if hi - lo < 1e-3 {
+        return None;
+    }
+    let len_s = (hi - lo) / sfps;
+    let args = vec!["-ss".into(), fine(lo / sfps).into(), "-t".into(), fine(len_s + 0.1).into(), "-i".into()];
+    let mut f = Vec::new();
+    if mono {
+        f.push("pan=stereo|c0=c0|c1=c0".to_string());
+    }
+    f.push(format!("aformat=sample_fmts=fltp:sample_rates={sr}:channel_layouts=stereo"));
+    f.push(format!("atrim=end={}", fine(len_s)));
+    if clip.reverse {
+        f.push("areverse,asetpts=PTS-STARTPTS".into());
+    }
+    let reverse = clip.reverse;
+    let at = move |t: f64| if reverse { hi - t * sfps } else { lo + t * sfps };
+    if clip.keys_of(Param::Speed).is_empty() {
+        f.extend(atempo_chain(clip.speed));
+    } else {
+        let (slow, fast) = clip.warp().speed_range();
+        let stages = tempo_stages(slow, fast);
+        let name = format!("atempo@tp{k}s");
+        let (first, cmds) = tempo_commands(clip, at, len_s, &name, stages);
+        if !cmds.is_empty() {
+            f.push(format!("asendcmd=c='{cmds}'"));
+        }
+        for j in 0..stages {
+            f.push(format!("{name}{j}=tempo={}", num((first * 10_000.0).round() / 10_000.0)));
+        }
+    }
+    // Silence where the segment starts outside the media (transition handles).
+    let pad = (clip.local_at(at(0.0)) - seg.head as f64) / sfps;
+    if pad * sr as f64 >= 1.0 {
+        f.push(format!("adelay=delays={}S:all=1", (pad * sr as f64).round() as u64));
+    }
+    Some(WarpedAudio { args, filters: f })
+}
+
 struct AudioMix {
     args: Vec<OsString>,
     chains: Vec<String>,
@@ -767,20 +865,26 @@ fn audio_mix(project: &Project, seq: &Sequence, s: &ExportSettings, (t0, t1): (F
             let seg_len = sf.frames_to_seconds(seg.len);
             let lead = sf.frames_to_seconds((t0 - seg.start).max(0));
             let offset = sf.frames_to_seconds((seg.start - t0).max(0));
-            args.extend(["-ss".into(), num(src_start.max(0.0)).into()]);
-            args.extend(["-t".into(), num(seg_len * clip.speed + 0.1).into()]);
-            args.push("-i".into());
-            args.push(asset.path.clone().into_os_string());
-
             let mut f = vec!["asetpts=PTS-STARTPTS".to_string()];
-            f.extend(atempo_chain(clip.speed));
-            if audio.channels == 1 {
-                f.push("pan=stereo|c0=c0|c1=c0".into());
-            }
-            f.push(format!("aformat=sample_fmts=fltp:sample_rates={sr}:channel_layouts=stereo"));
-            if src_start < 0.0 {
-                // Silence before the media start (incoming side of a crossfade).
-                f.push(format!("adelay=delays={}S:all=1", (-src_start / clip.speed * sr as f64).round() as u64));
+            if clip.is_warped() {
+                let Some(w) = warped_audio(clip, &seg, sf, asset.info.as_ref().map_or(0.0, |i| i.duration), sr, audio.channels == 1, k) else { continue };
+                args.extend(w.args);
+                args.push(asset.path.clone().into_os_string());
+                f.extend(w.filters);
+            } else {
+                args.extend(["-ss".into(), num(src_start.max(0.0)).into()]);
+                args.extend(["-t".into(), num(seg_len * clip.speed + 0.1).into()]);
+                args.push("-i".into());
+                args.push(asset.path.clone().into_os_string());
+                f.extend(atempo_chain(clip.speed));
+                if audio.channels == 1 {
+                    f.push("pan=stereo|c0=c0|c1=c0".into());
+                }
+                f.push(format!("aformat=sample_fmts=fltp:sample_rates={sr}:channel_layouts=stereo"));
+                if src_start < 0.0 {
+                    // Silence before the media start (incoming side of a crossfade).
+                    f.push(format!("adelay=delays={}S:all=1", (-src_start / clip.speed * sr as f64).round() as u64));
+                }
             }
             if !clip.channels.is_stereo() {
                 f.push(pan_matrix(clip.channels.matrix().map(|r| r.map(f64::from))));
@@ -852,6 +956,63 @@ fn audio_mix(project: &Project, seq: &Sequence, s: &ExportSettings, (t0, t1): (F
         None => format!("{sum}[aout]"),
     });
     Ok(AudioMix { args, chains, inputs: k - first })
+}
+
+/// Inputs and chain (ending in `[w{k}]`, inputs from `k`) reading the source
+/// frames a warped clip shows in `seg` and timing them: a frame appears
+/// where the clip reaches the frame's leading edge (its start, or its end
+/// when reversed), so `fps=round=up` then shows on every output frame the
+/// source frame under the clip's position, as the preview does. Reversed
+/// clips are read in pieces of at most ~2 s that are reversed one by one,
+/// which bounds the memory the `reverse` filter holds.
+fn warped_video(clip: &Clip, seg: &Segment, info: &kerf_core::model::MediaInfo, sf: Rational, path: &Path, k: usize) -> (Vec<OsString>, String, usize) {
+    let video = info.video.as_ref();
+    let m = video.map(|v| v.fps).filter(|r| r.is_valid()).unwrap_or(sf).as_f64();
+    let sfps = sf.as_f64();
+    let total = ((info.duration * m).round() as i64).max(1);
+    let (qa, qb) = (clip.source_at(seg.head as f64), clip.source_at((seg.head + seg.len) as f64));
+    let (lo, hi) = (qa.min(qb), qa.max(qb));
+    // Media frames a..b cover the source positions lo..hi.
+    let a = ((lo / sfps * m + 1e-6).floor() as i64).clamp(0, total - 1);
+    let b = ((hi / sfps * m - 1e-6).ceil() as i64).clamp(a + 1, total);
+    let assumed = video.and_then(assumed_color).map(|p| format!("{p},")).unwrap_or_default();
+    let mut args: Vec<OsString> = Vec::new();
+    let mut input = |from: i64, frames: i64| {
+        // A quarter frame early so the seek lands on frame `from`; trim counts the frames.
+        args.extend(["-ss".into(), fine((from as f64 - 0.25) / m).into()]);
+        args.extend(["-t".into(), fine((frames as f64 + 1.0) / m).into()]);
+        args.push("-i".into());
+        args.push(path.as_os_str().to_owned());
+    };
+    let mut chain = Vec::new();
+    let n;
+    if clip.reverse {
+        let piece = ((2.0 * m).round() as i64).max(((b - a) as f64 / 40.0).ceil() as i64).max(1);
+        let mut parts = Vec::new();
+        let mut top = b;
+        while top > a {
+            let from = (top - piece).max(a);
+            input(from, top - from);
+            let j = k + parts.len();
+            chain.push(format!("[{j}:v:0]{assumed}trim=end_frame={},setpts=PTS-STARTPTS,reverse[r{j}]", top - from));
+            parts.push(format!("[r{j}]"));
+            top = from;
+        }
+        n = parts.len();
+        let joined = if n == 1 { format!("{}null", parts[0]) } else { format!("{}concat=n={n}:v=1:a=0", parts.join("")) };
+        chain.push(joined);
+    } else {
+        input(a, b - a);
+        n = 1;
+        chain.push(format!("[{k}:v:0]{assumed}trim=end_frame={}", b - a));
+    }
+    // Frame N's leading edge in sequence frames, then its time in the segment.
+    let edge = if clip.reverse { format!("({b}-N)*{}", fine(sfps / m)) } else { format!("({a}+N)*{}", fine(sfps / m)) };
+    // The first frame starts the segment: before the media (handles, rounding) it holds.
+    let t = format!("if(eq(N,0),0,max(0,({}-{})*{}))", local_expr(clip, &edge), seg.head, fine(1.0 / sfps));
+    let last = chain.pop().expect("one");
+    chain.push(format!("{last},setpts='{t}/TB'[w{k}]"));
+    (args, chain.join(";\n"), n)
 }
 
 /// Builds the FFmpeg invocation for `seq`. `work_dir` receives the graph script.
@@ -959,39 +1120,50 @@ pub fn plan(
             let seg_len = sf.frames_to_seconds(seg.len);
             let offset = sf.frames_to_seconds(seg.start - t0);
             let image = asset.kind == MediaKind::Image;
-            // Past the clip's last frame (outgoing side of a transition) the media may
-            // have ended: reading starts at that frame, which holds, and is cut to the segment.
-            let last_used = sf.frames_to_seconds(clip.source_in) + sf.frames_to_seconds(clip.duration - 1) * clip.speed;
-            let read_at = src_start.clamp(0.0, last_used.max(0.0));
-            let skip = (src_start - read_at).max(0.0) / clip.speed;
-            if image {
-                args.extend(["-loop", "1", "-framerate"].map(OsString::from));
-                args.push(rate_str(of).into());
-                args.extend(["-t".into(), num(seg_len + 2.0 * frame_s).into()]);
-            } else {
-                args.extend(["-ss".into(), num(read_at).into()]);
-                args.extend(["-t".into(), num((seg_len + skip) * clip.speed + 2.0 * frame_s).into()]);
-            }
-            args.push("-i".into());
-            args.push(s.title_files.get(&asset.id).unwrap_or(&asset.path).clone().into_os_string());
-
             let k = inputs;
-            inputs += 1;
+            let mut src = format!("{k}:v:0");
             let mut f: Vec<String> = Vec::new();
-            if let Some(p) = info.video.as_ref().filter(|_| !image).and_then(assumed_color) {
-                f.push(p);
-            }
-            f.push(format!("setpts=(PTS-STARTPTS)/{}", num(clip.speed)));
-            f.push(format!("fps={}", rate_str(of)));
-            // Before the source start (incoming side of a transition) the first frame holds.
-            if src_start < 0.0 && !image {
-                f.push(format!("tpad=start_duration={}:start_mode=clone", num(-src_start / clip.speed)));
-            }
-            if tail_ext > 0 && !image {
-                f.push(format!("tpad=stop_duration={}:stop_mode=clone", num(sf.frames_to_seconds(tail_ext) + skip + 2.0 * frame_s)));
-            }
-            if skip > 0.0 && !image {
-                f.push(format!("trim=start={},setpts=PTS-STARTPTS", num(skip - 0.5 * frame_s)));
+            if clip.is_warped() && !image {
+                let (wargs, chain, n) = warped_video(clip, &seg, info, sf, &asset.path, k);
+                args.extend(wargs);
+                inputs += n;
+                chains.push(chain);
+                src = format!("w{k}");
+                f.push(format!("fps={}:round=up", rate_str(of)));
+                // Where the segment runs past the media (transition handles) its last frame holds.
+                f.push(format!("tpad=stop_duration={}:stop_mode=clone", num(seg_len + 2.0 * frame_s)));
+            } else {
+                // Past the clip's last frame (outgoing side of a transition) the media may
+                // have ended: reading starts at that frame, which holds, and is cut to the segment.
+                let last_used = sf.frames_to_seconds(clip.source_in) + sf.frames_to_seconds(clip.duration - 1) * clip.speed;
+                let read_at = src_start.clamp(0.0, last_used.max(0.0));
+                let skip = (src_start - read_at).max(0.0) / clip.speed;
+                if image {
+                    args.extend(["-loop", "1", "-framerate"].map(OsString::from));
+                    args.push(rate_str(of).into());
+                    args.extend(["-t".into(), num(seg_len + 2.0 * frame_s).into()]);
+                } else {
+                    args.extend(["-ss".into(), num(read_at).into()]);
+                    args.extend(["-t".into(), num((seg_len + skip) * clip.speed + 2.0 * frame_s).into()]);
+                }
+                args.push("-i".into());
+                args.push(s.title_files.get(&asset.id).unwrap_or(&asset.path).clone().into_os_string());
+                inputs += 1;
+                if let Some(p) = info.video.as_ref().filter(|_| !image).and_then(assumed_color) {
+                    f.push(p);
+                }
+                f.push(format!("setpts=(PTS-STARTPTS)/{}", num(clip.speed)));
+                f.push(format!("fps={}", rate_str(of)));
+                // Before the source start (incoming side of a transition) the first frame holds.
+                if src_start < 0.0 && !image {
+                    f.push(format!("tpad=start_duration={}:start_mode=clone", num(-src_start / clip.speed)));
+                }
+                if tail_ext > 0 && !image {
+                    f.push(format!("tpad=stop_duration={}:stop_mode=clone", num(sf.frames_to_seconds(tail_ext) + skip + 2.0 * frame_s)));
+                }
+                if skip > 0.0 && !image {
+                    f.push(format!("trim=start={},setpts=PTS-STARTPTS", num(skip - 0.5 * frame_s)));
+                }
             }
             // Colour first, then the effect stack, then opacity: with effects the
             // alpha multiplier is a second mixer so a key cannot discard it.
@@ -1082,7 +1254,7 @@ pub fn plan(
                 f.push(format!("rotate=a={a}:ow=rotw({a}):oh=roth({a}):c=none"));
             }
             f.push(format!("setpts=PTS+{}/TB", num(offset)));
-            chains.push(format!("[{k}:v:0]{}[v{k}]", f.join(",")));
+            chains.push(format!("[{src}]{}[v{k}]", f.join(",")));
 
             // Anchor placement: centre = P - R(theta) * (anchor offset).
             let (ax, ay) = ((t.anchor_x as f64 - 0.5) * sw as f64, (t.anchor_y as f64 - 0.5) * sh as f64);

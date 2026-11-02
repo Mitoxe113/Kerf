@@ -213,6 +213,8 @@ export interface Clip {
   audioEffects?: AudioEffect[];
   /** Audio clips: routing of the source channels (default stereo). */
   channels?: ChannelMap;
+  /** Plays the source range backwards. */
+  reverse?: boolean;
 }
 
 export type EqShape = "highPass" | "lowShelf" | "peak" | "highShelf" | "lowPass";
@@ -254,7 +256,7 @@ export type EffectKind =
 export type Effect = { id: Uuid; enabled: boolean } & EffectKind;
 
 export type ColorParam = "exposure" | "contrast" | "saturation" | "temperature" | "tint";
-export type KeyParam = "x" | "y" | "scale" | "rotation" | "opacity" | "volume" | ColorParam;
+export type KeyParam = "x" | "y" | "scale" | "rotation" | "opacity" | "volume" | "speed" | ColorParam;
 export interface BezierEase {
   bezier: { x1: number; y1: number; x2: number; y2: number };
 }
@@ -377,7 +379,7 @@ export type Edge = "start" | "end";
 export type PlaceMode = "overwrite" | "insert";
 
 export type ClipPatch = Partial<
-  Pick<Clip, "name" | "enabled" | "transform" | "opacity" | "volumeDb" | "pan" | "speed" | "fadeIn" | "fadeOut" | "color" | "label" | "channels">
+  Pick<Clip, "name" | "enabled" | "transform" | "opacity" | "volumeDb" | "pan" | "speed" | "fadeIn" | "fadeOut" | "color" | "label" | "channels" | "reverse">
 >;
 export type TrackPatch = Partial<Pick<Track, "name" | "muted" | "solo" | "locked" | "hidden" | "volumeDb" | "color" | "height" | "effects" | "mono">>;
 export type MediaPatch = Partial<Pick<MediaAsset, "favorite" | "label" | "tags" | "note">>;

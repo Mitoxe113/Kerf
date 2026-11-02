@@ -122,6 +122,7 @@ pub fn run() {
             commands::version_restore,
             commands::freeze_frame,
             commands::measure_clips,
+            commands::reversed_audio,
             commands::take_launch_file,
         ])
         .build(tauri::generate_context!())

@@ -1,4 +1,5 @@
 import { useShallow } from "zustand/react/shallow";
+import { shownFrame, slippedIn } from "../lib/keys";
 import { Eye, EyeOff, Lock, Magnet, Plus, Unlock, Link2, Film, Music } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { MAX_ZOOM, MIN_ZOOM, placeMedia, selectClips, setTimelineViewport, zoomBy, copySelection, deleteSelection, paste, toggleEnabled, linkSelection, applyFades, addTrack, renameSelection, labelSelection, replaceClipMedia, revealInProject, freezeFrame, openNormalize, selectedAudioClips } from "../actions/editing";
@@ -403,7 +404,7 @@ export function Timeline() {
       } else if (d.kind === "slip") {
         const r = rowOf(d.track)!;
         ghost(fx(d.clip.start), top + r.y, d.clip.duration * v.zoom, r.h, true);
-        label = `Slip ${d.delta >= 0 ? "+" : "−"}${Math.abs(d.delta)} F · In ${formatTimecode(d.clip.sourceIn + Math.round(d.delta * d.clip.speed), seq.settings.fps)}`;
+        label = `Slip ${d.delta >= 0 ? "+" : "−"}${Math.abs(d.delta)} F · In ${formatTimecode(slippedIn(d.clip, d.delta), seq.settings.fps)}`;
       } else if (d.kind === "slide") {
         const r = rowOf(d.track)!;
         ghost(fx(d.clip.start + d.delta), top + r.y, d.clip.duration * v.zoom, r.h, true);
@@ -830,7 +831,7 @@ export function Timeline() {
         }
         d.delta = clampTrim(track, d.ci, d.edge, delta, d.ripple, lenOf(d.clip));
         const c = d.clip;
-        showSourceFrame(c, c.sourceIn + Math.round((d.edge === "start" ? d.delta : c.duration + d.delta - 1) * c.speed));
+        showSourceFrame(c, shownFrame(c, d.edge === "start" ? d.delta : c.duration + d.delta - 1));
         break;
       }
       case "roll": {
@@ -845,12 +846,12 @@ export function Timeline() {
           }
         }
         d.delta = clampRoll(track, d.ci, delta, lenOf(d.clip), lenOf(track.clips[d.ci + 1]));
-        showSourceFrame(d.clip, d.clip.sourceIn + Math.round((d.clip.duration + d.delta - 1) * d.clip.speed));
+        showSourceFrame(d.clip, shownFrame(d.clip, d.clip.duration + d.delta - 1));
         break;
       }
       case "slip": {
         d.delta = clampSlip(d.clip, Math.round((d.x0 - x) / view.zoom), lenOf(d.clip));
-        showSourceFrame(d.clip, d.clip.sourceIn + Math.round(d.delta * d.clip.speed));
+        showSourceFrame(d.clip, shownFrame({ ...d.clip, sourceIn: slippedIn(d.clip, d.delta) }, 0));
         break;
       }
       case "slide": {
@@ -1047,6 +1048,7 @@ export function Timeline() {
       { label: "Standard-Übergang an den Schnitten", shortcut: "Strg+⇧+D", onSelect: () => void applyDefaultTransitions() },
       { label: "Übergänge entfernen", disabled: !ids.some((id) => { const l = locate(seq, id); const t = l && seq.tracks[l.track]; return !!t && !!(t.clips[l.clip].transition || t.clips[l.clip + 1]?.transition); }), onSelect: () => void removeTransitions() },
       { label: "Geschwindigkeit", submenu: [0.25, 0.5, 1, 1.5, 2, 4].map((s) => ({ label: `${s * 100} %`, checked: h.clip.speed === s, onSelect: speed(s) })) },
+      { label: "Rückwärts abspielen", checked: !!h.clip.reverse, onSelect: () => void edit({ type: "updateClips", sequence: seq.id, clips: ids, patch: { reverse: !h.clip.reverse } }) },
       { label: "Standbild am Playhead einfügen (2 s)", shortcut: "⇧+N", onSelect: () => void freezeFrame(2) },
       { label: "Audio normalisieren …", disabled: !selectedAudioClips().length, onSelect: openNormalize },
       { separator: true },

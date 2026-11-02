@@ -13,6 +13,7 @@ use uuid::Uuid;
 pub use crate::audio::{AudioEffect, AudioEffectKind, ChannelMap, EqBand, EqShape};
 pub use crate::text::{Cue, Subtitles, TextAlign, TextStyle, TitleSpec};
 use crate::time::{Frame, Rational};
+use crate::timemap::{Warp, MAX_SPEED, MIN_SPEED};
 
 pub const SCHEMA_VERSION: u32 = 1;
 
@@ -622,6 +623,13 @@ pub struct Clip {
     /// Routing of the source channels (audio clips).
     #[serde(default, skip_serializing_if = "ChannelMap::is_stereo")]
     pub channels: ChannelMap,
+    /// Plays the source range backwards.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub reverse: bool,
+}
+
+fn is_false(v: &bool) -> bool {
+    !*v
 }
 
 impl Clip {
@@ -649,6 +657,7 @@ impl Clip {
             transition: None,
             audio_effects: Vec::new(),
             channels: ChannelMap::Stereo,
+            reverse: false,
         }
     }
 
@@ -661,13 +670,73 @@ impl Clip {
         self.start + self.duration
     }
 
-    /// Source frames consumed by `frames` timeline frames.
-    pub fn source_span(&self, frames: Frame) -> Frame {
-        (frames as f64 * self.speed).round() as Frame
+    /// Keyframed speed or reversed: timing goes through [`Warp`] instead of a constant factor.
+    pub fn is_warped(&self) -> bool {
+        self.reverse || !self.keys_of(Param::Speed).is_empty()
     }
 
+    /// Mapping between source and timeline positions (constant `speed` without keys).
+    pub fn warp(&self) -> Warp {
+        Warp::new(self.keys_of(Param::Speed), self.speed)
+    }
+
+    /// End of the used source range (exclusive).
     pub fn source_out(&self) -> Frame {
-        self.source_in + self.source_span(self.duration)
+        if !self.is_warped() {
+            return self.source_in + (self.duration as f64 * self.speed).round() as Frame;
+        }
+        let w = self.warp();
+        w.s(w.w(self.source_in as f64) + self.duration as f64).round() as Frame
+    }
+
+    /// Timeline frames between source positions `a` and `b` (b >= a), rounded down.
+    pub fn frames_between(&self, a: f64, b: f64) -> Frame {
+        if b <= a {
+            return 0;
+        }
+        let w = self.warp();
+        (w.w(b) - w.w(a) + 1e-9).floor() as Frame
+    }
+
+    /// Timeline frames the clip's start can move earlier within a source of `len` frames.
+    pub fn room_before(&self, len: Frame) -> Frame {
+        if self.reverse {
+            self.frames_between(self.source_out() as f64, len as f64)
+        } else {
+            self.frames_between(0.0, self.source_in as f64)
+        }
+    }
+
+    /// Timeline frames the clip's end can move later within a source of `len` frames.
+    pub fn room_after(&self, len: Frame) -> Frame {
+        if self.reverse {
+            self.frames_between(0.0, self.source_in as f64)
+        } else {
+            self.frames_between(self.source_out() as f64, len as f64)
+        }
+    }
+
+    /// Moves the clip's edges to timeline frames `start..end`, keeping every
+    /// remaining frame on the source frame it showed (trims, splits).
+    pub fn set_range(&mut self, start: Frame, end: Frame) {
+        let edge = if self.reverse { end } else { start };
+        let at = self.source_at((edge - self.start) as f64);
+        self.source_in = (at.round() as Frame).max(0);
+        self.start = start;
+        self.duration = (end - start).max(1);
+    }
+
+    /// Shifts the used source range by `frames` timeline frames (slip).
+    pub fn slip(&mut self, frames: Frame) {
+        let w = self.warp();
+        let at = w.s(w.w(self.source_in as f64) + frames as f64);
+        self.source_in = (at.round() as Frame).max(0);
+    }
+
+    /// Duration that shows the source range `source_in..source_out` with the current speed.
+    pub fn duration_for(&self, source_out: Frame) -> Frame {
+        let w = self.warp();
+        ((w.w(source_out as f64) - w.w(self.source_in as f64)).round() as Frame).max(1)
     }
 
     /// Keys of `param`, empty when it is not animated.
@@ -675,23 +744,75 @@ impl Clip {
         self.keys.get(&param).map_or(&[], Vec::as_slice)
     }
 
-    /// Source position (sequence frames at speed 1) of clip-local timeline frame `local`.
+    /// Source position (sequence frames at speed 1) at clip-local timeline
+    /// position `local` (a frame boundary). Reversed clips run from
+    /// `source_out` down to `source_in`, so their frame `l` shows the source
+    /// frame just below `source_at(l)`.
     pub fn source_at(&self, local: f64) -> f64 {
-        self.source_in as f64 + local * self.speed
+        if !self.is_warped() {
+            return self.source_in as f64 + local * self.speed;
+        }
+        let w = self.warp();
+        let w0 = w.w(self.source_in as f64);
+        w.s(if self.reverse { w0 + self.duration as f64 - local } else { w0 + local })
     }
 
-    /// Clip-local timeline frame of source position `at` (inverse of [`Clip::source_at`]).
+    /// Source frame shown on clip-local frame `local`: the one under the
+    /// clip's position, or just below it when reversed.
+    pub fn shown_frame(&self, local: Frame) -> Frame {
+        let q = self.source_at(local as f64);
+        if self.reverse { (q - 1e-6).ceil() as Frame - 1 } else { (q + 1e-6).floor() as Frame }
+    }
+
+    /// Clip-local timeline position of source position `at` (inverse of [`Clip::source_at`]).
     pub fn local_of(&self, at: Frame) -> f64 {
-        (at - self.source_in) as f64 / self.speed
+        self.local_at(at as f64)
     }
 
-    /// Value of `param` at clip-local timeline frame `local`.
+    pub fn local_at(&self, at: f64) -> f64 {
+        if !self.is_warped() {
+            return (at - self.source_in as f64) / self.speed;
+        }
+        let w = self.warp();
+        let d = w.w(at) - w.w(self.source_in as f64);
+        if self.reverse { self.duration as f64 - d } else { d }
+    }
+
+    /// Playback speed at clip-local position `local` (positive; see `reverse` for the direction).
+    pub fn speed_at(&self, local: f64) -> f64 {
+        if !self.is_warped() {
+            return self.speed;
+        }
+        let w = self.warp();
+        let w0 = w.w(self.source_in as f64);
+        w.speed(if self.reverse { w0 + self.duration as f64 - local } else { w0 + local })
+    }
+
+    /// Value of `param` at clip-local timeline frame `local`. Between two
+    /// keys the curve runs over timeline time (equal to source time at a
+    /// constant speed), so a speed ramp does not bend the other curves.
     pub fn param_at(&self, param: Param, local: f64) -> f32 {
         let keys = self.keys_of(param);
         if keys.is_empty() {
             return self.base_value(param);
         }
-        eval_keys(keys, self.source_at(local))
+        if !self.is_warped() {
+            return eval_keys(keys, self.source_at(local));
+        }
+        let at = self.source_at(local);
+        let first = keys[0];
+        if at <= first.at as f64 {
+            return first.value;
+        }
+        for w in keys.windows(2) {
+            let (a, b) = (w[0], w[1]);
+            if at < b.at as f64 {
+                let (la, lb) = (self.local_of(a.at), self.local_of(b.at));
+                let u = if (lb - la).abs() < 1e-9 { 1.0 } else { ((local - la) / (lb - la)).clamp(0.0, 1.0) };
+                return (a.value as f64 + (b.value - a.value) as f64 * a.ease.apply(u)) as f32;
+            }
+        }
+        keys[keys.len() - 1].value
     }
 
     /// Static (non-animated) value of `param`.
@@ -708,6 +829,7 @@ impl Clip {
             Param::Saturation => self.color.saturation,
             Param::Temperature => self.color.temperature,
             Param::Tint => self.color.tint,
+            Param::Speed => self.speed as f32,
         }
     }
 
@@ -1002,10 +1124,12 @@ pub enum Param {
     Saturation,
     Temperature,
     Tint,
+    /// Playback speed factor (time remapping); see `timemap`.
+    Speed,
 }
 
 impl Param {
-    pub const ALL: [Param; 11] = [
+    pub const ALL: [Param; 12] = [
         Param::X,
         Param::Y,
         Param::Scale,
@@ -1017,6 +1141,7 @@ impl Param {
         Param::Saturation,
         Param::Temperature,
         Param::Tint,
+        Param::Speed,
     ];
     pub const COLOR: [Param; 5] = [Param::Exposure, Param::Contrast, Param::Saturation, Param::Temperature, Param::Tint];
 
@@ -1035,6 +1160,7 @@ impl Param {
             Param::Exposure => (-4.0, 4.0),
             Param::Contrast | Param::Temperature | Param::Tint => (-1.0, 1.0),
             Param::Saturation => (0.0, 2.0),
+            Param::Speed => (MIN_SPEED as f32, MAX_SPEED as f32),
         }
     }
 }

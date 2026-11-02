@@ -3,6 +3,7 @@
 // clip is trimmed, slipped or split.
 
 import type { Clip, ColorAdjust, ColorParam, Ease, Keyframe, KeyParam, Transform } from "./types";
+import { Warp } from "./warp";
 
 export const EASES: { value: Ease; label: string }[] = [
   { value: "linear", label: "Linear" },
@@ -88,10 +89,77 @@ export const keysOf = (c: Clip, p: KeyParam): Keyframe[] => c.keys?.[p] ?? [];
 export const isAnimated = (c: Clip, p: KeyParam) => keysOf(c, p).length > 0;
 export const hasKeys = (c: Clip) => Object.values(c.keys ?? {}).some((k) => k && k.length > 0);
 
-/** Source position of clip-local timeline frame `local`. */
-export const sourceAt = (c: Clip, local: number) => c.sourceIn + local * c.speed;
-/** Clip-local timeline frame of source position `at`. */
-export const localOf = (c: Clip, at: number) => (at - c.sourceIn) / c.speed;
+/** Keyframed speed or reversed: timing goes through a Warp (kerf_core Clip::is_warped). */
+export const isWarped = (c: Clip) => !!c.reverse || isAnimated(c, "speed");
+
+// One Warp per keys array: built on demand, reused while the clip is unchanged.
+const warps = new WeakMap<Keyframe[], Warp>();
+const constant = new Map<number, Warp>();
+export function warpOf(c: Clip): Warp {
+  const keys = keysOf(c, "speed");
+  if (!keys.length) {
+    let w = constant.get(c.speed);
+    if (!w) constant.set(c.speed, (w = new Warp([], c.speed)));
+    return w;
+  }
+  let w = warps.get(keys);
+  if (!w) warps.set(keys, (w = new Warp(keys, c.speed)));
+  return w;
+}
+
+/**
+ * Source position at clip-local timeline position `local` (a frame boundary).
+ * Reversed clips run from their source out down to `sourceIn`; their frame
+ * `l` shows the source frame just below `sourceAt(c, l)`.
+ */
+export function sourceAt(c: Clip, local: number): number {
+  if (!isWarped(c)) return c.sourceIn + local * c.speed;
+  const w = warpOf(c);
+  const w0 = w.w(c.sourceIn);
+  return w.s(c.reverse ? w0 + c.duration - local : w0 + local);
+}
+
+/** Clip-local timeline position of source position `at`. */
+export function localOf(c: Clip, at: number): number {
+  if (!isWarped(c)) return (at - c.sourceIn) / c.speed;
+  const w = warpOf(c);
+  const d = w.w(at) - w.w(c.sourceIn);
+  return c.reverse ? c.duration - d : d;
+}
+
+/** Playback speed at clip-local position `local` (always positive). */
+export function speedAt(c: Clip, local: number): number {
+  if (!isWarped(c)) return c.speed;
+  const w = warpOf(c);
+  const w0 = w.w(c.sourceIn);
+  return w.speed(c.reverse ? w0 + c.duration - local : w0 + local);
+}
+
+/** Source frame shown on clip-local frame `local` (kerf_core Clip::shown_frame). */
+export function shownFrame(c: Clip, local: number): number {
+  const q = sourceAt(c, local);
+  return c.reverse ? Math.ceil(q - 1e-6) - 1 : Math.floor(q + 1e-6);
+}
+
+/** `sourceIn` after slipping `c` by `frames` timeline frames (Clip::slip). */
+export function slippedIn(c: Clip, frames: number): number {
+  const w = warpOf(c);
+  return Math.max(0, Math.round(w.s(w.w(c.sourceIn) + frames)));
+}
+
+/** End of the used source range (exclusive), as kerf_core Clip::source_out. */
+export function sourceOut(c: Clip): number {
+  if (!isWarped(c)) return c.sourceIn + Math.round(c.duration * c.speed);
+  const w = warpOf(c);
+  return Math.round(w.s(w.w(c.sourceIn) + c.duration));
+}
+
+/** Timeline frames between source positions a <= b, rounded down (Clip::frames_between). */
+export function framesBetween(c: Clip, a: number, b: number): number {
+  if (b <= a) return 0;
+  const w = warpOf(c);
+  return Math.floor(w.w(b) - w.w(a) + 1e-9);
+}
 
 export function baseValue(c: Clip, p: KeyParam): number {
   switch (p) {
@@ -107,15 +175,32 @@ export function baseValue(c: Clip, p: KeyParam): number {
       return c.opacity;
     case "volume":
       return c.volumeDb;
+    case "speed":
+      return c.speed;
     default:
       return c.color[p];
   }
 }
 
-/** Value of `p` at clip-local timeline frame `local`. */
+/**
+ * Value of `p` at clip-local timeline frame `local`. On a warped clip the
+ * curve between two keys runs over timeline time (kerf_core Clip::param_at).
+ */
 export function paramAt(c: Clip, p: KeyParam, local: number): number {
   const keys = keysOf(c, p);
-  return keys.length ? evalKeys(keys, sourceAt(c, local)) : baseValue(c, p);
+  if (!keys.length) return baseValue(c, p);
+  if (!isWarped(c)) return evalKeys(keys, sourceAt(c, local));
+  const at = sourceAt(c, local);
+  if (at <= keys[0].at) return keys[0].value;
+  for (let i = 0; i + 1 < keys.length; i++) {
+    const [a, b] = [keys[i], keys[i + 1]];
+    if (at < b.at) {
+      const [la, lb] = [localOf(c, a.at), localOf(c, b.at)];
+      const u = Math.abs(lb - la) < 1e-9 ? 1 : Math.min(1, Math.max(0, (local - la) / (lb - la)));
+      return a.value + (b.value - a.value) * ease(a.ease, u);
+    }
+  }
+  return keys[keys.length - 1].value;
 }
 
 /** Transform, opacity, colour and volume of `c` at timeline frame `frame`. */

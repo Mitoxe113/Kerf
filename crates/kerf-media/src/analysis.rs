@@ -104,6 +104,33 @@ pub fn poster(tools: &Tools, src: &Path, kind: MediaKind, info: &MediaInfo, dir:
     Ok(out)
 }
 
+/// Longest media whose sound is reversed for the preview (`areverse` holds it all).
+const MAX_REVERSED_S: f64 = 30.0 * 60.0;
+
+/// The sound of `src` backwards (AAC), so the preview can play reversed clips
+/// forwards: source time s is at `duration - s`. Cached in `dir`.
+pub fn reversed_audio(tools: &Tools, src: &Path, info: &MediaInfo, dir: &Path) -> Result<PathBuf, MediaError> {
+    let out = dir.join("reversed.m4a");
+    if out.is_file() {
+        return Ok(out);
+    }
+    if info.audio.is_none() {
+        return Err(MediaError::Unsupported("no audio".into()));
+    }
+    if info.duration > MAX_REVERSED_S {
+        return Err(MediaError::Unsupported("too long to reverse for the preview".into()));
+    }
+    fs::create_dir_all(dir)?;
+    let partial = dir.join("partial_reversed.m4a");
+    let mut cmd = tools.ffmpeg_cmd();
+    cmd.arg("-i").arg(path_arg(src));
+    cmd.args(["-map", "0:a:0", "-af", "areverse", "-c:a", "aac", "-b:a", "192k", "-f", "ipod", "-y"]);
+    cmd.arg(path_arg(&partial));
+    run(cmd, "reversed audio")?;
+    fs::rename(&partial, &out)?;
+    Ok(out)
+}
+
 /// Writes the frame at `seconds` (source time) of `src` as a PNG (freeze frames).
 pub fn extract_frame(tools: &Tools, src: &Path, seconds: f64, out: &Path) -> Result<(), MediaError> {
     if let Some(dir) = out.parent() {

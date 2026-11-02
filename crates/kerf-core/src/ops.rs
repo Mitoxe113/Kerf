@@ -18,6 +18,7 @@ use crate::error::{EditError, Result};
 use crate::model::*;
 use crate::text::clean_cues;
 use crate::time::{Frame, Rational};
+use crate::timemap::{MAX_SPEED, MIN_SPEED};
 
 /// Default timeline length of a still image.
 pub const DEFAULT_STILL_SECONDS: f64 = 5.0;
@@ -79,6 +80,7 @@ pub struct ClipPatch {
     pub color: Option<ColorAdjust>,
     pub label: Option<LabelColor>,
     pub channels: Option<ChannelMap>,
+    pub reverse: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -657,7 +659,7 @@ fn edit_sequence(seq: &mut Sequence, media: &[MediaAsset], cmd: &EditCommand, ou
             Ok(changed)
         }
         C::DeleteClips { clips, ripple, .. } => delete_clips(seq, clips, *ripple),
-        C::SetKeyframes { clip, param, keys, .. } => set_keyframes(seq, *clip, *param, keys),
+        C::SetKeyframes { clip, param, keys, .. } => set_keyframes(seq, media, *clip, *param, keys),
         C::SetEffects { clips, effects, .. } => set_effects(seq, clips, effects),
         C::SetTransitions { items, .. } => set_transitions(seq, items),
         C::SetAudioEffects { items, .. } => set_audio_effects(seq, items),
@@ -847,11 +849,6 @@ fn media_len(media: &[MediaAsset], clip: &Clip, rate: Rational) -> Option<Frame>
     media.iter().find(|m| m.id == clip.media_id).and_then(|m| m.length_frames(rate))
 }
 
-/// Timeline frames available from `source_frames` of source at `speed`.
-fn timeline_frames(source_frames: Frame, speed: f64) -> Frame {
-    (source_frames as f64 / speed + 1e-9).floor() as Frame
-}
-
 fn clamp_fades(c: &mut Clip) {
     c.fade_in = c.fade_in.clamp(0, c.duration);
     c.fade_out = c.fade_out.clamp(0, c.duration - c.fade_in);
@@ -921,13 +918,11 @@ fn split_clip(clip: &Clip, at: Frame, link_map: &mut HashMap<Uuid, Uuid>) -> (Cl
     debug_assert!(clip.start < at && at < clip.end());
     let mut left = clip.clone();
     let mut right = clip.clone();
-    left.duration = at - clip.start;
+    left.set_range(clip.start, at);
     left.fade_out = 0;
     clamp_fades(&mut left);
     right.id = Uuid::new_v4();
-    right.start = at;
-    right.duration = clip.end() - at;
-    right.source_in = clip.source_in + clip.source_span(at - clip.start);
+    right.set_range(at, clip.end());
     right.fade_in = 0;
     right.transition = None;
     right.link = clip.link.map(|l| *link_map.entry(l).or_insert_with(Uuid::new_v4));
@@ -948,7 +943,7 @@ fn clear_range(track: &mut Track, from: Frame, to: Frame) {
         }
         if c.start < from {
             let mut left = c.clone();
-            left.duration = from - c.start;
+            left.set_range(c.start, from);
             left.fade_out = 0;
             clamp_fades(&mut left);
             out.push(left);
@@ -959,9 +954,7 @@ fn clear_range(track: &mut Track, from: Frame, to: Frame) {
                 right.id = Uuid::new_v4();
                 right.link = None;
             }
-            right.start = to;
-            right.duration = c.end() - to;
-            right.source_in = c.source_in + c.source_span(to - c.start);
+            right.set_range(to, c.end());
             right.fade_in = 0;
             right.transition = None;
             clamp_fades(&mut right);
@@ -1075,10 +1068,10 @@ fn place_media(seq: &mut Sequence, media: &[MediaAsset], mut a: PlaceArgs, out: 
             }
             if settings != seq.settings {
                 let (from, to) = (seq.settings.fps, settings.fps);
-                let conv = |f: Frame| to.seconds_to_frames_round(from.frames_to_seconds(f));
-                a.at = conv(a.at);
+                let conv = move |f: Frame| to.seconds_to_frames_round(from.frames_to_seconds(f));
                 a.source_in = a.source_in.map(conv);
                 a.source_out = a.source_out.map(conv);
+                a.at = conv(a.at);
                 convert_rate(seq, from, to);
                 seq.settings = settings;
                 out.sequences_changed = true;
@@ -1236,8 +1229,8 @@ fn trim_clip(seq: &mut Sequence, media: &[MediaAsset], clip: Uuid, edge: Edge, d
         match edge {
             Edge::Start => {
                 b.max(cl.duration - 1);
-                if len.is_some() {
-                    b.min(-timeline_frames(cl.source_in, cl.speed));
+                if let Some(len) = len {
+                    b.min(-cl.room_before(len));
                 }
                 if !ripple {
                     let prev_end = if c > 0 { track.clips[c - 1].end() } else { 0 };
@@ -1247,7 +1240,7 @@ fn trim_clip(seq: &mut Sequence, media: &[MediaAsset], clip: Uuid, edge: Edge, d
             Edge::End => {
                 b.min(1 - cl.duration);
                 if let Some(len) = len {
-                    b.max(timeline_frames(len - cl.source_out(), cl.speed));
+                    b.max(cl.room_after(len));
                 }
                 if !ripple {
                     if let Some(next) = track.clips.get(c + 1) {
@@ -1265,21 +1258,19 @@ fn trim_clip(seq: &mut Sequence, media: &[MediaAsset], clip: Uuid, edge: Edge, d
         let track = &mut seq.tracks[t];
         let cl = &mut track.clips[c];
         match (edge, ripple) {
-            (Edge::Start, false) => {
-                cl.start += d;
-                cl.duration -= d;
-                cl.source_in = (cl.source_in + cl.source_span(d)).max(0);
-            }
+            (Edge::Start, false) => cl.set_range(cl.start + d, cl.end()),
             (Edge::Start, true) => {
-                cl.duration -= d;
-                cl.source_in = (cl.source_in + cl.source_span(d)).max(0);
+                // The rest of the clip keeps its frames and moves back by d.
+                let start = cl.start;
+                cl.set_range(start + d, cl.end());
+                cl.start = start;
                 for f in &mut track.clips[c + 1..] {
                     f.start -= d;
                 }
             }
-            (Edge::End, false) => cl.duration += d,
+            (Edge::End, false) => cl.set_range(cl.start, cl.end() + d),
             (Edge::End, true) => {
-                cl.duration += d;
+                cl.set_range(cl.start, cl.end() + d);
                 for f in &mut track.clips[c + 1..] {
                     f.start += d;
                 }
@@ -1316,10 +1307,10 @@ fn roll_edit(seq: &mut Sequence, media: &[MediaAsset], clip: Uuid, delta: Frame,
         b.min(1 - l.duration);
         b.max(r.duration - 1);
         if let Some(len) = media_len(media, l, rate) {
-            b.max(timeline_frames(len - l.source_out(), l.speed));
+            b.max(l.room_after(len));
         }
-        if media_len(media, r, rate).is_some() {
-            b.min(-timeline_frames(r.source_in, r.speed));
+        if let Some(len) = media_len(media, r, rate) {
+            b.min(-r.room_before(len));
         }
     }
     let d = b.clamp(delta);
@@ -1328,12 +1319,11 @@ fn roll_edit(seq: &mut Sequence, media: &[MediaAsset], clip: Uuid, delta: Frame,
     }
     for &(t, c) in &pairs {
         let clips = &mut seq.tracks[t].clips;
-        clips[c].duration += d;
-        clamp_fades(&mut clips[c]);
+        let l = &mut clips[c];
+        l.set_range(l.start, l.end() + d);
+        clamp_fades(l);
         let r = &mut clips[c + 1];
-        r.start += d;
-        r.duration -= d;
-        r.source_in = (r.source_in + r.source_span(d)).max(0);
+        r.set_range(r.start + d, r.end());
         clamp_fades(r);
     }
     Ok(true)
@@ -1352,8 +1342,8 @@ fn slip_clip(seq: &mut Sequence, media: &[MediaAsset], clip: Uuid, delta: Frame,
         let cl = &seq.tracks[t].clips[c];
         match media_len(media, cl, rate) {
             Some(len) => {
-                b.min(-timeline_frames(cl.source_in, cl.speed));
-                b.max(timeline_frames(len - cl.source_out(), cl.speed));
+                b.min(-cl.frames_between(0.0, cl.source_in as f64));
+                b.max(cl.frames_between(cl.source_out() as f64, len as f64));
             }
             // Slipping a still has no visible effect.
             None => b.max(0),
@@ -1364,8 +1354,7 @@ fn slip_clip(seq: &mut Sequence, media: &[MediaAsset], clip: Uuid, delta: Frame,
         return Ok(false);
     }
     for &(t, c) in &targets {
-        let cl = &mut seq.tracks[t].clips[c];
-        cl.source_in = (cl.source_in + cl.source_span(d)).max(0);
+        seq.tracks[t].clips[c].slip(d);
     }
     Ok(true)
 }
@@ -1392,7 +1381,7 @@ fn slide_clip(seq: &mut Sequence, media: &[MediaAsset], clip: Uuid, delta: Frame
             Some(p) if prev_adj => {
                 b.min(1 - p.duration);
                 if let Some(len) = media_len(media, p, rate) {
-                    b.max(timeline_frames(len - p.source_out(), p.speed));
+                    b.max(p.room_after(len));
                 }
             }
             Some(p) => b.min(p.end() - cl.start),
@@ -1401,8 +1390,8 @@ fn slide_clip(seq: &mut Sequence, media: &[MediaAsset], clip: Uuid, delta: Frame
         match next {
             Some(n) if next_adj => {
                 b.max(n.duration - 1);
-                if media_len(media, n, rate).is_some() {
-                    b.min(-timeline_frames(n.source_in, n.speed));
+                if let Some(len) = media_len(media, n, rate) {
+                    b.min(-n.room_before(len));
                 }
             }
             Some(n) => b.max(n.start - cl.end()),
@@ -1418,14 +1407,13 @@ fn slide_clip(seq: &mut Sequence, media: &[MediaAsset], clip: Uuid, delta: Frame
         let clips = &mut seq.tracks[t].clips;
         clips[c].start += d;
         if prev_adj {
-            clips[c - 1].duration += d;
-            clamp_fades(&mut clips[c - 1]);
+            let p = &mut clips[c - 1];
+            p.set_range(p.start, p.end() + d);
+            clamp_fades(p);
         }
         if next_adj {
             let n = &mut clips[c + 1];
-            n.start += d;
-            n.duration -= d;
-            n.source_in = (n.source_in + n.source_span(d)).max(0);
+            n.set_range(n.start + d, n.end());
             clamp_fades(n);
         }
     }
@@ -1513,13 +1501,13 @@ fn close_gap(seq: &mut Sequence, track: Uuid, frame: Frame) -> Result<bool> {
 }
 
 /// Sorted, de-duplicated (last wins) and clamped keys for `param`.
-fn set_keyframes(seq: &mut Sequence, clip: Uuid, param: Param, keys: &[Keyframe]) -> Result<bool> {
+fn set_keyframes(seq: &mut Sequence, media: &[MediaAsset], clip: Uuid, param: Param, keys: &[Keyframe]) -> Result<bool> {
     let (ti, ci) = seq.locate(clip).ok_or(EditError::ClipNotFound)?;
     if seq.tracks[ti].locked {
         return Err(EditError::TrackLocked);
     }
     let audio = seq.tracks[ti].kind == TrackKind::Audio;
-    if audio != param.is_audio() {
+    if param != Param::Speed && audio != param.is_audio() {
         return Err(EditError::Invalid("property does not apply to this clip".into()));
     }
     let (lo, hi) = param.range();
@@ -1528,13 +1516,20 @@ fn set_keyframes(seq: &mut Sequence, clip: Uuid, param: Param, keys: &[Keyframe]
         if !k.value.is_finite() {
             return Err(EditError::Invalid("keyframe value".into()));
         }
-        let k = Keyframe { value: k.value.clamp(lo, hi), ease: k.ease.sanitized(), ..*k };
+        let mut k = Keyframe { value: k.value.clamp(lo, hi), ease: k.ease.sanitized(), ..*k };
+        // Speed ramps are linear (constant acceleration) or held.
+        if param == Param::Speed && k.ease != Ease::Hold {
+            k.ease = Ease::Linear;
+        }
         match clean.iter_mut().find(|x| x.at == k.at) {
             Some(x) => *x = k,
             None => clean.push(k),
         }
     }
     clean.sort_by_key(|k| k.at);
+    if param == Param::Speed {
+        return set_speed_keys(seq, media, ti, ci, clean);
+    }
     let c = &mut seq.tracks[ti].clips[ci];
     if c.keys_of(param) == clean.as_slice() {
         return Ok(false);
@@ -1545,6 +1540,50 @@ fn set_keyframes(seq: &mut Sequence, clip: Uuid, param: Param, keys: &[Keyframe]
         c.keys.insert(param, clean);
     }
     Ok(true)
+}
+
+/// Speed keys of a clip and its linked partners (same position and length):
+/// each keeps its source range, so its length follows the new timing.
+fn set_speed_keys(seq: &mut Sequence, media: &[MediaAsset], ti: usize, ci: usize, keys: Vec<Keyframe>) -> Result<bool> {
+    let rate = seq.settings.fps;
+    let mut targets = vec![(ti, ci)];
+    targets.extend(partners(seq, ti, ci, |a, b| a.start == b.start && a.duration == b.duration && a.source_in == b.source_in));
+    check_unlocked(seq, &targets)?;
+    let mut changed = false;
+    for (t, c) in targets {
+        let next_start = seq.tracks[t].clips.get(c + 1).map(|n| n.start);
+        let len = media_len(media, &seq.tracks[t].clips[c], rate);
+        let cl = &mut seq.tracks[t].clips[c];
+        if cl.keys_of(Param::Speed) == keys.as_slice() {
+            continue;
+        }
+        let out = cl.source_out();
+        if keys.is_empty() {
+            cl.keys.remove(&Param::Speed);
+        } else {
+            cl.keys.insert(Param::Speed, keys.clone());
+        }
+        retime(cl, out, next_start, len);
+        clamp_fades(cl);
+        changed = true;
+    }
+    Ok(changed)
+}
+
+/// After a speed change: the clip shows `source_in..out` again, without
+/// running into the next clip or past the end of its media.
+fn retime(c: &mut Clip, out: Frame, next_start: Option<Frame>, len: Option<Frame>) {
+    c.duration = c.duration_for(out);
+    let mut end = c.end();
+    if let Some(n) = next_start {
+        end = end.min(n);
+    }
+    if let (Some(len), false) = (len, c.reverse) {
+        end = end.min(c.start + c.duration_for(len));
+    }
+    if end != c.end() {
+        c.set_range(c.start, end.max(c.start + 1));
+    }
 }
 
 fn set_effects(seq: &mut Sequence, clips: &[Uuid], effects: &[Effect]) -> Result<bool> {
@@ -1739,7 +1778,7 @@ fn replace_media(seq: &mut Sequence, media: &[MediaAsset], clip: Uuid, id: Uuid)
         cl.name = asset.name.clone();
         cl.source_in = 0;
         if let Some(len) = len {
-            cl.duration = cl.duration.min(timeline_frames(len, cl.speed)).max(1);
+            cl.duration = cl.duration.min(cl.frames_between(0.0, len as f64)).max(1);
         }
         clamp_fades(cl);
     }
@@ -1786,6 +1825,17 @@ fn update_clips(seq: &mut Sequence, media: &[MediaAsset], ids: &[Uuid], p: &Clip
         }
         located.push((ti, ci));
     }
+    // Timing changes keep linked picture and sound together.
+    if p.speed.is_some() || p.reverse.is_some() {
+        for (ti, ci) in located.clone() {
+            for pc in partners(seq, ti, ci, |a, b| a.start == b.start && a.duration == b.duration && a.source_in == b.source_in) {
+                if !located.contains(&pc) {
+                    check_unlocked(seq, &[pc])?;
+                    located.push(pc);
+                }
+            }
+        }
+    }
     let name = p.name.as_deref().map(non_empty).transpose()?;
     let mut changed = false;
     for (ti, ci) in located {
@@ -1830,18 +1880,16 @@ fn update_clips(seq: &mut Sequence, media: &[MediaAsset], ids: &[Uuid], p: &Clip
             if !s.is_finite() {
                 return Err(EditError::Invalid("speed".into()));
             }
-            let s = s.clamp(0.1, 16.0);
+            let s = s.clamp(MIN_SPEED, MAX_SPEED);
             if (s - c.speed).abs() > 1e-9 {
-                let mut dur = (c.duration as f64 * c.speed / s).round() as Frame;
-                if let Some(n) = next_start {
-                    dur = dur.min(n - c.start);
-                }
-                if let Some(len) = len {
-                    dur = dur.min(timeline_frames(len - c.source_in, s));
-                }
+                let out = c.source_out();
                 c.speed = s;
-                c.duration = dur.max(1);
+                retime(c, out, next_start, len);
             }
+        }
+        if let Some(r) = p.reverse {
+            // Same source range and length, played the other way.
+            c.reverse = r;
         }
         if let Some(v) = p.fade_in {
             c.fade_in = v;
@@ -2395,6 +2443,75 @@ mod tests {
         let (v, a) = (fx.v1(), fx.a1());
         assert_eq!(v.clips[1].link, a.clips[1].link);
         assert_ne!(v.clips[0].link, v.clips[1].link);
+    }
+
+    #[test]
+    fn reversed_clips_trim_split_and_slip_by_content() {
+        let mut fx = Fx::new(10.0, true);
+        // 10 s media = 250 frames; clip shows source 50..150 at 0..100.
+        let ids = fx.place(0, Some(50), Some(150), PlaceMode::Overwrite);
+        let (v, a) = (ids[0], ids[1]);
+        fx.run(EditCommand::UpdateClips { sequence: fx.seq, clips: vec![v], patch: ClipPatch { reverse: Some(true), ..Default::default() } });
+        // The linked audio follows.
+        assert!(fx.a1().clips[0].reverse);
+        let c = fx.v1().clips[0].clone();
+        assert_eq!((c.source_in, c.source_out(), c.duration), (50, 150, 100));
+        // Frame 0 shows the source frame just below 150, the last one 50.
+        assert_eq!(c.source_at(0.0), 150.0);
+        assert_eq!(c.source_at(100.0), 50.0);
+        // Trimming the start in drops the latest content: source_in stays.
+        fx.run(EditCommand::TrimClip { sequence: fx.seq, clip: v, edge: Edge::Start, delta: 10, ripple: false, linked: true });
+        let c = fx.v1().clips[0].clone();
+        assert_eq!((c.start, c.source_in, c.source_out()), (10, 50, 140));
+        // Extending the end reaches earlier content, down to source 0 (50 frames).
+        fx.run(EditCommand::TrimClip { sequence: fx.seq, clip: v, edge: Edge::End, delta: 80, ripple: false, linked: true });
+        let c = fx.v1().clips[0].clone();
+        assert_eq!((c.end(), c.source_in, c.source_out()), (150, 0, 140));
+        // The start can grow back up to the media end (250): 110 frames (ripple: in place).
+        fx.run(EditCommand::TrimClip { sequence: fx.seq, clip: v, edge: Edge::Start, delta: -500, ripple: true, linked: true });
+        let c = fx.v1().clips[0].clone();
+        assert_eq!((c.start, c.duration, c.source_in, c.source_out()), (10, 250, 0, 250));
+        // A split keeps every frame where it was: 90 frames in, the source is at 160.
+        fx.run(EditCommand::SplitAt { sequence: fx.seq, frame: 100, clips: Some(vec![v]) });
+        let (l, r) = (fx.v1().clips[0].clone(), fx.v1().clips[1].clone());
+        assert_eq!((l.source_in, l.source_out(), r.source_in, r.source_out()), (160, 250, 0, 160));
+        assert!(l.reverse && r.reverse);
+        let _ = a;
+    }
+
+    #[test]
+    fn speed_keys_retime_the_clip_and_its_partner() {
+        let mut fx = Fx::new(10.0, true);
+        let ids = fx.place(0, Some(0), Some(200), PlaceMode::Overwrite);
+        let (v, a) = (ids[0], ids[1]);
+        // 1x up to source 100, then ramping to 3x at 200: 100 + 2 * 100 / 4 = 150 frames.
+        let k = |at, value| Keyframe { at, value, ease: Ease::EaseInOut };
+        fx.run(EditCommand::SetKeyframes { sequence: fx.seq, clip: v, param: Param::Speed, keys: vec![k(100, 1.0), k(200, 3.0)] });
+        let (cv, ca) = (fx.v1().clips[0].clone(), fx.a1().clips[0].clone());
+        assert_eq!(cv.keys_of(Param::Speed)[0].ease, Ease::Linear);
+        assert_eq!((cv.duration, cv.source_out()), (150, 200));
+        assert_eq!(ca.keys_of(Param::Speed), cv.keys_of(Param::Speed));
+        assert_eq!(ca.duration, 150);
+        assert!((cv.speed_at(125.0) - 2.0).abs() < 1e-9);
+        // Other curves run over timeline time between their keys.
+        fx.run(EditCommand::SetKeyframes {
+            sequence: fx.seq,
+            clip: v,
+            param: Param::Opacity,
+            keys: vec![Keyframe { at: 100, value: 0.0, ease: Ease::Linear }, Keyframe { at: 200, value: 1.0, ease: Ease::Linear }],
+        });
+        let cv = fx.v1().clips[0].clone();
+        assert!((cv.param_at(Param::Opacity, 125.0) - 0.5).abs() < 1e-6);
+        // Slip and split work in timeline frames through the ramp.
+        fx.run(EditCommand::SplitAt { sequence: fx.seq, frame: 125, clips: Some(vec![v]) });
+        // 25 frames into the ramp: 100 + 25 + 0.5 * 0.04 * 25² = 137.5.
+        let r = fx.v1().clips[1].clone();
+        assert_eq!((r.source_in, r.duration), (138, 25));
+        // Without keys the rest of the range plays at 1x (the rounded split
+        // point moves the ramp by half a frame, so it ends at 201).
+        fx.run(EditCommand::SetKeyframes { sequence: fx.seq, clip: r.id, param: Param::Speed, keys: vec![] });
+        assert_eq!(fx.v1().clips[1].duration, 63);
+        assert!(fx.a1().clips[0].keys_of(Param::Speed).len() == 2 && a != r.id);
     }
 
     #[test]

@@ -19,15 +19,9 @@ fn colour_matrix_matches_fixture() {
     assert!(cases.len() >= 4);
     for c in cases {
         let m = c.adjust.matrix();
-        for r in 0..3 {
-            for col in 0..3 {
-                assert!(
-                    (m[r][col] - c.matrix[r][col]).abs() < 1e-5,
-                    "{:?}: m[{r}][{col}] = {} expected {}",
-                    c.adjust,
-                    m[r][col],
-                    c.matrix[r][col]
-                );
+        for (r, (got, want)) in m.iter().zip(&c.matrix).enumerate() {
+            for (col, (g, w)) in got.iter().zip(want).enumerate() {
+                assert!((g - w).abs() < 1e-5, "{:?}: m[{r}][{col}] = {g} expected {w}", c.adjust);
             }
         }
         assert!((c.adjust.contrast_slope() - c.contrast_slope).abs() < 1e-6);

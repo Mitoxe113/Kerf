@@ -3,6 +3,7 @@
 // Marks are saved with the media in the project (seconds of source time).
 
 import { create } from "zustand";
+import { shownFrame, sourceOut } from "../lib/keys";
 import { placeMedia, seq } from "../actions/editing";
 import { engine } from "../engine/playback";
 import { fpsOf } from "../lib/time";
@@ -242,6 +243,6 @@ export function matchFrame() {
     return;
   }
   const fps = fpsOf(s.settings.fps);
-  const at = (c.sourceIn + (f - c.start) * c.speed) / fps;
-  source.open(c.mediaId, { at, marks: { in: c.sourceIn / fps, out: (c.sourceIn + c.duration * c.speed) / fps } });
+  const at = shownFrame(c, f - c.start) / fps;
+  source.open(c.mediaId, { at, marks: { in: c.sourceIn / fps, out: sourceOut(c) / fps } });
 }

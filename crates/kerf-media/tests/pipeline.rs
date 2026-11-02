@@ -830,3 +830,119 @@ fn audio_effects_and_loudness_render() {
     let (_, info) = probe::probe(&tools, &f).unwrap();
     assert!((info.duration - 4.0).abs() < 0.05, "{}", info.duration);
 }
+
+/// Source frame number shown on output frame `l` (25 fps) of a render of the
+/// counter video in `reverse_and_speed_ramps_render`.
+fn frame_number(tools: &Tools, file: &Path, l: f64) -> f64 {
+    // An accurate seek drops frames before the time: aim just before frame l.
+    let t = (l / 25.0 - 0.001).max(0.0);
+    // Gray output is full range; the video luma is limited range.
+    let y = |left| half_luma(tools, file, t, left) * 219.0 / 255.0 + 16.0;
+    // The colour round trip of the export lowers the luma by 1..3 codes: 18 is the middle.
+    50.0 * ((y(false) - 18.0) / 60.0).round() + (y(true) - 18.0) / 4.0
+}
+
+#[test]
+fn reverse_and_speed_ramps_render() {
+    let Some(tools) = tools() else { return };
+    let dir = tempfile::tempdir().unwrap();
+    // 150 frames at 25 fps: frame N = 50 * (right half) + (left half), see frame_number;
+    // the sound is a 1 kHz tone whose amplitude rises linearly from 0.1 to 0.9.
+    let src = dir.path().join("counter.mp4");
+    ffmpeg(&tools, &[
+        "-f", "lavfi", "-i", "nullsrc=s=160x90:r=25:d=6,format=yuv420p,geq=lum='if(lt(X,W/2),20+4*mod(N,50),20+60*floor(N/50))':cb=128:cr=128",
+        "-f", "lavfi", "-i", "aevalsrc='(0.1+0.8*t/6)*sin(2*PI*1000*t)':s=48000:d=6",
+        "-c:v", "libx264", "-preset", "ultrafast", "-qp", "0", "-g", "25", "-c:a", "pcm_s16le", "-shortest", "-y", &src.with_extension("mov").to_string_lossy(),
+    ]);
+    let src = src.with_extension("mov");
+    let asset = import(&tools, &src, &dir.path().join("cache"));
+    let mut p = Project::new("t", 0);
+    let id = asset.id;
+    p.media.push(asset);
+    let seq = p.active_sequence;
+    let settings = SequenceSettings { width: 160, height: 90, fps: Rational::new(25, 1), sample_rate: 48_000 };
+    kerf_core::ops::apply(&mut p, &EditCommand::UpdateSequenceSettings { sequence: seq, settings }).unwrap();
+    let ids = kerf_core::ops::apply(&mut p, &EditCommand::PlaceMedia {
+        sequence: seq, media: id, video_track: None, audio_track: None, at: 0,
+        mode: PlaceMode::Overwrite, source_in: Some(0), source_out: Some(150), match_sequence: false,
+    })
+    .unwrap()
+    .created;
+    let render = |p: &Project, name: &str| {
+        let file = dir.path().join(name);
+        let export = ExportSettings {
+            output: file.clone(),
+            video_codec: VideoCodec::H264,
+            hardware: false,
+            width: 160,
+            height: 90,
+            fps: Rational::new(25, 1),
+            rate: RateControl::Quality { crf: 4 },
+            audio_codec: AudioCodec::Pcm,
+            audio_bitrate_kbps: 192,
+            sample_rate: 48_000,
+            audio_channels: 2,
+            use_in_out: false,
+            subtitles: Default::default(),
+            title_files: Default::default(),
+            loudness: None,
+        };
+        let plan = render::plan(p, p.sequence(seq).unwrap(), &export, dir.path(), &[]).unwrap();
+        let mut log = String::new();
+        let res = render::render_logged(&tools, &plan, &AtomicBool::new(false), |_| {}, &mut log);
+        assert!(res.is_ok(), "{name}: {res:?}\n{log}");
+        (file, log)
+    };
+    // RMS of a 1 kHz tone at source time s.
+    let tone = |s: f64| (0.1 + 0.8 * s / 6.0) / 2f64.sqrt();
+    let near = |v: f64, want: f64, what: &str| assert!((v - want).abs() < want * 0.06, "{what}: {v:.4}, want {want:.4}");
+
+    // Plain: frame l shows source frame l.
+    let (f, _) = render(&p, "plain.mov");
+    for l in [0.0, 12.0, 25.0, 37.0, 49.0, 50.0, 120.0, 149.0] {
+        assert_eq!(frame_number(&tools, &f, l).round(), l, "plain frame {l}");
+    }
+
+    // Reversed (three pieces of 50 frames): frame l shows 149 - l, the sound runs backwards.
+    kerf_core::ops::apply(&mut p, &EditCommand::UpdateClips { sequence: seq, clips: vec![ids[0]], patch: ClipPatch { reverse: Some(true), ..Default::default() } }).unwrap();
+    let (f, log) = render(&p, "reverse.mov");
+    assert!(log.contains("reverse") && log.contains("concat=n=3"), "{log}");
+    for l in [0.0, 1.0, 49.0, 50.0, 99.0, 100.0, 149.0] {
+        assert_eq!(frame_number(&tools, &f, l).round(), 149.0 - l, "reversed frame {l}");
+    }
+    near(audio_rms(&tools, &f, 0.5), tone(5.4), "reversed sound early");
+    near(audio_rms(&tools, &f, 4.8), tone(1.1), "reversed sound late");
+
+    // Ramp: 1x up to source 50, then speeding up to 3x at source 100, 3x after.
+    kerf_core::ops::apply(&mut p, &EditCommand::UpdateClips { sequence: seq, clips: vec![ids[0]], patch: ClipPatch { reverse: Some(false), ..Default::default() } }).unwrap();
+    let k = |at, value| Keyframe { at, value, ease: Ease::Linear };
+    kerf_core::ops::apply(&mut p, &EditCommand::SetKeyframes { sequence: seq, clip: ids[0], param: Param::Speed, keys: vec![k(50, 1.0), k(100, 3.0)] }).unwrap();
+    let clip = p.sequence(seq).unwrap().tracks[0].clips[0].clone();
+    // 50 + 2 * 50 / 4 + 50 / 3 = 91.67 -> 92 frames.
+    assert_eq!(clip.duration, 92);
+    let (f, log) = render(&p, "ramp.mov");
+    assert!(log.contains("asendcmd") && log.contains("atempo@tp"), "{log}");
+    for l in [10.0, 55.0, 62.0, 70.0, 80.0, 90.0] {
+        let want = clip.source_at(l).floor();
+        assert_eq!(frame_number(&tools, &f, l).round(), want, "ramp frame {l}");
+    }
+    for l in [20.0, 60.0, 85.0] {
+        let t = l / 25.0;
+        // The tone's level follows the source position (the RMS window is 0.2 s long).
+        let s = (clip.source_at(l) + clip.source_at(l + 5.0)) / 2.0 / 25.0;
+        near(audio_rms(&tools, &f, t), tone(s), &format!("ramp sound at {l}"));
+    }
+    // The sound lasts as long as the picture.
+    let (_, info) = probe::probe(&tools, &f).unwrap();
+    assert!((info.duration - 92.0 / 25.0).abs() < 0.05, "{}", info.duration);
+
+    // Reversed ramp: the same timing mirrored around the clip.
+    kerf_core::ops::apply(&mut p, &EditCommand::UpdateClips { sequence: seq, clips: vec![ids[0]], patch: ClipPatch { reverse: Some(true), ..Default::default() } }).unwrap();
+    let clip = p.sequence(seq).unwrap().tracks[0].clips[0].clone();
+    let (f, _) = render(&p, "ramp-reverse.mov");
+    for l in [0.0, 5.0, 20.0, 40.0, 91.0] {
+        // Past the media (149 is its last frame) the last frame holds.
+        let want = (clip.source_at(l) - 1e-6).floor().min(149.0);
+        assert_eq!(frame_number(&tools, &f, l).round(), want, "reversed ramp frame {l}");
+    }
+}

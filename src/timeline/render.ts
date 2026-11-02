@@ -3,7 +3,7 @@
 
 import { cachedImage, cachedPeaks } from "../lib/media";
 import { formatTimecode, fpsOf, timecodeBase } from "../lib/time";
-import { isAnimated, localOf, paramAt } from "../lib/keys";
+import { isAnimated, localOf, paramAt, sourceAt } from "../lib/keys";
 import { labelColor } from "../lib/labels";
 import type { Clip, MediaAsset, Sequence, Track, Uuid } from "../lib/types";
 import { dbToGain } from "../engine/math";
@@ -346,7 +346,9 @@ function drawClip(
     ctx.textBaseline = "middle";
     const tx = Math.max(x + 6, 6);
     let label = c.name;
-    if (c.speed !== 1) label += `  ${Math.round(c.speed * 100)} %`;
+    if (c.reverse) label = `◂ ${label}`;
+    if (isAnimated(c, "speed")) label += "  Rampe";
+    else if (c.speed !== 1) label += `  ${Math.round(c.speed * 100)} %`;
     if (offline) label = `⚠ ${label} (offline)`;
     ctx.fillStyle = offline ? COLORS.offline : selected ? COLORS.text : "#cfd0d6";
     const maxW = x + w - tx - 6;
@@ -439,7 +441,7 @@ function drawFilmstrip(
     const px = x + i * tw;
     if (px > vx + vw) break;
     const frame = c.start + ((i + 0.5) * tw) / v.zoom;
-    const t = (c.sourceIn + (frame - c.start) * c.speed) / fps;
+    const t = sourceAt(c, frame - c.start) / fps;
     const tile = Math.max(0, Math.min(strip.tiles - 1, Math.floor(t / strip.interval)));
     const sx = (tile * img.naturalWidth) / strip.tiles;
     ctx.drawImage(img, sx, 0, img.naturalWidth / strip.tiles, img.naturalHeight, px, y, tw, h);
@@ -479,8 +481,9 @@ function drawWave(
     // Source position (in sequence frames) covered by this pixel column.
     const fA = (px - x) / v.zoom;
     const fB = (px + 1 - x) / v.zoom;
-    let i0 = Math.floor((c.sourceIn + fA * c.speed) * perFrame);
-    let i1 = Math.ceil((c.sourceIn + fB * c.speed) * perFrame);
+    const [sA, sB] = [sourceAt(c, fA), sourceAt(c, fB)];
+    let i0 = Math.floor(Math.min(sA, sB) * perFrame);
+    let i1 = Math.ceil(Math.max(sA, sB) * perFrame);
     i0 = Math.max(0, i0);
     i1 = Math.min(data.length, Math.max(i1, i0 + 1));
     let m = 0;

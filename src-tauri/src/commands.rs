@@ -648,7 +648,7 @@ pub fn freeze_frame(app: AppHandle, state: State<'_, AppState>, sequence: Uuid, 
         }
         let at = frame.clamp(c.start, c.end() - 1);
         let rate = seq.settings.fps;
-        let source_s = rate.frames_to_seconds(c.source_in + c.source_span(at - c.start));
+        let source_s = rate.frames_to_seconds(c.shown_frame(at - c.start));
         let dir = match s.path.as_deref().and_then(Path::parent) {
             Some(p) => p.join("Standbilder"),
             None => state.paths.stills.clone(),
@@ -717,7 +717,7 @@ pub fn measure_clips(state: State<'_, AppState>, sequence: Uuid, clips: Vec<Uuid
                 let (ti, ci) = seq.locate(*id)?;
                 let c = &seq.tracks[ti].clips[ci];
                 let asset = s.project.media(c.media_id)?;
-                Some((c.id, asset.path.clone(), rate.frames_to_seconds(c.source_in), rate.frames_to_seconds(c.source_span(c.duration))))
+                Some((c.id, asset.path.clone(), rate.frames_to_seconds(c.source_in), rate.frames_to_seconds(c.source_out() - c.source_in)))
             })
             .collect()
     };
@@ -739,6 +739,20 @@ pub fn measure_clips(state: State<'_, AppState>, sequence: Uuid, clips: Vec<Uuid
         });
     }
     Ok(out)
+}
+
+/// Path of the media's sound played backwards (made on first use), for
+/// reversed clips in the preview.
+#[tauri::command(async)]
+pub fn reversed_audio(state: State<'_, AppState>, media: Uuid) -> CmdResult<PathBuf> {
+    let tools = state.media.tools.clone().ok_or_else(|| CommandError::new("ffmpegMissing", "FFmpeg not found"))?;
+    let (path, info) = {
+        let s = lock(&state.session);
+        let a = s.project.media(media).ok_or(EditError::MediaNotFound)?;
+        (a.path.clone(), a.info.clone().ok_or(EditError::MediaNotReady)?)
+    };
+    let dir = analysis::cache_dir(&state.paths.cache, &path);
+    analysis::reversed_audio(&tools, &path, &info, &dir).map_err(|e| CommandError::new("reverseFailed", e))
 }
 
 #[cfg(test)]

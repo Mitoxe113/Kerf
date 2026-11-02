@@ -17,5 +17,6 @@ pub mod model;
 pub mod ops;
 pub mod text;
 pub mod time;
+pub mod timemap;
 
 pub use error::{EditError, Result};

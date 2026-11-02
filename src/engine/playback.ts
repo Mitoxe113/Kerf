@@ -7,8 +7,9 @@
 // accurate seek; the composite is redrawn when the decoder delivers the frame.
 
 import { fpsOf } from "../lib/time";
-import { animate } from "../lib/keys";
-import { previewSource } from "../lib/media";
+import { api } from "../lib/ipc";
+import { animate, isWarped, sourceAt, speedAt } from "../lib/keys";
+import { fileUrl, previewSource } from "../lib/media";
 import type { Clip, ClipPatch, MediaAsset, Sequence, Subtitles, TitleSpec, Track, Uuid } from "../lib/types";
 import { AudioMixer, effectsMessage } from "./audio";
 import { transitionInto, type TransitionSpan } from "../timeline/geometry";
@@ -30,6 +31,8 @@ interface Voice {
   seeking: boolean;
   pending: number | null;
   lastUsed: number;
+  /** Plays the media's reversed sound (reversed audio clip): source time s is at duration - s. */
+  reversed?: boolean;
   // audio only
   source?: MediaElementAudioSourceNode;
   /** Clip effects and channel map, between the source and the gain. */
@@ -112,6 +115,8 @@ export class PlaybackEngine {
   private media = new Map<Uuid, MediaAsset>();
   private opts: EngineOptions = { useProxies: false, quality: 1 };
   private overrides = new Map<Uuid, Partial<Clip>>();
+  /** Reversed sound per media: URL, null while it is made, "" when it cannot be. */
+  private reversedSound = new Map<Uuid, string | null>();
   /** Live track changes (mixer fader, track effects) until the edit is committed. */
   private trackOverrides = new Map<Uuid, Partial<Track>>();
   /** Live title and subtitle-style edits (inspector), keyed by media id. */
@@ -380,17 +385,34 @@ export class PlaybackEngine {
   // --- voices -----------------------------------------------------------------------
 
   private sourceTime(c: Clip, frame: number): number {
-    const fps = this.fps;
-    return (c.sourceIn + (frame - c.start) * c.speed) / fps;
+    return sourceAt(c, frame - c.start) / this.fps;
+  }
+
+  /** URL of the media's reversed sound, requested on first use (null until ready). */
+  private reversedUrl(media: Uuid): string | null {
+    const known = this.reversedSound.get(media);
+    if (known !== undefined) return known || null;
+    this.reversedSound.set(media, null);
+    api
+      .reversedAudio(media)
+      .then((path) => this.reversedSound.set(media, fileUrl(path)))
+      .catch((e) => {
+        console.warn("reversed audio", e);
+        this.reversedSound.set(media, "");
+      })
+      .finally(() => this.requestRender());
+    return null;
   }
 
   private voice(clip: Clip, kind: "video" | "audio"): Voice | null {
     const asset = this.media.get(clip.mediaId);
     // Titles are drawn from their definition (layers()), not loaded.
     if (!asset || asset.status.state !== "ready" || asset.title) return null;
-    const src = previewSource(asset, this.opts.useProxies);
+    // A reversed audio clip plays the reversed sound forwards; silent until it exists.
+    const reversed = kind === "audio" && !!clip.reverse;
+    const src = reversed ? this.reversedUrl(asset.id) : previewSource(asset, this.opts.useProxies);
     if (!src) {
-      this.pendingMedia.add(asset.id);
+      if (!reversed) this.pendingMedia.add(asset.id);
       return null;
     }
     this.pendingMedia.delete(asset.id);
@@ -418,7 +440,7 @@ export class PlaybackEngine {
         m.src = src;
         el = m;
       }
-      v = { key, clipId: clip.id, src, el, seeking: false, pending: null, lastUsed: performance.now() };
+      v = { key, clipId: clip.id, src, el, seeking: false, pending: null, lastUsed: performance.now(), reversed };
       if (!(el instanceof HTMLImageElement)) {
         const voice = v;
         el.addEventListener("seeked", () => this.onSeeked(voice));
@@ -465,17 +487,28 @@ export class PlaybackEngine {
     el.currentTime = t;
   }
 
+  /** Time in the voice's media for timeline frame `frame` of clip `c`. */
+  private mediaTime(v: Voice, c: Clip, frame: number): number {
+    const el = v.el as HTMLMediaElement;
+    if (v.reversed) return (el.duration > 0 ? el.duration : (this.media.get(c.mediaId)?.info?.duration ?? 0)) - this.sourceTime(c, frame);
+    // The frame under the clip's position, or just below it when reversed (as the export).
+    if (isWarped(c)) return this.sourceTime(c, frame) + (c.reverse ? -0.001 : 0.001);
+    // Aim inside the frame so rounding never shows the previous one.
+    return this.sourceTime(c, frame) + (this.playing ? 0 : 0.35 / this.fps);
+  }
+
   private syncVoice(v: Voice, c: Clip, frame: number, hard: boolean, audible: boolean) {
     if (v.el instanceof HTMLImageElement) return;
     const el = v.el;
-    const fps = this.fps;
-    // Aim inside the frame so rounding never shows the previous one.
-    const want = this.sourceTime(c, frame) + (this.playing ? 0 : 0.35 / fps);
+    const local = frame - c.start;
+    const want = this.mediaTime(v, c, frame);
     // Outside the media (transition handles) the first or last frame holds.
     const last = el.duration > 0 ? el.duration - 0.001 : Infinity;
     const t = Math.min(Math.max(0, want), last);
-    const rate = this.rate * c.speed;
-    const canPlay = this.playing && rate > 0 && rate <= 8 && want >= 0 && want <= last;
+    const rate = this.rate * speedAt(c, local);
+    // Reversed pictures are stepped by seeking; their sound plays the reversed file.
+    const backwards = c.reverse && !v.reversed;
+    const canPlay = this.playing && !backwards && rate > 0 && rate <= 8 && want >= 0 && want <= last;
     if (!canPlay) {
       if (!el.paused) el.pause();
       this.seekVoice(v, t);
@@ -502,7 +535,7 @@ export class PlaybackEngine {
     if (v.el instanceof HTMLImageElement) return;
     const el = v.el;
     if (!el.paused) el.pause();
-    this.seekVoice(v, Math.max(0, this.sourceTime(c, from)));
+    this.seekVoice(v, Math.max(0, this.mediaTime(v, c, from)));
   }
 
   /** Clips playing at `frame` on `track` with their mix weight (two in a transition). */
