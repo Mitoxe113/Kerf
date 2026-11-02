@@ -13,14 +13,16 @@
 //! the same as the preview compositor's: crop -> fit -> scale/rotate about the
 //! anchor -> place anchor at frame centre + offset.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use kerf_core::audio::{active as active_effects, AudioEffect, AudioEffectKind, EqShape, LIMITER_ATTACK_MS};
 use kerf_core::model::{
@@ -90,6 +92,9 @@ pub struct ExportSettings {
     /// Normalise the mix's loudness (EBU R128, two passes).
     #[serde(default)]
     pub loudness: Option<LoudnessTarget>,
+    /// Encode the picture in parts side by side (see [`part_ranges`]).
+    #[serde(default)]
+    pub segmented: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -208,6 +213,13 @@ pub struct RenderPlan {
     /// Nested sequences, rendered first (deepest first) to the files the
     /// main pass reads; removed afterwards.
     pub nested: Vec<RenderPlan>,
+    /// Picture parts of a segmented export, encoded side by side before this
+    /// plan joins them with the sound; removed afterwards.
+    pub parts: Vec<RenderPlan>,
+    /// The sound of a segmented export, mixed in one piece next to the parts.
+    pub sound: Option<Box<RenderPlan>>,
+    /// Parts encoded at the same time.
+    pub workers: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -230,6 +242,10 @@ pub struct RenderProgress {
     pub measuring: bool,
     /// Nested sequences are being rendered (before the export itself).
     pub nested: bool,
+    /// Parts of a segmented export encoding at the same time (0 = in one piece).
+    pub parallel: u32,
+    /// The parts of a segmented export are being joined.
+    pub joining: bool,
 }
 
 /// Part of a clip that falls into the render range.
@@ -260,7 +276,7 @@ fn fade_at(name: &str, kind: &str, st: f64, d: f64, extra: &str) -> String {
         return format!("{name}=t={kind}:st={}:d={}{extra}", num(st), num(d));
     }
     let x = num(-st);
-    format!("{pts}=PTS+{x}/TB,{name}=t={kind}:st=0:d={}{extra},{pts}=PTS-{x}/TB", num(d))
+    format!("{pts}=PTS+round({x}/TB),{name}=t={kind}:st=0:d={}{extra},{pts}=PTS-round({x}/TB)", num(d))
 }
 
 /// A prepared clip stream and where it goes on the frame.
@@ -324,8 +340,8 @@ fn transition_chains(
     let src = |c: &str| format!("color=c={c}:s={w}x{h}:r={}:d={}", rate_str(of), num(d));
     let place = |chain: String, label: String| {
         let cut = if ws < 0.0 { format!(",trim=start={}", num(-ws)) } else { String::new() };
-        let shift = if ws < 0.0 { format!("-{}", num(-ws)) } else { format!("+{}", num(ws)) };
-        format!("{chain}{cut},setpts=PTS{shift}/TB[{label}]")
+        let shift = if ws < 0.0 { format!("-round({}/TB)", num(-ws)) } else { format!("+round({}/TB)", num(ws)) };
+        format!("{chain}{cut},setpts=PTS{shift}[{label}]")
     };
     let mask = match span.kind {
         TransitionKind::DipBlack | TransitionKind::DipWhite => {
@@ -1016,7 +1032,7 @@ fn warped_video(clip: &Clip, seg: &Segment, info: &kerf_core::model::MediaInfo, 
     // The first frame starts the segment: before the media (handles, rounding) it holds.
     let t = format!("if(eq(N,0),0,max(0,({}-{})*{}))", local_expr(clip, &edge), seg.head, fine(1.0 / sfps));
     let last = chain.pop().expect("one");
-    chain.push(format!("{last},setpts='{t}/TB'[w{k}]"));
+    chain.push(format!("{last},setpts='round({t}/TB)'[w{k}]"));
     (args, chain.join(";\n"), n)
 }
 
@@ -1067,11 +1083,21 @@ pub fn plan(
     work_dir: &Path,
     hw_encoders: &[String],
 ) -> Result<RenderPlan, MediaError> {
+    plan_with(project, seq, s, work_dir, hw_encoders, None)
+}
+
+/// [`plan`] with `workers` parts of a segmented export at a time instead of
+/// as many as suit the machine and encoder.
+pub fn plan_with(
+    project: &Project,
+    seq: &Sequence,
+    s: &ExportSettings,
+    work_dir: &Path,
+    hw_encoders: &[String],
+    workers: Option<usize>,
+) -> Result<RenderPlan, MediaError> {
     let order = nested_order(project, seq);
-    if order.is_empty() {
-        return plan_one(project, seq, s, work_dir, hw_encoders, false);
-    }
-    let mut p = project.clone();
+    let mut p = Cow::Borrowed(project);
     let mut nested = Vec::new();
     for id in order {
         let inner = p.sequence(id).expect("listed").clone();
@@ -1091,32 +1117,254 @@ pub fn plan(
             audio_channels: 2,
             ..s.clone()
         };
-        nested.push(plan_one(&p, &inner, &settings, work_dir, &[], true)?);
+        nested.push(plan_one(&p, &inner, &settings, work_dir, &[], Pass::Nested)?);
         // Deeper sequences come first, so the ones holding them find their files.
-        p.media.push(nested_asset(&inner, &path, settings.sample_rate.clamp(8_000, 192_000)));
+        p.to_mut().media.push(nested_asset(&inner, &path, settings.sample_rate.clamp(8_000, 192_000)));
     }
-    let mut main = plan_one(&p, seq, s, work_dir, hw_encoders, false)?;
+    let mut main = plan_one(&p, seq, s, work_dir, hw_encoders, Pass::Full)?;
+    let workers = workers.unwrap_or_else(|| workers_for(&main.encoder));
+    if let Some(ranges) = part_ranges(seq, s, workers) {
+        main = segmented(&p, seq, s, work_dir, hw_encoders, main, &ranges, workers)?;
+    }
     main.nested = nested;
     Ok(main)
 }
 
-/// One pass: the export itself, or (`intermediate`) a nested sequence to a
-/// lossless file with alpha at the sequence's own size and rate.
+/// What a call of [`plan_one`] renders.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Pass {
+    /// The export itself.
+    Full,
+    /// A nested sequence, to a lossless file with alpha at its own size and rate.
+    Nested,
+    /// The picture of sequence frames `[a, b)` alone, a part of a segmented export.
+    Picture(Frame, Frame),
+}
+
+/// Sequence frames `[t0, t1)` an export covers.
+fn range_of(seq: &Sequence, s: &ExportSettings) -> (Frame, Frame) {
+    if s.use_in_out {
+        (seq.in_point.unwrap_or(0), seq.out_point.unwrap_or_else(|| seq.duration()))
+    } else {
+        (0, seq.duration())
+    }
+}
+
+/// Subtitle cues inside `[t0, t1)`, cut to it.
+fn cues_in(seq: &Sequence, t0: Frame, t1: Frame) -> Vec<Cue> {
+    seq.subtitles
+        .cues
+        .iter()
+        .filter(|c| c.end > t0 && c.start < t1)
+        .map(|c| Cue { start: c.start.max(t0), end: c.end.min(t1), ..c.clone() })
+        .collect()
+}
+
+/// FFmpeg muxer for an export file, by its extension.
+fn container_of(output: &Path) -> Result<&'static str, MediaError> {
+    let ext = output.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    match ext.as_str() {
+        "mp4" | "m4v" => Ok("mp4"),
+        "mov" => Ok("mov"),
+        _ => Err(MediaError::Unsupported("output must be .mp4 or .mov".into())),
+    }
+}
+
+/// Encoder options for the export's sound.
+fn audio_args(s: &ExportSettings) -> Vec<OsString> {
+    let mut a: Vec<OsString> = match s.audio_codec {
+        AudioCodec::Aac => vec!["-c:a".into(), "aac".into(), "-b:a".into(), format!("{}k", s.audio_bitrate_kbps.clamp(64, 512)).into()],
+        AudioCodec::Pcm => vec!["-c:a".into(), "pcm_s16le".into()],
+    };
+    a.extend(rate_args(s));
+    a
+}
+
+/// `-ar`/`-ac` for the export's sound.
+fn rate_args(s: &ExportSettings) -> [OsString; 4] {
+    ["-ar".into(), s.sample_rate.clamp(8_000, 192_000).to_string().into(), "-ac".into(), s.audio_channels.clamp(1, 2).to_string().into()]
+}
+
+fn partial_of(output: &Path) -> PathBuf {
+    let mut p = output.as_os_str().to_owned();
+    p.push(".partial");
+    PathBuf::from(p)
+}
+
+/// A path in an ffconcat list.
+fn concat_path(p: &Path) -> String {
+    format!("'{}'", p.to_string_lossy().replace('\\', "/").replace('\'', r"'\''"))
+}
+
+/// Shortest part of a segmented export: every part opens and seeks its
+/// sources again and starts with a keyframe.
+const MIN_PART_S: f64 = 10.0;
+
+/// Parts encoded side by side (1 = in one piece). FFmpeg alone keeps the
+/// cores of a machine busy on a plain cut already; parts pay off where heavy
+/// compositing (effects, animated transforms, many layers) leaves cores idle,
+/// about a sixth faster with four parts on 16 threads. A hardware encoder
+/// gains nothing from them: its sessions share one chip.
+fn workers_for(encoder: &str) -> usize {
+    if ["nvenc", "qsv", "amf"].iter().any(|h| encoder.ends_with(h)) {
+        return 1;
+    }
+    let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+    if cores < 4 { 1 } else { (cores / 4).clamp(2, 4) }
+}
+
+fn gcd(a: i64, b: i64) -> i64 {
+    if b == 0 { a.abs() } else { gcd(b, a % b) }
+}
+
+/// Sequence frame ranges of a segmented export, or None when it renders in
+/// one piece (as asked, or too short to gain). Parts start on frames the
+/// sequence and output rates share, so their frames fall where the export's
+/// would, and there are a couple per worker so they finish close together.
+/// A constant bitrate stays in one piece: its buffer model would restart in
+/// every part.
+fn part_ranges(seq: &Sequence, s: &ExportSettings, workers: usize) -> Option<Vec<(Frame, Frame)>> {
+    if !s.segmented || workers < 2 || matches!(s.rate, RateControl::Constant { .. }) || !s.fps.is_valid() {
+        return None;
+    }
+    let (t0, t1) = range_of(seq, s);
+    let (sf, of) = (seq.settings.fps, s.fps);
+    // Sequence frames from one shared frame to the next: the numerator of sf / of.
+    let (n, d) = (sf.num * of.den, sf.den * of.num);
+    let step = n / gcd(n, d);
+    let up = |f: Frame| (f + step - 1) / step * step;
+    let min = up((MIN_PART_S * sf.as_f64()).ceil() as Frame);
+    let len = t1 - t0;
+    let count = (2 * workers as Frame).min(len / min);
+    if count < 2 {
+        return None;
+    }
+    let size = up((len + count - 1) / count);
+    let mut ranges = Vec::new();
+    let mut a = t0;
+    while a < t1 {
+        let b = (a + size).min(t1);
+        ranges.push((a, b));
+        a = b;
+    }
+    // A rest under half a part goes to the part before it.
+    if ranges.len() > 1 && 2 * (ranges[ranges.len() - 1].1 - ranges[ranges.len() - 1].0) < size {
+        let (_, b) = ranges.pop().expect("two parts");
+        ranges.last_mut().expect("one part").1 = b;
+    }
+    (ranges.len() > 1).then_some(ranges)
+}
+
+/// Splits export `full` into picture parts of `ranges` and the sound in one
+/// piece; the plan returned joins them, copying the encoded picture.
+#[allow(clippy::too_many_arguments)]
+fn segmented(
+    project: &Project,
+    seq: &Sequence,
+    s: &ExportSettings,
+    work_dir: &Path,
+    hw_encoders: &[String],
+    full: RenderPlan,
+    ranges: &[(Frame, Frame)],
+    workers: usize,
+) -> Result<RenderPlan, MediaError> {
+    let header = || -> Vec<OsString> { ["-hide_banner", "-nostdin", "-loglevel", "warning", "-y"].iter().map(OsString::from).collect() };
+    // Parts burn in subtitles like the export; the soft ones go into the join.
+    let picture = ExportSettings {
+        subtitles: SubtitleOutput { burn: s.subtitles.burn.clone(), blank: s.subtitles.blank.clone(), ..Default::default() },
+        loudness: None,
+        ..s.clone()
+    };
+    let mut list = String::from("ffconcat version 1.0\n");
+    let mut parts = Vec::new();
+    for &(a, b) in ranges {
+        let output = work_dir.join(format!("part-{}.mov", Uuid::new_v4()));
+        let part = plan_one(project, seq, &ExportSettings { output: output.clone(), ..picture.clone() }, work_dir, hw_encoders, Pass::Picture(a, b))?;
+        list.push_str(&format!("file {}\nduration {}\n", concat_path(&output), num(part.frames as f64 / s.fps.as_f64())));
+        parts.push(part);
+    }
+
+    // The mix, encoded next to the parts into the output's container (which
+    // keeps the encoder's priming), so the join only copies.
+    let (t0, t1) = range_of(seq, s);
+    let container = container_of(&s.output)?;
+    let mix = audio_mix(project, seq, s, (t0, t1), 0, s.loudness.map(|_| LOUDNORM_MARK.to_string()))?;
+    let sound_out = work_dir.join(format!("sound-{}.{}", Uuid::new_v4(), if container == "mp4" { "m4a" } else { "mov" }));
+    let sound_graph = work_dir.join(format!("sound-{}.ffgraph", Uuid::new_v4()));
+    let mut a = header();
+    a.extend(mix.args);
+    a.push("-/filter_complex".into());
+    a.push(sound_graph.clone().into_os_string());
+    a.extend(["-map", "[aout]"].map(OsString::from));
+    a.extend(audio_args(s));
+    a.extend(["-progress", "pipe:1", "-nostats", "-f", container].map(OsString::from));
+    a.push(partial_of(&sound_out).into_os_string());
+    let sound = RenderPlan {
+        args: a,
+        graph: mix.chains.join(";\n"),
+        graph_path: sound_graph,
+        partial_path: partial_of(&sound_out),
+        output: sound_out.clone(),
+        duration: full.duration,
+        frames: 0,
+        inputs: mix.inputs,
+        encoder: String::new(),
+        width: 0,
+        height: 0,
+        fps: s.fps,
+        channels: full.channels,
+        files: Vec::new(),
+        sidecar: None,
+        measure: full.measure.clone(),
+        nested: Vec::new(),
+        parts: Vec::new(),
+        sound: None,
+        workers: 1,
+    };
+
+    // --- join -------------------------------------------------------------------
+    let list_path = work_dir.join(format!("parts-{}.ffconcat", Uuid::new_v4()));
+    let mut files = vec![(list_path.clone(), list)];
+    let mut args = header();
+    args.extend(["-f", "concat", "-safe", "0", "-i"].map(OsString::from));
+    args.push(list_path.into_os_string());
+    args.push("-i".into());
+    args.push(sound_out.into_os_string());
+    let cues = cues_in(seq, t0, t1);
+    let embed = s.subtitles.embed && !cues.is_empty();
+    if embed {
+        let srt = work_dir.join(format!("subs-{}.srt", Uuid::new_v4()));
+        files.push((srt.clone(), write_subtitles(&cues, seq.settings.fps, t0, SubtitleFormat::Srt)));
+        args.extend(["-f", "srt", "-i"].map(OsString::from));
+        args.push(srt.into_os_string());
+    }
+    args.extend(["-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "copy"].map(OsString::from));
+    if s.video_codec == VideoCodec::Hevc {
+        args.extend(["-tag:v", "hvc1"].map(OsString::from));
+    }
+    if embed {
+        args.extend(["-map", "2:s:0", "-c:s", "mov_text", "-metadata:s:s:0", "handler_name=Untertitel"].map(OsString::from));
+    }
+    if container == "mp4" {
+        args.extend(["-movflags", "+faststart"].map(OsString::from));
+    }
+    args.extend(["-progress", "pipe:1", "-nostats", "-f", container].map(OsString::from));
+    args.push(full.partial_path.clone().into_os_string());
+    Ok(RenderPlan { args, graph: String::new(), files, measure: None, parts, sound: Some(Box::new(sound)), workers, ..full })
+}
+
+/// One pass of an export (see [`Pass`]).
 fn plan_one(
     project: &Project,
     seq: &Sequence,
     s: &ExportSettings,
     work_dir: &Path,
     hw_encoders: &[String],
-    intermediate: bool,
+    pass: Pass,
 ) -> Result<RenderPlan, MediaError> {
-    let ext = s.output.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
-    let container = match ext.as_str() {
-        _ if intermediate => "matroska",
-        "mp4" | "m4v" => "mp4",
-        "mov" => "mov",
-        _ => return Err(MediaError::Unsupported("output must be .mp4 or .mov".into())),
-    };
+    let intermediate = pass == Pass::Nested;
+    let picture = matches!(pass, Pass::Picture(..));
+    let container = if intermediate { "matroska" } else { container_of(&s.output)? };
     let prores = !intermediate && matches!(s.video_codec, VideoCodec::ProRes422 | VideoCodec::ProRes422Hq);
     if prores && container != "mov" {
         return Err(MediaError::Unsupported("ProRes requires a .mov file".into()));
@@ -1129,10 +1377,9 @@ fn plan_one(
     }
 
     let sf = seq.settings.fps;
-    let (t0, t1) = if s.use_in_out {
-        (seq.in_point.unwrap_or(0), seq.out_point.unwrap_or_else(|| seq.duration()))
-    } else {
-        (0, seq.duration())
+    let (t0, t1) = match pass {
+        Pass::Picture(a, b) => (a, b),
+        _ => range_of(seq, s),
     };
     if t1 <= t0 {
         return Err(MediaError::Unsupported("the sequence is empty".into()));
@@ -1342,7 +1589,8 @@ fn plan_one(
                 let a = num(theta);
                 f.push(format!("rotate=a={a}:ow=rotw({a}):oh=roth({a}):c=none"));
             }
-            f.push(format!("setpts=PTS+{}/TB", num(offset)));
+            // Rounded: setpts truncates, and e.g. 8.44 s is 210.99… frames of 1/25 s.
+            f.push(format!("setpts=PTS+round({}/TB)", num(offset)));
             chains.push(format!("[{src}]{}[v{k}]", f.join(",")));
 
             // Anchor placement: centre = P - R(theta) * (anchor offset).
@@ -1396,14 +1644,7 @@ fn plan_one(
 
     // --- subtitles ------------------------------------------------------------
     let mut files: Vec<(PathBuf, String)> = Vec::new();
-    // Cues inside the rendered range, cut to it.
-    let cues: Vec<Cue> = seq
-        .subtitles
-        .cues
-        .iter()
-        .filter(|c| c.end > t0 && c.start < t1)
-        .map(|c| Cue { start: c.start.max(t0), end: c.end.min(t1), ..c.clone() })
-        .collect();
+    let cues = cues_in(seq, t0, t1);
     if !s.subtitles.burn.is_empty() {
         // All cue images in one concat input: a frame per cue, blank frames in between.
         let blank = s.subtitles.blank.as_deref().ok_or_else(|| MediaError::Unsupported("subtitles: blank frame missing".into()))?;
@@ -1457,10 +1698,13 @@ fn plan_one(
     }
 
     // --- audio ----------------------------------------------------------------
-    let mix = audio_mix(project, seq, s, (t0, t1), inputs, s.loudness.map(|_| LOUDNORM_MARK.to_string()))?;
-    args.extend(mix.args);
-    chains.extend(mix.chains);
-    inputs += mix.inputs;
+    // The parts of a segmented export are picture only (the sound is mixed in one piece).
+    if !picture {
+        let mix = audio_mix(project, seq, s, (t0, t1), inputs, s.loudness.map(|_| LOUDNORM_MARK.to_string()))?;
+        args.extend(mix.args);
+        chains.extend(mix.chains);
+        inputs += mix.inputs;
+    }
     // Pass 1 measures the mix alone; pass 2 puts the measured values in for the mark.
     let measure = match s.loudness {
         Some(target) => {
@@ -1481,7 +1725,10 @@ fn plan_one(
     let graph_path = work_dir.join(format!("render-{}.ffgraph", uuid::Uuid::new_v4()));
     args.push("-/filter_complex".into());
     args.push(graph_path.clone().into_os_string());
-    args.extend(["-map", "[vout]", "-map", "[aout]"].map(OsString::from));
+    args.extend(["-map", "[vout]"].map(OsString::from));
+    if !picture {
+        args.extend(["-map", "[aout]"].map(OsString::from));
+    }
     if let Some(k) = embedded {
         args.extend(["-map".into(), format!("{k}:s:0").into()]);
         args.extend(["-c:s", "mov_text", "-metadata:s:s:0", "handler_name=Untertitel"].map(OsString::from));
@@ -1574,27 +1821,19 @@ fn plan_one(
     args.extend(v.into_iter().map(OsString::from));
     if intermediate {
         args.extend(["-pix_fmt", "gbrap", "-c:a", "pcm_f32le"].map(OsString::from));
+        args.extend(["-ar".into(), sr.to_string().into(), "-ac".into(), channels.to_string().into()]);
     } else {
         args.extend(["-pix_fmt", pix_fmt, "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv"].map(OsString::from));
-    }
-    match s.audio_codec {
-        _ if intermediate => {}
-        AudioCodec::Aac => {
-            args.extend(["-c:a".into(), "aac".into(), "-b:a".into(), format!("{}k", s.audio_bitrate_kbps.clamp(64, 512)).into()])
+        if !picture {
+            args.extend(audio_args(s));
         }
-        AudioCodec::Pcm => args.extend(["-c:a", "pcm_s16le"].map(OsString::from)),
     }
-    args.extend(["-ar".into(), sr.to_string().into(), "-ac".into(), channels.to_string().into()]);
     args.extend(["-frames:v".into(), frames.to_string().into()]);
     if container == "mp4" {
         args.extend(["-movflags", "+faststart"].map(OsString::from));
     }
     args.extend(["-progress", "pipe:1", "-nostats", "-f", container].map(OsString::from));
-    let partial_path = {
-        let mut p = s.output.as_os_str().to_owned();
-        p.push(".partial");
-        PathBuf::from(p)
-    };
+    let partial_path = partial_of(&s.output);
     args.push(partial_path.clone().into_os_string());
 
     Ok(RenderPlan {
@@ -1615,13 +1854,16 @@ fn plan_one(
         sidecar,
         measure,
         nested: Vec::new(),
+        parts: Vec::new(),
+        sound: None,
+        workers: 1,
     })
 }
 
 /// Concat list (ffconcat) of burned-in cue images over `t0..t1`, with the blank
 /// frame in the gaps and once more at the end so the last cue keeps its length.
 fn burn_list(cues: &[BurnCue], blank: &Path, t0: Frame, t1: Frame, sf: Rational) -> String {
-    let quote = |p: &Path| format!("'{}'", p.to_string_lossy().replace('\\', "/").replace('\'', r"'\''"));
+    let quote = concat_path;
     let mut sorted: Vec<&BurnCue> = cues.iter().filter(|c| c.end > t0 && c.start < t1 && c.end > c.start).collect();
     sorted.sort_by_key(|c| c.start);
     let mut out = String::from("ffconcat version 1.0\n");
@@ -1746,13 +1988,114 @@ pub fn render_logged(
             break;
         }
     }
-    if result.is_ok() {
-        result = render_one(tools, plan, cancel, progress, log);
+    if result.is_ok() && !plan.parts.is_empty() {
+        result = render_parts(tools, plan, cancel, &mut progress, log);
     }
-    for sub in &plan.nested {
+    if result.is_ok() {
+        let joining = !plan.parts.is_empty();
+        result = render_one(
+            tools,
+            plan,
+            cancel,
+            |p| {
+                let mut q = p.clone();
+                q.joining = joining;
+                progress(&q);
+            },
+            log,
+        );
+    }
+    for sub in plan.nested.iter().chain(&plan.parts).chain(plan.sound.as_deref()) {
         let _ = fs::remove_file(&sub.output);
     }
     result
+}
+
+/// Renders the parts of a segmented export and its sound, `plan.workers` at a
+/// time. A part that fails stops the others.
+fn render_parts(
+    tools: &Tools,
+    plan: &RenderPlan,
+    cancel: &AtomicBool,
+    mut progress: impl FnMut(&RenderProgress),
+    log: &mut String,
+) -> Result<(), MediaError> {
+    // The sound first: one long job, which the parts fill in around.
+    let jobs: Vec<&RenderPlan> = plan.sound.as_deref().into_iter().chain(&plan.parts).collect();
+    let total = plan.frames.max(1) as f64;
+    // Shares of the work: parts by their frames, the sound like a twentieth of the picture.
+    let weights: Vec<f64> = jobs.iter().map(|j| if j.frames == 0 { total / 20.0 } else { j.frames as f64 }).collect();
+    let sum: f64 = weights.iter().sum();
+    let fractions: Vec<AtomicU64> = jobs.iter().map(|_| AtomicU64::new(0f64.to_bits())).collect();
+    let next = AtomicUsize::new(0);
+    let stop = AtomicBool::new(false);
+    let logs: Mutex<Vec<String>> = Mutex::new(vec![String::new(); jobs.len()]);
+    let failure: Mutex<Option<MediaError>> = Mutex::new(None);
+    let started = Instant::now();
+    let (jobs, fractions, next, stop, logs, failure) = (&jobs, &fractions, &next, &stop, &logs, &failure);
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..plan.workers.clamp(1, jobs.len()))
+            .map(|_| {
+                scope.spawn(move || {
+                    while !stop.load(Ordering::Relaxed) {
+                        let i = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(job) = jobs.get(i) else { break };
+                        // A loudness measurement is half of the sound's work.
+                        let two = job.measure.is_some();
+                        let mut l = String::new();
+                        let r = render_one(
+                            tools,
+                            job,
+                            stop,
+                            |p| {
+                                let f = if !two { p.fraction } else if p.measuring { p.fraction / 2.0 } else { 0.5 + p.fraction / 2.0 };
+                                fractions[i].store(f.to_bits(), Ordering::Relaxed);
+                            },
+                            &mut l,
+                        );
+                        logs.lock().unwrap_or_else(|e| e.into_inner())[i] = l;
+                        if let Err(e) = r {
+                            // Parts stopped because another one failed are not failures of their own.
+                            if !matches!(e, MediaError::Cancelled) {
+                                failure.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert(e);
+                            }
+                            stop.store(true, Ordering::Relaxed);
+                        }
+                    }
+                })
+            })
+            .collect();
+        let mut state = RenderProgress { parallel: workers.len() as u32, ..Default::default() };
+        while !workers.iter().all(|w| w.is_finished()) {
+            if cancel.load(Ordering::Relaxed) {
+                stop.store(true, Ordering::Relaxed);
+            }
+            let done: Vec<f64> = fractions.iter().map(|f| f64::from_bits(f.load(Ordering::Relaxed))).collect();
+            let frames: f64 = jobs.iter().zip(&done).map(|(j, f)| f * j.frames as f64).sum();
+            state.elapsed = started.elapsed().as_secs_f64();
+            state.fraction = (done.iter().zip(&weights).map(|(f, w)| f * w).sum::<f64>() / sum).clamp(0.0, 1.0);
+            state.frame = frames as u64;
+            state.eta = (state.fraction > 0.01).then(|| state.elapsed * (1.0 - state.fraction) / state.fraction);
+            state.speed = (state.elapsed > 1.0).then(|| frames / plan.fps.as_f64() / state.elapsed);
+            progress(&state);
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    });
+    let n = plan.parts.len();
+    for (i, l) in logs.lock().unwrap_or_else(|e| e.into_inner()).iter().enumerate() {
+        match i + usize::from(plan.sound.is_none()) {
+            0 => log.push_str("# Ton\n"),
+            k => log.push_str(&format!("# Teil {k} von {n}\n")),
+        }
+        log.push_str(l);
+    }
+    if let Some(e) = failure.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        return Err(e);
+    }
+    if cancel.load(Ordering::Relaxed) {
+        return Err(MediaError::Cancelled);
+    }
+    Ok(())
 }
 
 fn render_one(
@@ -1816,8 +2159,13 @@ fn render_one(
         state = RenderProgress::default();
     }
 
-    log.push_str(&format!("ffmpeg {}\n\n# filter graph\n{}\n\n# ffmpeg\n", quoted(&plan.args), graph));
-    fs::write(&plan.graph_path, &graph)?;
+    log.push_str(&format!("ffmpeg {}\n\n", quoted(&plan.args)));
+    // Joining the parts of a segmented export filters nothing.
+    if !graph.is_empty() {
+        log.push_str(&format!("# filter graph\n{graph}\n\n"));
+        fs::write(&plan.graph_path, &graph)?;
+    }
+    log.push_str("# ffmpeg\n");
     for (path, text) in &plan.files {
         fs::write(path, text)?;
     }
@@ -1830,11 +2178,14 @@ fn render_one(
             let _ = fs::remove_file(&plan.partial_path);
         }
     };
+    let mut out_s = 0.0;
     let run = run_ffmpeg(tools, &plan.args, cancel, |key, value| match key {
         "frame" => state.frame = value.parse().unwrap_or(state.frame),
+        "out_time_us" => out_s = value.parse::<f64>().map_or(out_s, |us| us / 1e6),
         "speed" => state.speed = value.trim_end_matches('x').parse().ok(),
         "progress" => {
-            let f = state.frame as f64 / plan.frames as f64;
+            // Sound alone has no frames to count.
+            let f = if plan.frames > 0 { state.frame as f64 / plan.frames as f64 } else { out_s / plan.duration.max(1e-3) };
             tick(&mut state, f);
             progress(&state);
         }
@@ -1949,6 +2300,7 @@ mod tests {
             subtitles: Default::default(),
             title_files: Default::default(),
             loudness: None,
+            segmented: false,
         }
     }
 
@@ -1963,7 +2315,7 @@ mod tests {
         // Seek to source in-point of 2 s.
         let ss = args.iter().position(|a| a == "-ss").unwrap();
         assert_eq!(args[ss + 1], "2");
-        assert!(plan.graph.contains("setpts=PTS+1/TB"), "{}", plan.graph);
+        assert!(plan.graph.contains("setpts=PTS+round(1/TB)"), "{}", plan.graph);
         assert!(plan.graph.contains("adelay=delays=48000S:all=1"), "{}", plan.graph);
         // 1280x720 fitted into 1920x1080.
         assert!(plan.graph.contains("scale=1920:1080:flags=bicubic,format=rgba"), "{}", plan.graph);
@@ -2250,5 +2602,62 @@ mod tests {
         );
         let silent = log.replace("\"-27.61\"", "\"-inf\"");
         assert!(!parse_loudnorm(&silent).unwrap().audible());
+    }
+
+    #[test]
+    fn segmented_parts_start_on_shared_frames() {
+        let (mut p, seq) = project_with_clip();
+        let set = |p: &mut Project, fps: Rational, out: Frame| {
+            let q = p.sequence_mut(seq).unwrap();
+            q.settings.fps = fps;
+            (q.in_point, q.out_point) = (Some(0), Some(out));
+            q.clone()
+        };
+        let s = ExportSettings { use_in_out: true, segmented: true, ..settings() };
+        // 60 s: two parts per worker, at least 10 s each.
+        let q = set(&mut p, Rational::new(25, 1), 1500);
+        assert_eq!(part_ranges(&q, &s, 2).unwrap(), [(0, 375), (375, 750), (750, 1125), (1125, 1500)]);
+        assert_eq!(part_ranges(&q, &s, 4).unwrap().len(), 6);
+        assert_eq!(part_ranges(&q, &s, 1), None);
+        assert_eq!(part_ranges(&q, &ExportSettings { segmented: false, ..s.clone() }, 2), None);
+        assert_eq!(part_ranges(&q, &ExportSettings { rate: RateControl::Constant { kbps: 8000 }, ..s.clone() }, 2), None);
+        // Too short to split.
+        let q = set(&mut p, Rational::new(25, 1), 400);
+        assert_eq!(part_ranges(&q, &s, 4), None);
+        // 50 fps to 25: parts start on even sequence frames; the rest stays with the last part.
+        let q = set(&mut p, Rational::new(50, 1), 1501);
+        assert_eq!(part_ranges(&q, &s, 2).unwrap(), [(0, 502), (502, 1004), (1004, 1501)]);
+        // 29.97 to 25 fps meet every 1200 sequence frames.
+        let q = set(&mut p, Rational::new(30_000, 1001), 6000);
+        let r = part_ranges(&q, &s, 2).unwrap();
+        assert!(r.iter().all(|(a, _)| a % 1200 == 0), "{r:?}");
+        assert_eq!(r.last().unwrap().1, 6000);
+    }
+
+    #[test]
+    fn segmented_plan_joins_picture_parts_and_sound() {
+        let (mut p, seq) = project_with_clip();
+        let q = p.sequence_mut(seq).unwrap();
+        (q.in_point, q.out_point) = (Some(0), Some(1500));
+        let s = ExportSettings { use_in_out: true, segmented: true, loudness: Some(LoudnessTarget { integrated: -16.0, true_peak: -1.0 }), ..settings() };
+        let plan = plan_with(&p, p.sequence(seq).unwrap(), &s, Path::new("C:/tmp"), &[], Some(2)).unwrap();
+        let text = |a: &[OsString]| a.iter().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>().join(" ");
+        assert_eq!((plan.parts.len(), plan.workers, plan.frames), (4, 2, 1500));
+        for part in &plan.parts {
+            let args = text(&part.args);
+            assert!(args.contains("-map [vout]") && !args.contains("[aout]") && !args.contains("-c:a"), "{args}");
+            assert!(part.output.extension().unwrap() == "mov" && part.measure.is_none());
+        }
+        assert_eq!(plan.parts.iter().map(|p| p.frames).sum::<u64>(), 1500);
+        // The sound carries the loudness measurement and is encoded next to the parts.
+        let sound = plan.sound.as_deref().unwrap();
+        assert!(sound.measure.is_some() && sound.graph.contains(LOUDNORM_MARK));
+        assert!(text(&sound.args).contains("-map [aout] -c:a aac -b:a 320k"));
+        let join = text(&plan.args);
+        assert!(join.contains("-f concat -safe 0 -i") && join.contains("-c:v copy -c:a copy"), "{join}");
+        assert!(plan.graph.is_empty() && plan.measure.is_none());
+        let list = &plan.files[0].1;
+        assert_eq!(list.matches("duration 15
+").count(), 4, "{list}");
     }
 }

@@ -110,6 +110,7 @@ function defaultSettings(seq: Sequence, preset: Preset, output: string): ExportS
     sampleRate: seq.settings.sampleRate,
     audioChannels: 2,
     useInOut: false,
+    segmented: false,
   };
 }
 
@@ -317,6 +318,15 @@ export function ExportPanel() {
             <Toggle label="Hardware-Encoder" checked={s.hardware && hw.length > 0} onChange={(v) => upd({ hardware: v })} />
             <span className="truncate text-xs text-fg-3">
               {hw.length ? hw.join(", ").replace(/_/g, " ").toUpperCase() : appInfo?.hwEncoders === null ? "wird erkannt …" : "nicht verfügbar"}
+            </span>
+          </Field>
+          <Field label="Segmentiert">
+            <Toggle label="Segmentiert rendern" checked={!!s.segmented} onChange={(v) => upd({ segmented: v })} />
+            <span
+              className="truncate text-xs text-fg-3"
+              title="Das Bild wird in Teilen gleichzeitig gerendert und ohne neue Kodierung zusammengefügt, der Ton in einem Stück daneben. Schneller bei aufwendigen Timelines (Effekte, animierte Transformationen, viele Ebenen); bei einfachen Schnitten lastet FFmpeg die CPU schon allein aus. Ab 20 s Länge und 4 Kernen, nicht mit Hardware-Encoder oder konstanter Bitrate."
+            >
+              {s.hardware && hw.length > 0 && !isProRes(s.videoCodec) ? "nicht mit Hardware-Encoder" : s.rate.mode === "constant" && !isProRes(s.videoCodec) ? "nicht bei CBR" : "für aufwendige Timelines"}
             </span>
           </Field>
           <Field label="Auflösung">
@@ -585,7 +595,7 @@ function RenderQueue({ jobs }: { jobs: ExportJob[] }) {
             <>
               <Progress value={j.progress.fraction} indeterminate={j.status === "queued"} />
               <div className="tc flex justify-between text-[10.5px] text-fg-3">
-                <span>{j.status === "queued" ? "Wartet …" : `${j.progress.nested ? "Verschachtelte Sequenzen · " : j.progress.measuring ? "Lautheit messen · " : ""}${Math.round(j.progress.fraction * 100)} %${j.progress.speed && !j.progress.measuring && !j.progress.nested ? ` · ${j.progress.speed.toFixed(1).replace(".", ",")}×` : ""}`}</span>
+                <span>{j.status === "queued" ? "Wartet …" : `${j.progress.nested ? "Verschachtelte Sequenzen · " : j.progress.measuring ? "Lautheit messen · " : j.progress.joining ? "Zusammenfügen · " : j.progress.parallel ? `${j.progress.parallel}× parallel · ` : ""}${Math.round(j.progress.fraction * 100)} %${j.progress.speed && !j.progress.measuring && !j.progress.nested && !j.progress.joining ? ` · ${j.progress.speed.toFixed(1).replace(".", ",")}×` : ""}`}</span>
                 <span>{j.progress.eta !== null && j.status === "running" ? `noch ${formatDuration(j.progress.eta)}` : ""}</span>
               </div>
             </>

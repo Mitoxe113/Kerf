@@ -498,6 +498,8 @@ export interface ExportSettings {
   titleFiles?: Record<Uuid, string>;
   /** Normalise the mix to this loudness (two passes). */
   loudness?: LoudnessTarget | null;
+  /** Encode the picture in parts side by side, joined without re-encoding. */
+  segmented?: boolean;
 }
 
 export interface LoudnessTarget {
@@ -525,6 +527,10 @@ export interface RenderProgress {
   measuring: boolean;
   /** Nested sequences are rendered before the export itself. */
   nested: boolean;
+  /** Parts of a segmented export encoding at the same time (0 = in one piece). */
+  parallel: number;
+  /** The parts of a segmented export are being joined. */
+  joining: boolean;
 }
 
 export type ExportStatus = "queued" | "running" | "done" | "failed" | "cancelled";

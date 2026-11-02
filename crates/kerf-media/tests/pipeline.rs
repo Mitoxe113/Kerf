@@ -214,6 +214,7 @@ fn edit_and_render_real_media() {
         subtitles: Default::default(),
         title_files: Default::default(),
         loudness: None,
+        segmented: false,
     };
     let plan = render::plan(&p, sequence, &settings, d, &[]).unwrap();
     assert_eq!(plan.inputs, 6, "2 video halves + still + 2 audio halves + tone\n{}", plan.graph);
@@ -290,6 +291,7 @@ fn cancelled_render_leaves_no_file() {
         subtitles: Default::default(),
         title_files: Default::default(),
         loudness: None,
+        segmented: false,
     };
     let plan = render::plan(&p, p.sequence(seq).unwrap(), &settings, dir.path(), &[]).unwrap();
     let cancel = AtomicBool::new(false);
@@ -380,6 +382,7 @@ fn keyframed_position_opacity_and_volume_render() {
         subtitles: Default::default(),
         title_files: Default::default(),
         loudness: None,
+        segmented: false,
     };
     let plan = render::plan(&p, p.sequence(seq).unwrap(), &export, dir.path(), &[]).unwrap();
     render::render(&tools, &plan, &AtomicBool::new(false), |_| {}).expect("render with keyframes");
@@ -439,6 +442,7 @@ fn animated_colour_renders() {
         subtitles: Default::default(),
         title_files: Default::default(),
         loudness: None,
+        segmented: false,
     };
     let plan = render::plan(&p, p.sequence(seq).unwrap(), &export, dir.path(), &[]).unwrap();
     render::render(&tools, &plan, &AtomicBool::new(false), |_| {}).expect("render with colour keys");
@@ -500,6 +504,7 @@ fn effect_stack_renders() {
         subtitles: Default::default(),
         title_files: Default::default(),
         loudness: None,
+        segmented: false,
     };
     let plan = render::plan(&p, p.sequence(seq).unwrap(), &export, dir.path(), &[]).unwrap();
     let mut log = String::new();
@@ -578,6 +583,7 @@ fn subtitles_burn_embed_and_sidecar() {
         },
         title_files: Default::default(),
         loudness: None,
+        segmented: false,
     };
     let plan = render::plan(&p, p.sequence(seq).unwrap(), &export, dir.path(), &[]).unwrap();
     let mut log = String::new();
@@ -656,6 +662,7 @@ fn transitions_render() {
             subtitles: Default::default(),
             title_files: Default::default(),
             loudness: None,
+            segmented: false,
         };
         let plan = render::plan(p, p.sequence(seq).unwrap(), &export, dir.path(), &[]).unwrap();
         let mut log = String::new();
@@ -765,6 +772,7 @@ fn audio_effects_and_loudness_render() {
             subtitles: Default::default(),
             title_files: Default::default(),
             loudness,
+            segmented: false,
         };
         let plan = render::plan(p, p.sequence(seq).unwrap(), &export, dir.path(), &[]).unwrap();
         let mut log = String::new();
@@ -886,6 +894,7 @@ fn reverse_and_speed_ramps_render() {
             subtitles: Default::default(),
             title_files: Default::default(),
             loudness: None,
+            segmented: false,
         };
         let plan = render::plan(p, p.sequence(seq).unwrap(), &export, dir.path(), &[]).unwrap();
         let mut log = String::new();
@@ -1018,6 +1027,7 @@ fn nested_sequences_render() {
         subtitles: Default::default(),
         title_files: Default::default(),
         loudness: None,
+        segmented: false,
     };
     let plan = render::plan(&p, p.sequence(outer).unwrap(), &export, d, &[]).unwrap();
     assert_eq!(plan.nested.len(), 2, "both levels render first");
@@ -1064,4 +1074,115 @@ fn angles_sync_by_their_sound() {
     assert!((offsets[1].unwrap() - 3.37).abs() < 0.002, "B");
     // AAC adds a little delay of its own; within a frame is what counts.
     assert!((offsets[2].unwrap() + 1.5).abs() < 0.03, "C");
+}
+
+fn probe_entries(tools: &Tools, file: &Path, args: &[&str]) -> String {
+    let out = std::process::Command::new(&tools.ffprobe).args(["-v", "error"]).args(args).args(["-of", "csv=p=0"]).arg(file).output().unwrap();
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+#[test]
+fn segmented_export_matches_one_piece() {
+    let Some(tools) = tools() else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let make = |name: &str, video: &str, hz: u32, d: u32| {
+        let src = dir.path().join(name);
+        ffmpeg(&tools, &[
+            "-f", "lavfi", "-i", &format!("{video}=s=160x90:r=25:d={d}"),
+            "-f", "lavfi", "-i", &format!("sine=frequency={hz}:duration={d}"),
+            "-c:v", "libx264", "-preset", "ultrafast", "-qp", "0", "-c:a", "aac", "-shortest", "-y", &src.to_string_lossy(),
+        ]);
+        import(&tools, &src, &dir.path().join("cache"))
+    };
+    let (a, b) = (make("a.mp4", "testsrc2", 440, 30), make("b.mp4", "testsrc", 1000, 25));
+    let mut p = Project::new("t", 0);
+    let (aid, bid) = (a.id, b.id);
+    p.media.extend([a, b]);
+    let seq = p.active_sequence;
+    let settings = SequenceSettings { width: 160, height: 90, fps: Rational::new(25, 1), sample_rate: 48_000 };
+    kerf_core::ops::apply(&mut p, &EditCommand::UpdateSequenceSettings { sequence: seq, settings }).unwrap();
+    let mut place = |media, at, source_in, source_out| {
+        kerf_core::ops::apply(&mut p, &EditCommand::PlaceMedia {
+            sequence: seq, media, video_track: None, audio_track: None, at,
+            mode: PlaceMode::Overwrite, source_in: Some(source_in), source_out: Some(source_out), match_sequence: false,
+        })
+        .unwrap()
+        .created
+    };
+    place(aid, 0, 0, 250);
+    let b = place(bid, 250, 50, 550);
+    // 8.44 s into the second part: 210.99… frames of 1/25 s in floating point.
+    place(aid, 461, 100, 160);
+    // The parts are 0..250, 250..500 and 500..750: the dissolve, the crossfade
+    // and the subtitle run over the first boundary.
+    let t = |kind| Some(Transition { kind, duration: 20, align: TransitionAlign::Center });
+    let items = vec![TransitionEdit { clip: b[0], transition: t(TransitionKind::Dissolve) }, TransitionEdit { clip: b[1], transition: t(TransitionKind::Crossfade) }];
+    kerf_core::ops::apply(&mut p, &EditCommand::SetTransitions { sequence: seq, items }).unwrap();
+    let cues = vec![Cue { id: Uuid::new_v4(), start: 200, end: 300, text: "Über die Grenze".into() }];
+    kerf_core::ops::apply(&mut p, &EditCommand::SetSubtitles { sequence: seq, cues }).unwrap();
+
+    let render = |segmented: bool| {
+        let file = dir.path().join(if segmented { "parts.mp4" } else { "whole.mp4" });
+        let export = ExportSettings {
+            output: file.clone(),
+            video_codec: VideoCodec::H264,
+            hardware: false,
+            width: 160,
+            height: 90,
+            fps: Rational::new(25, 1),
+            rate: RateControl::Quality { crf: 10 },
+            audio_codec: AudioCodec::Aac,
+            audio_bitrate_kbps: 192,
+            sample_rate: 48_000,
+            audio_channels: 2,
+            use_in_out: false,
+            subtitles: render::SubtitleOutput { embed: true, ..Default::default() },
+            title_files: Default::default(),
+            loudness: Some(LoudnessTarget { integrated: -20.0, true_peak: -1.0 }),
+            segmented,
+        };
+        let plan = render::plan_with(&p, p.sequence(seq).unwrap(), &export, dir.path(), &[], Some(2)).unwrap();
+        assert_eq!(plan.parts.len(), if segmented { 3 } else { 0 });
+        let (mut parallel, mut joining) = (0, false);
+        let mut log = String::new();
+        let res = render::render_logged(&tools, &plan, &AtomicBool::new(false), |s| {
+            parallel = parallel.max(s.parallel);
+            joining |= s.joining;
+        }, &mut log);
+        assert!(res.is_ok(), "{res:?}\n{log}");
+        assert_eq!((parallel, joining), if segmented { (2, true) } else { (0, false) }, "{log}");
+        // Parts, sound and helper files are gone.
+        assert!(plan.parts.iter().chain(plan.sound.as_deref()).all(|j| !j.output.exists() && !j.partial_path.exists()));
+        assert!(plan.files.iter().all(|(p, _)| !p.exists()));
+        (file, log)
+    };
+    let (parts, log) = render(true);
+    let (whole, _) = render(false);
+
+    for f in [&parts, &whole] {
+        assert_eq!(probe_entries(&tools, f, &["-count_packets", "-select_streams", "v", "-show_entries", "stream=nb_read_packets"]), "750", "{log}");
+    }
+    assert_eq!(probe_entries(&tools, &parts, &["-select_streams", "v", "-show_entries", "stream=r_frame_rate,color_space"]), "bt709,25/1");
+    assert_eq!(probe_entries(&tools, &parts, &["-select_streams", "s", "-show_entries", "stream=codec_name"]), "mov_text");
+    // The parts follow each other without a jump in the timestamps.
+    assert!(!log.to_lowercase().contains("monoton"), "{log}");
+    // Every frame matches its counterpart (a frame off would show in the moving pattern).
+    let stats = dir.path().join("psnr.log");
+    let filter = format!("[0:v][1:v]psnr=stats_file='{}'", stats.to_string_lossy().replace('\\', "/").replace(':', "\\:"));
+    ffmpeg(&tools, &["-i", &parts.to_string_lossy(), "-i", &whole.to_string_lossy(), "-lavfi", &filter, "-f", "null", "-"]);
+    let psnr: Vec<f64> = std::fs::read_to_string(&stats)
+        .unwrap()
+        .lines()
+        .map(|l| l.split_whitespace().find_map(|kv| kv.strip_prefix("psnr_avg:")).unwrap().parse::<f64>().unwrap_or(f64::INFINITY))
+        .collect();
+    let worst = psnr.iter().cloned().enumerate().min_by(|a, b| a.1.total_cmp(&b.1)).unwrap();
+    eprintln!("frames {}, worst psnr {worst:?}", psnr.len());
+    assert_eq!(psnr.len(), 750);
+    assert!(worst.1 > 30.0, "frame {} differs: {} dB\n{log}", worst.0, worst.1);
+    // The sound is mixed, normalised and encoded as in one piece.
+    let md5 = |f: &Path| {
+        let out = tools.ffmpeg_cmd().arg("-i").arg(f).args(["-map", "0:a", "-f", "md5", "-"]).output().unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    assert_eq!(md5(&parts), md5(&whole), "{log}");
 }
