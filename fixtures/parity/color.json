@@ -1,0 +1,110 @@
+[
+  {
+    "adjust": {
+      "exposure": 0,
+      "contrast": 0,
+      "saturation": 1,
+      "temperature": 0,
+      "tint": 0
+    },
+    "matrix": [
+      [
+        1,
+        0,
+        0
+      ],
+      [
+        0,
+        1,
+        0
+      ],
+      [
+        0,
+        0,
+        1
+      ]
+    ],
+    "contrastSlope": 1
+  },
+  {
+    "adjust": {
+      "exposure": 0,
+      "contrast": 0,
+      "saturation": 0,
+      "temperature": 0,
+      "tint": 0
+    },
+    "matrix": [
+      [
+        0.2126,
+        0.7152,
+        0.0722
+      ],
+      [
+        0.2126,
+        0.7152,
+        0.0722
+      ],
+      [
+        0.2126,
+        0.7152,
+        0.0722
+      ]
+    ],
+    "contrastSlope": 1
+  },
+  {
+    "adjust": {
+      "exposure": 0.5,
+      "contrast": 0.2,
+      "saturation": 1.4,
+      "temperature": 0.3,
+      "tint": -0.2
+    },
+    "matrix": [
+      [
+        1.959125,
+        -0.420761,
+        -0.037024
+      ],
+      [
+        -0.126699,
+        1.638334,
+        -0.037024
+      ],
+      [
+        -0.126699,
+        -0.420761,
+        1.757755
+      ]
+    ],
+    "contrastSlope": 1.2
+  },
+  {
+    "adjust": {
+      "exposure": -1,
+      "contrast": -0.3,
+      "saturation": 0.5,
+      "temperature": -0.6,
+      "tint": 0.4
+    },
+    "matrix": [
+      [
+        0.267985,
+        0.164496,
+        0.021588
+      ],
+      [
+        0.046985,
+        0.394496,
+        0.021588
+      ],
+      [
+        0.046985,
+        0.164496,
+        0.320588
+      ]
+    ],
+    "contrastSlope": 0.7
+  }
+]

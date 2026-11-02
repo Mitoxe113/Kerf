@@ -1,0 +1,157 @@
+@import "tailwindcss";
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/jetbrains-mono";
+
+/*
+ * Kerf design language
+ * Graphite surfaces in five steps, one signal colour (#C8F542) reserved for
+ * the active tool, selection, playhead and primary action. Everything else
+ * stays neutral so footage is the most colourful thing on screen.
+ */
+@theme {
+  --color-ground: #0b0b0d;
+  --color-panel: #111114;
+  --color-raised: #17171b;
+  --color-field: #1c1c21;
+  --color-hover: #232329;
+  --color-press: #2a2a31;
+  --color-line: #222228;
+  --color-line-strong: #2e2e36;
+
+  --color-fg: #ededf0;
+  --color-fg-2: #b0b0b9;
+  --color-fg-3: #7a7a85;
+  --color-fg-4: #4f4f58;
+
+  --color-signal: #c8f542;
+  --color-signal-hover: #d4f86a;
+  --color-signal-ink: #111500;
+  --color-signal-soft: rgb(200 245 66 / 0.12);
+
+  --color-danger: #ff6b5e;
+  --color-warn: #f5b544;
+  --color-info: #6fb6ff;
+
+  --color-clip-video: #2a3447;
+  --color-clip-audio: #1f3836;
+  --color-clip-still: #372f45;
+
+  --font-sans: "Inter Variable", "Segoe UI Variable", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", "Cascadia Mono", ui-monospace, monospace;
+
+  --text-2xs: 10px;
+  --text-2xs--line-height: 14px;
+  --text-xs: 11px;
+  --text-xs--line-height: 16px;
+  --text-sm: 12px;
+  --text-sm--line-height: 18px;
+  --text-base: 13px;
+  --text-base--line-height: 20px;
+
+  --radius-xs: 3px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+
+  --shadow-pop: 0 12px 32px -8px rgb(0 0 0 / 0.7), 0 0 0 1px rgb(255 255 255 / 0.06);
+  --ease-out-quick: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+    margin: 0;
+    overflow: hidden;
+    background: var(--color-ground);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+    font-size: 12px;
+    line-height: 18px;
+    font-feature-settings: "cv11", "ss01", "tnum";
+    -webkit-font-smoothing: antialiased;
+    user-select: none;
+    color-scheme: dark;
+  }
+  :focus-visible {
+    outline: 1.5px solid var(--color-signal);
+    outline-offset: 1px;
+  }
+  input,
+  textarea,
+  [contenteditable] {
+    user-select: text;
+  }
+  ::selection {
+    background: rgb(200 245 66 / 0.3);
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #33333b transparent;
+  }
+}
+
+@layer components {
+  .tc {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.01em;
+  }
+  .panel-title {
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--color-fg-3);
+  }
+  .drag-region {
+    -webkit-app-region: drag;
+  }
+}
+
+@keyframes kerf-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes kerf-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes kerf-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes kerf-indeterminate {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
+  }
+}
+.anim-pop {
+  animation: kerf-pop-in 120ms var(--ease-out-quick);
+}
+.anim-fade {
+  animation: kerf-fade-in 140ms ease-out;
+}
+.anim-toast {
+  animation: kerf-toast-in 180ms var(--ease-out-quick);
+}

@@ -1,0 +1,548 @@
+import { save } from "@tauri-apps/plugin-dialog";
+import { CheckCircle2, CircleSlash, FolderOpen, Loader2, Play, RotateCcw, Save, ScrollText, Trash2, TriangleAlert, X, XCircle } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { confirm, prompt } from "../actions/project";
+import { api } from "../lib/ipc";
+import { formatBytes } from "../lib/media";
+import { formatDuration, formatRate, fpsOf, framesToSeconds, STANDARD_RATES } from "../lib/time";
+import type { AudioCodec, ExportJob, ExportSettings, Rational, RateControl, Sequence, VideoCodec } from "../lib/types";
+import { useEditor } from "../state/editor";
+import { reportError, useActiveSequence, useProject } from "../state/project";
+import { toast } from "../state/toasts";
+import { engine } from "../engine/playback";
+import { Button, cx, Field, IconButton, PanelHeader, Progress, Section, Segmented, Select, Toggle, NumberField } from "../ui/primitives";
+
+interface Preset {
+  id: string;
+  label: string;
+  group: string;
+  codec: VideoCodec;
+  /** Fixed, or chosen from the sequence frame rate. */
+  rate: RateControl | ((fps: number) => RateControl);
+  audio: AudioCodec;
+  audioKbps?: number;
+  /** Shorter frame edge in pixels; the sequence aspect is kept. */
+  shortEdge?: number;
+  /** Also scale smaller sequences up to `shortEdge` (YouTube serves 4K uploads at higher quality). */
+  upscale?: boolean;
+  maxFps?: number;
+  hint?: string;
+  /** Saved by the user: complete settings without the file. */
+  custom?: Omit<ExportSettings, "output" | "useInOut">;
+}
+
+const SOCIAL_HINT = "Für Reels und TikTok am besten eine Hochformat-Sequenz (9:16) anlegen; andere Formate werden mit Balken eingepasst.";
+
+const PRESETS: Preset[] = [
+  { id: "master", group: "Allgemein", label: "H.264 · Master (hohe Qualität)", codec: "h264", rate: { mode: "quality", crf: 16 }, audio: "aac" },
+  { id: "web", group: "Allgemein", label: "H.264 · Web 1080p", codec: "h264", rate: { mode: "bitrate", kbps: 12000 }, audio: "aac", shortEdge: 1080 },
+  { id: "social", group: "Allgemein", label: "H.264 · Kompakt 720p", codec: "h264", rate: { mode: "bitrate", kbps: 5000 }, audio: "aac", shortEdge: 720 },
+  { id: "hevc", group: "Allgemein", label: "HEVC · Hohe Qualität", codec: "hevc", rate: { mode: "quality", crf: 20 }, audio: "aac" },
+  { id: "youtube", group: "Plattformen", label: "YouTube 1080p", codec: "h264", rate: (fps) => ({ mode: "bitrate", kbps: fps > 30 ? 12000 : 8000 }), audio: "aac", shortEdge: 1080 },
+  {
+    id: "youtube4k",
+    group: "Plattformen",
+    label: "YouTube 4K (UHD)",
+    codec: "h264",
+    rate: (fps) => ({ mode: "bitrate", kbps: fps > 30 ? 68000 : 45000 }),
+    audio: "aac",
+    shortEdge: 2160,
+    upscale: true,
+    hint: "Kleinere Sequenzen werden auf 2160 Pixel hochskaliert – YouTube liefert 4K-Uploads mit besserer Bildqualität aus.",
+  },
+  { id: "instagram", group: "Plattformen", label: "Instagram Reels / Feed", codec: "h264", rate: { mode: "bitrate", kbps: 8000 }, audio: "aac", audioKbps: 256, shortEdge: 1080, maxFps: 60, hint: SOCIAL_HINT },
+  { id: "tiktok", group: "Plattformen", label: "TikTok", codec: "h264", rate: { mode: "bitrate", kbps: 10000 }, audio: "aac", audioKbps: 256, shortEdge: 1080, maxFps: 60, hint: SOCIAL_HINT },
+  { id: "prores", group: "Mezzanine", label: "ProRes 422", codec: "proRes422", rate: { mode: "quality", crf: 0 }, audio: "pcm" },
+  { id: "proreshq", group: "Mezzanine", label: "ProRes 422 HQ", codec: "proRes422Hq", rate: { mode: "quality", crf: 0 }, audio: "pcm" },
+];
+
+const CODECS: { value: VideoCodec; label: string }[] = [
+  { value: "h264", label: "H.264 / AVC" },
+  { value: "hevc", label: "H.265 / HEVC" },
+  { value: "proRes422", label: "Apple ProRes 422" },
+  { value: "proRes422Hq", label: "Apple ProRes 422 HQ" },
+];
+
+const isProRes = (c: VideoCodec) => c === "proRes422" || c === "proRes422Hq";
+const LAST_DIR_KEY = "kerf.export.dir";
+const CUSTOM_KEY = "kerf.export.presets";
+
+function loadCustom(): Preset[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem(CUSTOM_KEY) ?? "[]") as { id: string; label: string; settings: Preset["custom"] }[];
+    return raw.map((p) => ({ id: p.id, label: p.label, group: "Eigene", codec: p.settings!.videoCodec, rate: p.settings!.rate, audio: p.settings!.audioCodec, custom: p.settings }));
+  } catch {
+    return [];
+  }
+}
+
+function storeCustom(list: Preset[]) {
+  try {
+    localStorage.setItem(CUSTOM_KEY, JSON.stringify(list.map((p) => ({ id: p.id, label: p.label, settings: p.custom }))));
+  } catch {
+    // Storage unavailable: the preset lasts for this session only.
+  }
+}
+
+const even = (v: number) => Math.max(2, Math.round(v / 2) * 2);
+
+function defaultSettings(seq: Sequence, preset: Preset, output: string): ExportSettings {
+  if (preset.custom) return { ...preset.custom, output, useInOut: false };
+  let { width: w, height: h } = seq.settings;
+  const short = Math.min(w, h);
+  if (preset.shortEdge && (short > preset.shortEdge || preset.upscale)) {
+    const k = preset.shortEdge / short;
+    w = even(w * k);
+    h = even(h * k);
+  }
+  const fps = fpsOf(seq.settings.fps);
+  return {
+    output,
+    videoCodec: preset.codec,
+    hardware: false,
+    width: w,
+    height: h,
+    fps: preset.maxFps && fps > preset.maxFps + 0.01 ? { num: preset.maxFps, den: 1 } : seq.settings.fps,
+    rate: typeof preset.rate === "function" ? preset.rate(fps) : preset.rate,
+    audioCodec: preset.audio,
+    audioBitrateKbps: preset.audioKbps ?? 320,
+    sampleRate: seq.settings.sampleRate,
+    audioChannels: 2,
+    useInOut: false,
+  };
+}
+
+/**
+ * Expected file size in bytes. Exact for bitrate modes; for quality modes a
+ * rough bits-per-pixel guess (content decides the real size).
+ */
+function estimateBytes(s: ExportSettings, seconds: number): { bytes: number; exact: boolean } {
+  const audio = s.audioCodec === "pcm" ? s.sampleRate * 16 * s.audioChannels : s.audioBitrateKbps * 1000;
+  const pixels = s.width * s.height * fpsOf(s.fps);
+  let video: number;
+  let exact = true;
+  if (isProRes(s.videoCodec)) {
+    video = pixels * (s.videoCodec === "proRes422Hq" ? 3.54 : 2.37);
+    exact = false;
+  } else if (s.rate.mode !== "quality") {
+    video = s.rate.kbps * 1000;
+  } else {
+    video = pixels * (s.videoCodec === "hevc" ? 0.06 : 0.1) * Math.pow(2, (18 - s.rate.crf) / 6);
+    exact = false;
+  }
+  return { bytes: ((video + audio) * seconds) / 8, exact };
+}
+
+const hwFor = (codec: VideoCodec, encoders: string[] | null) =>
+  (encoders ?? []).filter((e) => e.startsWith(codec === "hevc" ? "hevc_" : codec === "h264" ? "h264_" : "none"));
+
+const dirOf = (path: string) => path.replace(/[\\/][^\\/]*$/, "");
+
+export function ExportPanel() {
+  const seq = useActiveSequence();
+  const appInfo = useProject((s) => s.appInfo);
+  const jobs = useProject((s) => s.exports);
+  const [custom, setCustom] = useState(loadCustom);
+  const presets = useMemo(() => [...PRESETS, ...custom], [custom]);
+  const [presetId, setPresetId] = useState("master");
+  const preset = presets.find((p) => p.id === presetId) ?? PRESETS[0];
+  const [s, setS] = useState<ExportSettings | null>(null);
+  const [free, setFree] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!seq) return;
+    setS((cur) => {
+      let output = cur?.output ?? "";
+      if (!output) {
+        try {
+          const dir = localStorage.getItem(LAST_DIR_KEY);
+          if (dir) output = `${dir}\\${seq.name}.mp4`;
+        } catch {
+          // ignore
+        }
+      }
+      return defaultSettings(seq, preset, output);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seq?.id, presetId]);
+
+  // Free space on the target drive (re-checked when the folder changes).
+  const outDir = s?.output ? dirOf(s.output) : "";
+  useEffect(() => {
+    if (!outDir) return setFree(null);
+    let live = true;
+    void api.diskFree(outDir).then((b) => live && setFree(b), () => live && setFree(null));
+    return () => {
+      live = false;
+    };
+  }, [outDir]);
+
+  const hw = useMemo(() => (s ? hwFor(s.videoCodec, appInfo?.hwEncoders ?? null) : []), [s, appInfo]);
+  if (!seq || !s) return null;
+  const upd = (p: Partial<ExportSettings>) => setS({ ...s, ...p });
+  const range = s.useInOut ? [seq.inPoint ?? 0, seq.outPoint ?? engine.duration] : [0, engine.duration];
+  const seconds = framesToSeconds(Math.max(0, range[1] - range[0]), seq.settings.fps);
+  const size = estimateBytes(s, seconds);
+  const tight = free !== null && size.bytes > free * 0.95;
+  const ext = isProRes(s.videoCodec) || s.audioCodec === "pcm" ? "mov" : "mp4";
+  const kbps = s.rate.mode === "quality" ? 16000 : s.rate.kbps;
+
+  const chooseOutput = async () => {
+    const path = await save({
+      defaultPath: s.output || `${seq.name}.${ext}`,
+      filters: [{ name: ext.toUpperCase(), extensions: [ext] }],
+    });
+    if (!path) return;
+    upd({ output: path });
+    try {
+      localStorage.setItem(LAST_DIR_KEY, dirOf(path));
+    } catch {
+      // ignore
+    }
+  };
+
+  const start = async () => {
+    let output = s.output;
+    if (!output) {
+      const path = await save({ defaultPath: `${seq.name}.${ext}`, filters: [{ name: ext.toUpperCase(), extensions: [ext] }] });
+      if (!path) return;
+      output = path;
+      upd({ output });
+    }
+    output = output.replace(/\.(mp4|mov|m4v)$/i, "") + "." + ext;
+    const room = await api.diskFree(dirOf(output)).catch(() => null);
+    if (room !== null && size.bytes > room * 0.95) {
+      const go = await confirm({
+        title: "Wenig Speicherplatz",
+        body: `Der Export braucht ${size.exact ? "" : "etwa "}${formatBytes(size.bytes)}, auf dem Ziellaufwerk sind nur ${formatBytes(room)} frei. Ein voller Datenträger bricht den Export ab.`,
+        confirm: "Trotzdem starten",
+        danger: true,
+      });
+      if (go !== true) return;
+    }
+    try {
+      const job = await api.exportStart(seq.id, { ...s, output, hardware: s.hardware && hw.length > 0 });
+      useProject.getState().upsertExport(job);
+      toast.info("Export gestartet", output.split(/[\\/]/).pop());
+    } catch (e) {
+      reportError(e);
+    }
+  };
+
+  const savePreset = async () => {
+    const name = await prompt({ title: "Export-Vorgabe speichern", label: "Name", value: `${CODECS.find((c) => c.value === s.videoCodec)?.label.split(" ")[0]} ${s.height}p`, confirm: "Speichern" });
+    if (!name?.trim()) return;
+    const { output: _o, useInOut: _u, ...rest } = s;
+    const p: Preset = { id: `custom-${Date.now().toString(36)}`, label: name.trim(), group: "Eigene", codec: s.videoCodec, rate: s.rate, audio: s.audioCodec, custom: rest };
+    const list = [...custom, p];
+    setCustom(list);
+    storeCustom(list);
+    setPresetId(p.id);
+  };
+
+  const deletePreset = () => {
+    const list = custom.filter((p) => p.id !== presetId);
+    setCustom(list);
+    storeCustom(list);
+    setPresetId("master");
+  };
+
+  const resolutions = [
+    { value: `${seq.settings.width}x${seq.settings.height}`, label: `Sequenz (${seq.settings.width} × ${seq.settings.height})` },
+    ...[2160, 1440, 1080, 720, 540]
+      .filter((e) => e < Math.min(seq.settings.width, seq.settings.height))
+      .map((e) => {
+        const k = e / Math.min(seq.settings.width, seq.settings.height);
+        const w = even(seq.settings.width * k);
+        const h = even(seq.settings.height * k);
+        return { value: `${w}x${h}`, label: `${w} × ${h}` };
+      }),
+  ];
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <PanelHeader title="Export" />
+      <div className="min-h-0 flex-1 overflow-auto">
+        <Section title="Vorgabe">
+          <Field label="Preset">
+            <Select
+              width={220}
+              value={presetId}
+              onChange={setPresetId}
+              options={presets.map((p) => ({ value: p.id, label: p.label, group: p.group }))}
+            />
+            <IconButton icon={<Save size={13} />} size={24} label="Aktuelle Einstellungen als Vorgabe speichern" onClick={() => void savePreset()} />
+            {preset.custom && <IconButton icon={<Trash2 size={13} />} size={24} label="Vorgabe löschen" onClick={deletePreset} />}
+          </Field>
+          {preset.hint && <p className="-mt-1 mb-1 text-[10.5px] leading-snug text-fg-4">{preset.hint}</p>}
+          <Field label="Datei">
+            <button onClick={() => void chooseOutput()} className="flex h-6 min-w-0 flex-1 items-center gap-1.5 rounded-sm bg-field px-2 text-left text-xs text-fg-2 hover:bg-hover" title={s.output}>
+              <FolderOpen size={12} className="shrink-0 text-fg-3" />
+              <span className="truncate">{s.output ? s.output.split(/[\\/]/).pop() : "Speicherort wählen …"}</span>
+            </button>
+          </Field>
+          <Field label="Bereich">
+            <Segmented
+              size="sm"
+              value={s.useInOut ? "inout" : "all"}
+              onChange={(v) => upd({ useInOut: v === "inout" })}
+              options={[
+                { value: "all", label: "Ganze Sequenz" },
+                { value: "inout", label: "In bis Out" },
+              ]}
+            />
+          </Field>
+        </Section>
+        <Section title="Video">
+          <Field label="Codec">
+            <Select width={180} value={s.videoCodec} onChange={(v) => upd({ videoCodec: v, hardware: false, ...(isProRes(v) ? { audioCodec: "pcm" } : {}) })} options={CODECS} />
+          </Field>
+          <Field label="Hardware">
+            <Toggle label="Hardware-Encoder" checked={s.hardware && hw.length > 0} onChange={(v) => upd({ hardware: v })} />
+            <span className="truncate text-xs text-fg-3">
+              {hw.length ? hw.join(", ").replace(/_/g, " ").toUpperCase() : appInfo?.hwEncoders === null ? "wird erkannt …" : "nicht verfügbar"}
+            </span>
+          </Field>
+          <Field label="Auflösung">
+            <Select
+              width={200}
+              value={`${s.width}x${s.height}`}
+              onChange={(v) => {
+                const [w, h] = v.split("x").map(Number);
+                upd({ width: w, height: h });
+              }}
+              options={resolutions.some((r) => r.value === `${s.width}x${s.height}`) ? resolutions : [...resolutions, { value: `${s.width}x${s.height}`, label: `${s.width} × ${s.height}` }]}
+            />
+          </Field>
+          <Field label="Bildrate">
+            <Select
+              width={140}
+              value={`${s.fps.num}/${s.fps.den}`}
+              onChange={(v) => {
+                const [num, den] = v.split("/").map(Number);
+                upd({ fps: { num, den } as Rational });
+              }}
+              options={[
+                { value: `${seq.settings.fps.num}/${seq.settings.fps.den}`, label: `Sequenz (${formatRate(seq.settings.fps)})` },
+                ...STANDARD_RATES.filter((r) => r.rate.num / r.rate.den !== seq.settings.fps.num / seq.settings.fps.den).map((r) => ({ value: `${r.rate.num}/${r.rate.den}`, label: `${r.label} fps` })),
+              ]}
+            />
+          </Field>
+          {!isProRes(s.videoCodec) && (
+            <>
+              <Field label="Steuerung">
+                <Segmented
+                  size="sm"
+                  value={s.rate.mode}
+                  onChange={(m) => upd({ rate: m === "quality" ? { mode: "quality", crf: 18 } : { mode: m, kbps } })}
+                  options={[
+                    { value: "quality", label: "Qualität", title: "Konstante Qualität (CRF): Größe richtet sich nach dem Inhalt" },
+                    { value: "bitrate", label: "VBR", title: "Variable Bitrate um den Zielwert (Spitzen bis 1,5×)" },
+                    { value: "constant", label: "CBR", title: "Konstante Bitrate, z. B. für Streaming-Ingest oder Sendeabwicklung" },
+                  ]}
+                />
+              </Field>
+              {s.rate.mode === "quality" ? (
+                <Field label="Qualität (CRF)">
+                  <NumberField label="CRF" value={s.rate.crf} min={0} max={40} step={0.25} width={60} onCommit={(v) => upd({ rate: { mode: "quality", crf: Math.round(v) } })} />
+                  <span className="text-xs text-fg-4">niedriger = besser</span>
+                </Field>
+              ) : (
+                <Field label="Bitrate">
+                  <NumberField label="Bitrate" value={s.rate.kbps / 1000} min={0.5} max={400} step={0.1} precision={1} unit=" Mbit/s" width={96} onCommit={(v) => upd({ rate: { mode: s.rate.mode === "constant" ? "constant" : "bitrate", kbps: Math.round(v * 1000) } })} />
+                </Field>
+              )}
+            </>
+          )}
+        </Section>
+        <Section title="Audio">
+          <Field label="Codec">
+            <Segmented
+              size="sm"
+              value={s.audioCodec}
+              onChange={(v) => upd({ audioCodec: v })}
+              options={[
+                { value: "aac", label: "AAC" },
+                { value: "pcm", label: "PCM (MOV)" },
+              ]}
+            />
+          </Field>
+          {s.audioCodec === "aac" && (
+            <Field label="Bitrate">
+              <Select width={110} value={s.audioBitrateKbps} onChange={(v) => upd({ audioBitrateKbps: v })} options={[128, 192, 256, 320].map((k) => ({ value: k, label: `${k} kbit/s` }))} />
+            </Field>
+          )}
+          <Field label="Kanäle">
+            <Segmented
+              size="sm"
+              value={String(s.audioChannels)}
+              onChange={(v) => upd({ audioChannels: v === "1" ? 1 : 2 })}
+              options={[
+                { value: "2", label: "Stereo" },
+                { value: "1", label: "Mono", title: "Mischt beide Kanäle zusammen" },
+              ]}
+            />
+          </Field>
+          <Field label="Abtastrate">
+            <Select width={110} value={s.sampleRate} onChange={(v) => upd({ sampleRate: v })} options={[44100, 48000].map((r) => ({ value: r, label: `${r / 1000} kHz` }))} />
+          </Field>
+        </Section>
+        <div className="space-y-2 border-b border-line p-3">
+          <div className="flex justify-between gap-2 text-xs text-fg-3">
+            <span>Dauer {formatDuration(seconds)}</span>
+            <span className={cx(tight && "text-danger")} title={size.exact ? "Aus der Bitrate berechnet" : "Grobe Schätzung – die tatsächliche Größe hängt vom Bildinhalt ab"}>
+              {size.exact ? "" : "≈ "}
+              {formatBytes(size.bytes)} · .{ext}
+              {free !== null && <span className={cx(!tight && "text-fg-4")}> · {formatBytes(free)} frei</span>}
+            </span>
+          </div>
+          {tight && (
+            <div className="flex items-start gap-1.5 text-[10.5px] leading-snug text-danger">
+              <TriangleAlert size={12} className="mt-px shrink-0" />
+              Auf dem Ziellaufwerk ist voraussichtlich nicht genug Platz.
+            </div>
+          )}
+          <Button variant="primary" className="w-full" disabled={seconds <= 0 || !appInfo?.ffmpeg} onClick={() => void start()}>
+            {appInfo?.ffmpeg ? "Zur Render-Warteschlange hinzufügen" : "FFmpeg nicht gefunden"}
+          </Button>
+        </div>
+        <RenderQueue jobs={jobs} />
+      </div>
+    </div>
+  );
+}
+
+const fmt1 = (v: number) => v.toFixed(1).replace(".", ",").replace("-", "−");
+const fmtFps = (v: number) => String(Math.round(v * 1000) / 1000).replace(".", ",");
+
+/** Findings of the post-render check worth a warning. */
+function qcWarnings(j: ExportJob): string[] {
+  const q = j.qc;
+  if (!q) return [];
+  if (q.error) return [`Datei konnte nicht geprüft werden: ${q.error}`];
+  const out: string[] = [];
+  if (Math.abs(q.duration - j.duration) > Math.max(0.1, 1.5 / j.fps)) out.push(`Dauer ${fmt1(q.duration)} s statt ${fmt1(j.duration)} s`);
+  if (q.width !== null && (q.width !== j.width || q.height !== j.height)) out.push(`Auflösung ${q.width} × ${q.height} statt ${j.width} × ${j.height}`);
+  if (q.fps !== null && Math.abs(q.fps - j.fps) > 0.01) out.push(`Bildrate ${fmtFps(q.fps)} statt ${fmtFps(j.fps)} fps`);
+  if (q.videoCodec === null) out.push("Keine Videospur in der Datei");
+  if (q.audioCodec === null) out.push("Keine Tonspur in der Datei");
+  else if (q.channels !== null && q.channels !== j.channels) out.push(`${q.channels} statt ${j.channels} Tonkanäle`);
+  const tp = q.loudness?.truePeak;
+  if (tp !== null && tp !== undefined && tp > -1) out.push(`True Peak ${fmt1(tp)} dBTP – über −1 dBTP kann es nach dem Umkodieren auf Plattformen verzerren`);
+  return out;
+}
+
+function QcSummary({ j }: { j: ExportJob }) {
+  const q = j.qc;
+  if (!q) {
+    return (
+      <div className="flex items-center gap-1.5 text-[10.5px] text-fg-3">
+        <Loader2 size={11} className="animate-spin" /> Datei wird geprüft …
+      </div>
+    );
+  }
+  const warnings = qcWarnings(j);
+  const l = q.loudness;
+  return (
+    <div className="space-y-0.5 text-[10.5px] leading-snug">
+      {!q.error && (
+        <div className="tc text-fg-3">
+          {q.width} × {q.height} · {q.fps !== null ? fmtFps(q.fps) : "?"} fps · {[q.videoCodec, q.audioCodec].filter(Boolean).join(" / ")}
+          {q.channels !== null && ` · ${q.channels === 1 ? "Mono" : q.channels === 2 ? "Stereo" : `${q.channels} Kan.`}`} · {formatBytes(q.sizeBytes)}
+        </div>
+      )}
+      {l && (
+        <div className="tc text-fg-3">
+          {l.integrated !== null ? `${fmt1(l.integrated)} LUFS` : "Stille"}
+          {l.truePeak !== null && ` · True Peak ${fmt1(l.truePeak)} dBTP`}
+          {l.range !== null && ` · LRA ${fmt1(l.range)} LU`}
+        </div>
+      )}
+      {warnings.length === 0 ? (
+        <div className="flex items-center gap-1 text-signal">
+          <CheckCircle2 size={11} /> Prüfung bestanden
+        </div>
+      ) : (
+        warnings.map((w) => (
+          <div key={w} className="flex items-start gap-1 text-warn">
+            <TriangleAlert size={11} className="mt-px shrink-0" />
+            {w}
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
+function RenderQueue({ jobs }: { jobs: ExportJob[] }) {
+  const ordered = [...jobs].reverse();
+  const showLog = (j: ExportJob) => useEditor.getState().set({ dialog: { kind: "exportLog", job: j.id, title: j.output.split(/[\\/]/).pop() ?? "" } });
+  const retry = async (j: ExportJob) => {
+    try {
+      useProject.getState().upsertExport(await api.exportRetry(j.id));
+    } catch (e) {
+      reportError(e);
+    }
+  };
+  return (
+    <Section
+      title={`Render-Warteschlange (${jobs.length})`}
+      right={
+        jobs.some((j) => j.status !== "queued" && j.status !== "running") && (
+          <button
+            className="text-[10.5px] text-fg-3 hover:text-fg-2"
+            onClick={() => void api.exportClear().then(() => api.exportJobs()).then((j) => useProject.getState().setExports(j))}
+          >
+            Fertige entfernen
+          </button>
+        )
+      }
+    >
+      {!jobs.length && <p className="text-xs text-fg-4">Noch keine Exporte in dieser Sitzung.</p>}
+      {ordered.map((j) => (
+        <div key={j.id} className="space-y-1.5 rounded-md bg-raised p-2.5">
+          <div className="flex items-center gap-2">
+            {j.status === "done" ? (
+              qcWarnings(j).length ? <TriangleAlert size={14} className="shrink-0 text-warn" /> : <CheckCircle2 size={14} className="shrink-0 text-signal" />
+            ) : j.status === "failed" ? (
+              <XCircle size={14} className="shrink-0 text-danger" />
+            ) : j.status === "cancelled" ? (
+              <CircleSlash size={14} className="shrink-0 text-fg-3" />
+            ) : (
+              <Loader2 size={14} className={cx("shrink-0 text-fg-2", j.status === "running" && "animate-spin")} />
+            )}
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-xs font-medium" title={j.output}>
+                {j.output.split(/[\\/]/).pop()}
+              </div>
+              <div className="truncate text-[10.5px] text-fg-3">
+                {j.sequenceName} · {j.encoder} · {formatDuration(j.duration)}
+              </div>
+            </div>
+            {(j.status === "queued" || j.status === "running") && <IconButton icon={<X size={13} />} size={22} label="Abbrechen" onClick={() => void api.exportCancel(j.id)} />}
+            {(j.status === "failed" || j.status === "cancelled") && <IconButton icon={<RotateCcw size={13} />} size={22} label="Erneut versuchen" onClick={() => void retry(j)} />}
+            {j.status === "done" && <IconButton icon={<Play size={13} />} size={22} label="Datei öffnen" onClick={() => void api.openPath(j.output).catch(reportError)} />}
+            {j.status === "done" && <IconButton icon={<FolderOpen size={13} />} size={22} label="Im Explorer anzeigen" onClick={() => void api.revealPath(j.output)} />}
+            {j.status !== "queued" && j.status !== "running" && <IconButton icon={<ScrollText size={13} />} size={22} label="Protokoll anzeigen" onClick={() => showLog(j)} />}
+          </div>
+          {(j.status === "running" || j.status === "queued") && (
+            <>
+              <Progress value={j.progress.fraction} indeterminate={j.status === "queued"} />
+              <div className="tc flex justify-between text-[10.5px] text-fg-3">
+                <span>{j.status === "queued" ? "Wartet …" : `${Math.round(j.progress.fraction * 100)} %${j.progress.speed ? ` · ${j.progress.speed.toFixed(1).replace(".", ",")}×` : ""}`}</span>
+                <span>{j.progress.eta !== null && j.status === "running" ? `noch ${formatDuration(j.progress.eta)}` : ""}</span>
+              </div>
+            </>
+          )}
+          {j.status === "done" && (
+            <>
+              <div className="tc text-[10.5px] text-fg-3">Fertig in {formatDuration(j.progress.elapsed)}</div>
+              <QcSummary j={j} />
+            </>
+          )}
+          {j.status === "failed" && j.error && <div className="text-[10.5px] leading-snug text-danger">{j.error}</div>}
+        </div>
+      ))}
+    </Section>
+  );
+}

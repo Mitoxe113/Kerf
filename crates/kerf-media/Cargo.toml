@@ -1,0 +1,17 @@
+[package]
+name = "kerf-media"
+description = "Kerf media engine: probing, analysis (thumbnails, waveforms), proxies and the export renderer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+kerf-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+thiserror.workspace = true
+log.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
