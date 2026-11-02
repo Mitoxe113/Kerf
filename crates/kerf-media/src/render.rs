@@ -22,6 +22,7 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
+use kerf_core::audio::{active as active_effects, AudioEffect, AudioEffectKind, EqShape, LIMITER_ATTACK_MS};
 use kerf_core::model::{
     Clip, Cue, CurvePoint, Ease, EffectKind, Keyframe, MediaKind, MediaStatus, Param, Project, Sequence, TrackKind, TransitionKind, TransitionSpan,
     VideoInfo,
@@ -86,6 +87,72 @@ pub struct ExportSettings {
     /// stored ones so the export always matches the preview's drawing code.
     #[serde(default)]
     pub title_files: HashMap<Uuid, PathBuf>,
+    /// Normalise the mix's loudness (EBU R128, two passes).
+    #[serde(default)]
+    pub loudness: Option<LoudnessTarget>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoudnessTarget {
+    /// Integrated loudness, LUFS (-70..-5).
+    pub integrated: f64,
+    /// Maximum true peak, dBTP (-9..0).
+    pub true_peak: f64,
+}
+
+/// What FFmpeg's `loudnorm` measured in the first pass.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LoudnormMeasure {
+    pub input_i: f64,
+    pub input_tp: f64,
+    pub input_lra: f64,
+    pub input_thresh: f64,
+    pub target_offset: f64,
+}
+
+/// Stands in the export graph for the `loudnorm` filter until pass 1 has measured.
+const LOUDNORM_MARK: &str = "LOUDNORM_MEASURED";
+
+impl LoudnormMeasure {
+    /// False for a silent mix (FFmpeg reports -inf).
+    pub fn audible(&self) -> bool {
+        [self.input_i, self.input_tp, self.input_lra, self.input_thresh, self.target_offset].iter().all(|v| v.is_finite())
+    }
+}
+
+impl LoudnessTarget {
+    /// `loudnorm` for the target; with a measurement as a linear gain (FFmpeg
+    /// falls back to its limiter when the gain would push the true peak over).
+    /// The range target is FFmpeg's maximum, so a wide mix stays linear.
+    pub fn filter(&self, measured: Option<LoudnormMeasure>) -> String {
+        let mut f = format!(
+            "loudnorm=I={}:TP={}:LRA=50:print_format=none",
+            num(self.integrated.clamp(-70.0, -5.0)),
+            num(self.true_peak.clamp(-9.0, 0.0))
+        );
+        if let Some(m) = measured {
+            f.push_str(&format!(
+                ":measured_I={}:measured_TP={}:measured_LRA={}:measured_thresh={}:offset={}:linear=true",
+                num(m.input_i),
+                num(m.input_tp),
+                num(m.input_lra),
+                num(m.input_thresh),
+                num(m.target_offset)
+            ));
+        }
+        f
+    }
+}
+
+/// Reads the JSON block `loudnorm` prints at the end of a run.
+pub fn parse_loudnorm(log: &str) -> Option<LoudnormMeasure> {
+    let start = log.rfind("[Parsed_loudnorm")?;
+    let json = &log[start..];
+    let (a, b) = (json.find('{')?, json.rfind('}')?);
+    let v: serde_json::Value = serde_json::from_str(&json[a..=b]).ok()?;
+    let f = |k: &str| v.get(k)?.as_str()?.trim().parse::<f64>().ok();
+    Some(LoudnormMeasure { input_i: f("input_i")?, input_tp: f("input_tp")?, input_lra: f("input_lra")?, input_thresh: f("input_thresh")?, target_offset: f("target_offset")? })
 }
 
 /// What happens with the sequence's subtitles.
@@ -136,6 +203,16 @@ pub struct RenderPlan {
     pub files: Vec<(PathBuf, String)>,
     /// Subtitle file written next to the output after a successful render.
     pub sidecar: Option<(PathBuf, String)>,
+    /// Loudness measurement run before the export (two-pass normalisation).
+    pub measure: Option<MeasurePass>,
+}
+
+#[derive(Clone, Debug)]
+pub struct MeasurePass {
+    pub args: Vec<OsString>,
+    pub graph: String,
+    pub graph_path: PathBuf,
+    pub target: LoudnessTarget,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -146,6 +223,8 @@ pub struct RenderProgress {
     pub elapsed: f64,
     pub eta: Option<f64>,
     pub speed: Option<f64>,
+    /// Pass 1 of a loudness normalisation is running.
+    pub measuring: bool,
 }
 
 /// Part of a clip that falls into the render range.
@@ -546,6 +625,235 @@ fn atempo_chain(speed: f64) -> Vec<String> {
     out
 }
 
+/// Like `num` with nine decimals, for gains that are compared bit for bit
+/// against FFmpeg in the parity fixture.
+fn fine(v: f64) -> String {
+    let s = format!("{v:.9}");
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    if s == "-0" || s.is_empty() { "0".into() } else { s.to_string() }
+}
+
+fn linear(db: f32) -> String {
+    fine(10f64.powf(db as f64 / 20.0))
+}
+
+/// FFmpeg filters for the active effects at sample rate `sr`. The preview runs
+/// ports of the same filters (src/engine/dsp.ts); fixtures/parity/audio.json
+/// holds both. `latency` lets the limiter remove its look-ahead delay.
+pub fn audio_effect_filters(effects: &[AudioEffect], sr: u32, latency: bool) -> Vec<String> {
+    let mut out = Vec::new();
+    for e in active_effects(effects) {
+        match e {
+            AudioEffectKind::Eq { bands } => {
+                // Bands above Nyquist are bypassed by FFmpeg and the preview alike.
+                for b in bands.iter().filter(|b| b.enabled && b.freq > 0.0 && 2.0 * b.freq as f64 <= sr as f64) {
+                    let (f, g, q) = (num(b.freq as f64), num(b.gain_db as f64), num(b.q as f64));
+                    let filter = match b.shape {
+                        EqShape::HighPass => format!("highpass=f={f}:p=2:t=q:w={q}"),
+                        EqShape::LowPass => format!("lowpass=f={f}:p=2:t=q:w={q}"),
+                        _ if b.gain_db == 0.0 => continue,
+                        EqShape::LowShelf => format!("lowshelf=f={f}:t=s:w=1:g={g}"),
+                        EqShape::HighShelf => format!("highshelf=f={f}:t=s:w=1:g={g}"),
+                        EqShape::Peak => format!("equalizer=f={f}:t=q:w={q}:g={g}"),
+                    };
+                    out.push(filter + ":r=f64");
+                }
+            }
+            AudioEffectKind::Compressor { threshold_db, ratio, attack_ms, release_ms, knee_db, makeup_db } => out.push(format!(
+                "acompressor=threshold={}:ratio={}:attack={}:release={}:knee={}:makeup={}:detection=rms:link=average",
+                linear(*threshold_db),
+                num(*ratio as f64),
+                num(*attack_ms as f64),
+                num(*release_ms as f64),
+                linear(*knee_db),
+                linear(*makeup_db)
+            )),
+            AudioEffectKind::Gate { threshold_db, range_db, ratio, attack_ms, release_ms } => out.push(format!(
+                // FFmpeg's default knee (2.828427125 = 9 dB), which the preview uses too.
+                "agate=threshold={}:range={}:ratio={}:attack={}:release={}:knee=2.828427125:detection=rms:link=average",
+                linear(*threshold_db),
+                linear(*range_db),
+                num(*ratio as f64),
+                num(*attack_ms as f64),
+                num(*release_ms as f64)
+            )),
+            AudioEffectKind::Limiter { ceiling_db, release_ms } => out.push(format!(
+                "alimiter=limit={}:attack={}:release={}:asc=0:level=0{}",
+                linear(*ceiling_db),
+                num(LIMITER_ATTACK_MS),
+                num(*release_ms as f64),
+                if latency { ":latency=1" } else { "" }
+            )),
+        }
+    }
+    out
+}
+
+/// `pan` for a stereo gain matrix `[[l<-l, l<-r], [r<-l, r<-r]]`.
+fn pan_matrix(m: [[f64; 2]; 2]) -> String {
+    let side = |g: [f64; 2]| {
+        let terms: Vec<String> = g.iter().enumerate().map(|(i, v)| (i, num(*v))).filter(|(_, v)| v != "0").map(|(i, v)| format!("{v}*c{i}")).collect();
+        if terms.is_empty() { "0*c0".to_string() } else { terms.join("+") }
+    };
+    format!("pan=stereo|c0={}|c1={}", side(m[0]), side(m[1]))
+}
+
+/// WebAudio's StereoPannerNode for stereo input (the preview pans with it):
+/// left of centre the left side takes in part of the right channel, right of
+/// centre the other way round, with equal-power gains.
+fn stereo_pan(pan: f64) -> [[f64; 2]; 2] {
+    use std::f64::consts::FRAC_PI_2;
+    let p = pan.clamp(-1.0, 1.0);
+    if p <= 0.0 {
+        let x = (p + 1.0) * FRAC_PI_2;
+        [[1.0, x.cos()], [0.0, x.sin()]]
+    } else {
+        let x = p * FRAC_PI_2;
+        [[x.cos(), 0.0], [x.sin(), 1.0]]
+    }
+}
+
+struct AudioMix {
+    args: Vec<OsString>,
+    chains: Vec<String>,
+    inputs: usize,
+}
+
+/// Inputs and filter chains of the audio mix over `t0..t1`, ending in
+/// `[aout]`; input indices start at `first`. Per clip: channels to stereo
+/// (mono on both sides at full level, as the preview upmixes), channel map,
+/// effects, volume, pan, fades. A track with effects or set to mono is mixed
+/// on its own first, its effects and volume applied to the sum. `master`
+/// goes after the master sum (loudness normalisation).
+fn audio_mix(project: &Project, seq: &Sequence, s: &ExportSettings, (t0, t1): (Frame, Frame), first: usize, master: Option<String>) -> Result<AudioMix, MediaError> {
+    let sf = seq.settings.fps;
+    let frame_s = 1.0 / s.fps.as_f64();
+    let sr = s.sample_rate.clamp(8_000, 192_000);
+    let duration = sf.frames_to_seconds(t1 - t0);
+    let mut args: Vec<OsString> = Vec::new();
+    let mut chains = Vec::new();
+    let mut k = first;
+
+    let audio_tracks: Vec<_> = seq.tracks.iter().filter(|t| t.kind == TrackKind::Audio).collect();
+    let any_solo = audio_tracks.iter().any(|t| t.solo);
+    let mut mix_inputs = Vec::new();
+    for (ti, track) in audio_tracks.iter().enumerate().filter(|(_, t)| !t.muted && (!any_solo || t.solo)) {
+        let track_fx = audio_effect_filters(&track.effects, sr, true);
+        let submix = track.mono || !track_fx.is_empty();
+        // Without a submix the track volume goes into each clip's gain.
+        let track_db = if submix { 0.0 } else { track.volume_db };
+        let mut track_inputs = Vec::new();
+        let spans: Vec<Option<TransitionSpan>> =
+            (0..track.clips.len()).map(|i| track.transition_into(i).filter(|s| s.t1 > t0 && s.t0 < t1)).collect();
+        for (ci, clip) in track.clips.iter().enumerate().filter(|(_, c)| c.enabled) {
+            let gain_db = clip.volume_db + track_db;
+            let ramped = !clip.keys_of(Param::Volume).is_empty();
+            if clip.volume_db + track.volume_db <= -96.0 && !ramped {
+                continue;
+            }
+            // Crossfades lengthen both clips like video transitions. A crossfade
+            // the range starts in is rendered from its start and cut afterwards.
+            let (incoming, outgoing) = (spans[ci], spans.get(ci + 1).copied().flatten());
+            let before = incoming.map_or(0, |s| s.cut - s.t0);
+            let after = outgoing.map_or(0, |s| s.t1 - s.cut);
+            let lo = [incoming, outgoing].iter().flatten().fold(t0, |lo, s| lo.min(s.t0));
+            let Some(seg) = segment_ext(clip, before, after, lo, t1) else { continue };
+            let Some(asset) = project.media(clip.media_id) else { continue };
+            if asset.status == MediaStatus::Missing {
+                return Err(MediaError::Unsupported(format!("media offline: {}", asset.name)));
+            }
+            let Some(audio) = asset.info.as_ref().and_then(|i| i.audio.as_ref()).filter(|_| asset.has_audio()) else { continue };
+            let src_start = sf.frames_to_seconds(clip.source_in) + sf.frames_to_seconds(seg.head) * clip.speed;
+            let seg_len = sf.frames_to_seconds(seg.len);
+            let lead = sf.frames_to_seconds((t0 - seg.start).max(0));
+            let offset = sf.frames_to_seconds((seg.start - t0).max(0));
+            args.extend(["-ss".into(), num(src_start.max(0.0)).into()]);
+            args.extend(["-t".into(), num(seg_len * clip.speed + 0.1).into()]);
+            args.push("-i".into());
+            args.push(asset.path.clone().into_os_string());
+
+            let mut f = vec!["asetpts=PTS-STARTPTS".to_string()];
+            f.extend(atempo_chain(clip.speed));
+            if audio.channels == 1 {
+                f.push("pan=stereo|c0=c0|c1=c0".into());
+            }
+            f.push(format!("aformat=sample_fmts=fltp:sample_rates={sr}:channel_layouts=stereo"));
+            if src_start < 0.0 {
+                // Silence before the media start (incoming side of a crossfade).
+                f.push(format!("adelay=delays={}S:all=1", (-src_start / clip.speed * sr as f64).round() as u64));
+            }
+            if !clip.channels.is_stereo() {
+                f.push(pan_matrix(clip.channels.matrix().map(|r| r.map(f64::from))));
+            }
+            f.extend(audio_effect_filters(&clip.audio_effects, sr, true));
+            if ramped {
+                // Volume keys in dB over output time `t` of this segment.
+                let db = param_expr(clip, Param::Volume, seg.head, "t", frame_s);
+                f.push(format!("volume='pow(10,(({db})+{})/20)':eval=frame", num(track_db as f64)));
+            } else if gain_db != 0.0 {
+                f.push(format!("volume={}dB", num(gain_db as f64)));
+            }
+            if clip.pan != 0.0 {
+                f.push(pan_matrix(stereo_pan(clip.pan as f64)));
+            }
+            if clip.fade_in > 0 && clip.fade_in > seg.head {
+                f.push(fade_at("afade", "in", sf.frames_to_seconds(-seg.head), sf.frames_to_seconds(clip.fade_in), ""));
+            }
+            if clip.fade_out > 0 {
+                let st = sf.frames_to_seconds(clip.end() - clip.fade_out - seg.start);
+                if st < seg_len {
+                    f.push(fade_at("afade", "out", st, sf.frames_to_seconds(clip.fade_out), ""));
+                }
+            }
+            for (span, kind) in [(incoming, "in"), (outgoing, "out")] {
+                if let Some(s) = span {
+                    f.push(fade_at("afade", kind, sf.frames_to_seconds(s.t0 - seg.start), sf.frames_to_seconds(s.len()), ":curve=tri"));
+                }
+            }
+            if lead > 0.0 {
+                f.push(format!("atrim=start={},asetpts=PTS-STARTPTS", num(lead)));
+            }
+            f.push(format!("atrim=end={}", num(seg_len - lead)));
+            let delay = (offset * sr as f64).round() as u64;
+            if delay > 0 {
+                f.push(format!("adelay=delays={delay}S:all=1"));
+            }
+            chains.push(format!("[{k}:a:0]{}[a{k}]", f.join(",")));
+            track_inputs.push(format!("[a{k}]"));
+            k += 1;
+        }
+        if !submix || track_inputs.is_empty() {
+            mix_inputs.append(&mut track_inputs);
+            continue;
+        }
+        let mut f = Vec::new();
+        if track_inputs.len() > 1 {
+            f.push(format!("amix=inputs={}:normalize=0:dropout_transition=0", track_inputs.len()));
+        }
+        if track.mono {
+            f.push(pan_matrix([[0.5, 0.5], [0.5, 0.5]]));
+        }
+        f.extend(track_fx);
+        if track.volume_db != 0.0 {
+            f.push(format!("volume={}dB", num(track.volume_db as f64)));
+        }
+        chains.push(format!("{}{}[at{ti}]", track_inputs.join(""), f.join(",")));
+        mix_inputs.push(format!("[at{ti}]"));
+    }
+    let tail = format!("apad=whole_dur={d},atrim=end={d}", d = num(duration));
+    let sum = match mix_inputs.len() {
+        0 => format!("anullsrc=r={sr}:cl=stereo,{tail}"),
+        1 => format!("{}{tail}", mix_inputs[0]),
+        n => format!("{}amix=inputs={n}:normalize=0:dropout_transition=0,{tail}", mix_inputs.join("")),
+    };
+    // loudnorm works at 192 kHz; the tail again holds the length exactly.
+    chains.push(match master {
+        Some(m) => format!("{sum},{m},aresample={sr},{tail}[aout]"),
+        None => format!("{sum}[aout]"),
+    });
+    Ok(AudioMix { args, chains, inputs: k - first })
+}
+
 /// Builds the FFmpeg invocation for `seq`. `work_dir` receives the graph script.
 pub fn plan(
     project: &Project,
@@ -883,94 +1191,25 @@ pub fn plan(
     ));
 
     // --- audio ----------------------------------------------------------------
-    let audio_tracks: Vec<_> = seq.tracks.iter().filter(|t| t.kind == TrackKind::Audio).collect();
-    let any_solo = audio_tracks.iter().any(|t| t.solo);
-    let mut mix_inputs = Vec::new();
-    for track in audio_tracks.iter().filter(|t| !t.muted && (!any_solo || t.solo)) {
-        let spans: Vec<Option<TransitionSpan>> =
-            (0..track.clips.len()).map(|i| track.transition_into(i).filter(|s| s.t1 > t0 && s.t0 < t1)).collect();
-        for (ci, clip) in track.clips.iter().enumerate().filter(|(_, c)| c.enabled) {
-            let gain_db = clip.volume_db + track.volume_db;
-            let ramped = !clip.keys_of(Param::Volume).is_empty();
-            if gain_db <= -96.0 && !ramped {
-                continue;
-            }
-            // Crossfades lengthen both clips like video transitions. A crossfade
-            // the range starts in is rendered from its start and cut afterwards.
-            let (incoming, outgoing) = (spans[ci], spans.get(ci + 1).copied().flatten());
-            let before = incoming.map_or(0, |s| s.cut - s.t0);
-            let after = outgoing.map_or(0, |s| s.t1 - s.cut);
-            let lo = [incoming, outgoing].iter().flatten().fold(t0, |lo, s| lo.min(s.t0));
-            let Some(seg) = segment_ext(clip, before, after, lo, t1) else { continue };
-            let Some(asset) = asset_for(clip)? else { continue };
-            if !asset.has_audio() {
-                continue;
-            }
-            let src_start = sf.frames_to_seconds(clip.source_in) + sf.frames_to_seconds(seg.head) * clip.speed;
-            let seg_len = sf.frames_to_seconds(seg.len);
-            let lead = sf.frames_to_seconds((t0 - seg.start).max(0));
-            let offset = sf.frames_to_seconds((seg.start - t0).max(0));
-            args.extend(["-ss".into(), num(src_start.max(0.0)).into()]);
-            args.extend(["-t".into(), num(seg_len * clip.speed + 0.1).into()]);
-            args.push("-i".into());
-            args.push(asset.path.clone().into_os_string());
-            let k = inputs;
-            inputs += 1;
-
-            let mut f = vec!["asetpts=PTS-STARTPTS".to_string()];
-            f.extend(atempo_chain(clip.speed));
-            f.push(format!("aformat=sample_fmts=fltp:sample_rates={sr}:channel_layouts=stereo"));
-            if src_start < 0.0 {
-                // Silence before the media start (incoming side of a crossfade).
-                f.push(format!("adelay=delays={}S:all=1", (-src_start / clip.speed * sr as f64).round() as u64));
-            }
-            if ramped {
-                // Volume keys in dB over output time `t` of this segment.
-                let db = param_expr(clip, Param::Volume, seg.head, "t", frame_s);
-                f.push(format!("volume='pow(10,(({db})+{})/20)':eval=frame", num(track.volume_db as f64)));
-            } else if gain_db != 0.0 {
-                f.push(format!("volume={}dB", num(gain_db as f64)));
-            }
-            if clip.pan != 0.0 {
-                let l = (1.0 - clip.pan as f64).min(1.0);
-                let r = (1.0 + clip.pan as f64).min(1.0);
-                f.push(format!("pan=stereo|c0={}*c0|c1={}*c1", num(l), num(r)));
-            }
-            if clip.fade_in > 0 && clip.fade_in > seg.head {
-                f.push(fade_at("afade", "in", sf.frames_to_seconds(-seg.head), sf.frames_to_seconds(clip.fade_in), ""));
-            }
-            if clip.fade_out > 0 {
-                let st = sf.frames_to_seconds(clip.end() - clip.fade_out - seg.start);
-                if st < seg_len {
-                    f.push(fade_at("afade", "out", st, sf.frames_to_seconds(clip.fade_out), ""));
-                }
-            }
-            for (span, kind) in [(incoming, "in"), (outgoing, "out")] {
-                if let Some(s) = span {
-                    f.push(fade_at("afade", kind, sf.frames_to_seconds(s.t0 - seg.start), sf.frames_to_seconds(s.len()), ":curve=tri"));
-                }
-            }
-            if lead > 0.0 {
-                f.push(format!("atrim=start={},asetpts=PTS-STARTPTS", num(lead)));
-            }
-            f.push(format!("atrim=end={}", num(seg_len - lead)));
-            let delay = (offset * sr as f64).round() as u64;
-            if delay > 0 {
-                f.push(format!("adelay=delays={delay}S:all=1"));
-            }
-            chains.push(format!("[{k}:a:0]{}[a{k}]", f.join(",")));
-            mix_inputs.push(format!("[a{k}]"));
+    let mix = audio_mix(project, seq, s, (t0, t1), inputs, s.loudness.map(|_| LOUDNORM_MARK.to_string()))?;
+    args.extend(mix.args);
+    chains.extend(mix.chains);
+    inputs += mix.inputs;
+    // Pass 1 measures the mix alone; pass 2 puts the measured values in for the mark.
+    let measure = match s.loudness {
+        Some(target) => {
+            let measuring = target.filter(None).replace(":print_format=none", ":print_format=json");
+            let m = audio_mix(project, seq, s, (t0, t1), 0, Some(measuring))?;
+            let graph_path = work_dir.join(format!("measure-{}.ffgraph", uuid::Uuid::new_v4()));
+            let mut a: Vec<OsString> = ["-hide_banner", "-nostdin", "-loglevel", "info", "-y"].iter().map(OsString::from).collect();
+            a.extend(m.args);
+            a.push("-/filter_complex".into());
+            a.push(graph_path.clone().into_os_string());
+            a.extend(["-map", "[aout]", "-progress", "pipe:1", "-nostats", "-f", "null", "-"].map(OsString::from));
+            Some(MeasurePass { args: a, graph: m.chains.join(";\n"), graph_path, target })
         }
-    }
-    let tail = format!("apad=whole_dur={d},atrim=end={d}", d = num(duration));
-    match mix_inputs.len() {
-        0 => chains.push(format!("anullsrc=r={sr}:cl=stereo,{tail}[aout]")),
-        1 => chains.push(format!("{}{tail}[aout]", mix_inputs[0])),
-        n => chains.push(format!(
-            "{}amix=inputs={n}:normalize=0:dropout_transition=0,{tail}[aout]",
-            mix_inputs.join("")
-        )),
-    }
+        None => None,
+    };
     let graph = chains.join(";\n");
 
     let graph_path = work_dir.join(format!("render-{}.ffgraph", uuid::Uuid::new_v4()));
@@ -1099,6 +1338,7 @@ pub fn plan(
         channels,
         files,
         sidecar,
+        measure,
     })
 }
 
@@ -1151,6 +1391,56 @@ pub fn render(tools: &Tools, plan: &RenderPlan, cancel: &AtomicBool, progress: i
 /// Lines of FFmpeg output kept in a job log.
 const LOG_LINES: usize = 400;
 
+fn append_log(log: &mut String, stderr: &[u8]) {
+    let text = String::from_utf8_lossy(stderr);
+    let lines: Vec<&str> = text.lines().collect();
+    let skip = lines.len().saturating_sub(LOG_LINES);
+    if skip > 0 {
+        log.push_str(&format!("… {skip} Zeilen ausgelassen\n"));
+    }
+    for l in &lines[skip..] {
+        log.push_str(l);
+        log.push('\n');
+    }
+}
+
+fn quoted(args: &[OsString]) -> String {
+    let parts: Vec<String> = args
+        .iter()
+        .map(|a| {
+            let a = a.to_string_lossy();
+            if a.contains(' ') { format!("\"{a}\"") } else { a.into_owned() }
+        })
+        .collect();
+    parts.join(" ")
+}
+
+/// Runs FFmpeg with `-progress pipe:1`, handing each key/value pair to `on`.
+/// Returns whether it succeeded (None when cancelled) and its stderr.
+fn run_ffmpeg(tools: &Tools, args: &[OsString], cancel: &AtomicBool, mut on: impl FnMut(&str, &str)) -> Result<(Option<bool>, Vec<u8>), MediaError> {
+    let mut child = crate::tools::background_command(&tools.ffmpeg).args(args).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    let stderr = child.stderr.take().expect("piped");
+    let err_thread = std::thread::spawn(move || {
+        let mut s = Vec::new();
+        let _ = BufReader::new(stderr).read_to_end(&mut s);
+        s
+    });
+    let stdout = child.stdout.take().expect("piped");
+    for line in BufReader::new(stdout).lines() {
+        if cancel.load(Ordering::Relaxed) {
+            let _ = child.kill();
+            break;
+        }
+        let Ok(line) = line else { break };
+        if let Some((key, value)) = line.split_once('=') {
+            on(key, value.trim());
+        }
+    }
+    let status = child.wait()?;
+    let err = err_thread.join().unwrap_or_default();
+    Ok((if cancel.load(Ordering::Relaxed) { None } else { Some(status.success()) }, err))
+}
+
 /// [`render`], recording the command line and FFmpeg's warnings and errors in `log`.
 pub fn render_logged(
     tools: &Tools,
@@ -1159,31 +1449,62 @@ pub fn render_logged(
     mut progress: impl FnMut(&RenderProgress),
     log: &mut String,
 ) -> Result<(), MediaError> {
-    let quoted: Vec<String> = plan
-        .args
-        .iter()
-        .map(|a| {
-            let a = a.to_string_lossy();
-            if a.contains(' ') { format!("\"{a}\"") } else { a.into_owned() }
-        })
-        .collect();
-    log.push_str(&format!("ffmpeg {}\n\n# filter graph\n{}\n\n# ffmpeg\n", quoted.join(" "), plan.graph));
-    let mut append = |stderr: &[u8]| {
-        let text = String::from_utf8_lossy(stderr);
-        let lines: Vec<&str> = text.lines().collect();
-        let skip = lines.len().saturating_sub(LOG_LINES);
-        if skip > 0 {
-            log.push_str(&format!("… {skip} Zeilen ausgelassen\n"));
-        }
-        for l in &lines[skip..] {
-            log.push_str(l);
-            log.push('\n');
-        }
-    };
     if let Some(dir) = plan.graph_path.parent() {
         fs::create_dir_all(dir)?;
     }
-    fs::write(&plan.graph_path, &plan.graph)?;
+    let started = Instant::now();
+    let mut state = RenderProgress::default();
+    let tick = |state: &mut RenderProgress, fraction: f64| {
+        state.elapsed = started.elapsed().as_secs_f64();
+        state.fraction = fraction.clamp(0.0, 1.0);
+        state.eta = (state.fraction > 0.01).then(|| state.elapsed * (1.0 - state.fraction) / state.fraction);
+    };
+
+    // Two-pass loudness normalisation: measure the mix, then put loudnorm with
+    // the measured values where the graph holds the mark.
+    let mut graph = plan.graph.clone();
+    if let Some(m) = &plan.measure {
+        log.push_str(&format!("# Lautheit messen\nffmpeg {}\n\n{}\n\n", quoted(&m.args), m.graph));
+        fs::write(&m.graph_path, &m.graph)?;
+        state.measuring = true;
+        let mut out_s = 0.0;
+        let run = run_ffmpeg(tools, &m.args, cancel, |key, value| match key {
+            "out_time_us" => out_s = value.parse::<f64>().map_or(out_s, |us| us / 1e6),
+            "progress" => {
+                tick(&mut state, out_s / plan.duration.max(1e-3));
+                progress(&state);
+            }
+            _ => {}
+        });
+        let _ = fs::remove_file(&m.graph_path);
+        let (done, err) = run?;
+        let text = String::from_utf8_lossy(&err);
+        match done {
+            None => return Err(MediaError::Cancelled),
+            Some(false) => {
+                append_log(log, &err);
+                return Err(MediaError::failed("loudness", &err));
+            }
+            Some(true) => {}
+        }
+        let Some(measured) = parse_loudnorm(&text) else {
+            append_log(log, &err);
+            return Err(MediaError::Unsupported("loudnorm printed no measurement".into()));
+        };
+        log.push_str(&format!(
+            "gemessen: {} LUFS, {} dBTP, LRA {} LU\n\n",
+            num(measured.input_i),
+            num(measured.input_tp),
+            num(measured.input_lra)
+        ));
+        // A silent mix has nothing to normalise.
+        let filter = if measured.audible() { m.target.filter(Some(measured)) } else { "anull".to_string() };
+        graph = graph.replace(LOUDNORM_MARK, &filter);
+        state = RenderProgress::default();
+    }
+
+    log.push_str(&format!("ffmpeg {}\n\n# filter graph\n{}\n\n# ffmpeg\n", quoted(&plan.args), graph));
+    fs::write(&plan.graph_path, &graph)?;
     for (path, text) in &plan.files {
         fs::write(path, text)?;
     }
@@ -1196,60 +1517,34 @@ pub fn render_logged(
             let _ = fs::remove_file(&plan.partial_path);
         }
     };
-    let mut child = match crate::tools::background_command(&tools.ffmpeg)
-        .args(&plan.args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
-        Ok(c) => c,
+    let run = run_ffmpeg(tools, &plan.args, cancel, |key, value| match key {
+        "frame" => state.frame = value.parse().unwrap_or(state.frame),
+        "speed" => state.speed = value.trim_end_matches('x').parse().ok(),
+        "progress" => {
+            let f = state.frame as f64 / plan.frames as f64;
+            tick(&mut state, f);
+            progress(&state);
+        }
+        _ => {}
+    });
+    let (done, err) = match run {
+        Ok(r) => r,
         Err(e) => {
             cleanup(false);
-            return Err(e.into());
+            return Err(e);
         }
     };
-    let stderr = child.stderr.take().expect("piped");
-    let err_thread = std::thread::spawn(move || {
-        let mut s = Vec::new();
-        let _ = BufReader::new(stderr).read_to_end(&mut s);
-        s
-    });
-    let started = Instant::now();
-    let mut state = RenderProgress::default();
-    let stdout = child.stdout.take().expect("piped");
-    for line in BufReader::new(stdout).lines() {
-        if cancel.load(Ordering::Relaxed) {
-            let _ = child.kill();
-            let _ = child.wait();
-            append(&err_thread.join().unwrap_or_default());
+    append_log(log, &err);
+    match done {
+        None => {
             cleanup(true);
             return Err(MediaError::Cancelled);
         }
-        let Ok(line) = line else { break };
-        let Some((key, value)) = line.split_once('=') else { continue };
-        let value = value.trim();
-        match key {
-            "frame" => state.frame = value.parse().unwrap_or(state.frame),
-            "speed" => state.speed = value.trim_end_matches('x').parse().ok(),
-            "progress" => {
-                state.elapsed = started.elapsed().as_secs_f64();
-                state.fraction = (state.frame as f64 / plan.frames as f64).clamp(0.0, 1.0);
-                state.eta = (state.fraction > 0.01).then(|| state.elapsed * (1.0 - state.fraction) / state.fraction);
-                progress(&state);
-            }
-            _ => {}
+        Some(false) => {
+            cleanup(true);
+            return Err(MediaError::failed("export", &err));
         }
-    }
-    let status = child.wait()?;
-    let err = err_thread.join().unwrap_or_default();
-    append(&err);
-    if cancel.load(Ordering::Relaxed) {
-        cleanup(true);
-        return Err(MediaError::Cancelled);
-    }
-    if !status.success() {
-        cleanup(true);
-        return Err(MediaError::failed("export", &err));
+        Some(true) => {}
     }
     cleanup(false);
     fs::rename(&plan.partial_path, &plan.output)?;
@@ -1340,6 +1635,7 @@ mod tests {
             use_in_out: false,
             subtitles: Default::default(),
             title_files: Default::default(),
+            loudness: None,
         }
     }
 
@@ -1531,5 +1827,115 @@ mod tests {
         let plan = plan(&p, p.sequence(seq).unwrap(), &settings(), Path::new("C:/tmp"), &[]).unwrap();
         assert_eq!(plan.inputs, 1);
         assert!(plan.graph.contains("anullsrc"));
+    }
+
+    #[test]
+    fn audio_effects_build_the_fixture_filters() {
+        // The preview's DSP is checked against FFmpeg running exactly these strings.
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/parity/audio.json");
+        let fixture: serde_json::Value = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+        let sr = fixture["sampleRate"].as_u64().unwrap() as u32;
+        for c in fixture["cases"].as_array().unwrap() {
+            let kind: AudioEffectKind = serde_json::from_value(c["effect"].clone()).unwrap();
+            let e = AudioEffect { id: uuid::Uuid::nil(), enabled: true, kind };
+            assert_eq!(audio_effect_filters(&[e], sr, false).join(","), c["filter"].as_str().unwrap());
+        }
+    }
+
+    #[test]
+    fn audio_effects_skip_what_does_nothing() {
+        let band = |shape, freq, gain_db| EqBand { shape, freq, gain_db, q: 1.0, enabled: true };
+        let eq = AudioEffect {
+            id: uuid::Uuid::nil(),
+            enabled: true,
+            kind: AudioEffectKind::Eq { bands: vec![band(EqShape::Peak, 1000.0, 0.0), band(EqShape::LowPass, 15_000.0, 0.0), band(EqShape::HighShelf, 9000.0, 2.0)] },
+        };
+        // At 22.05 kHz the low-pass is above Nyquist; the 0 dB peak changes nothing.
+        assert_eq!(audio_effect_filters(std::slice::from_ref(&eq), 22_050, true), vec!["highshelf=f=9000:t=s:w=1:g=2:r=f64"]);
+        let off = AudioEffect { enabled: false, ..eq };
+        assert!(audio_effect_filters(&[off], 48_000, true).is_empty());
+        let lim = AudioEffect { id: uuid::Uuid::nil(), enabled: true, kind: AudioEffectKind::Limiter { ceiling_db: -1.0, release_ms: 50.0 } };
+        assert_eq!(audio_effect_filters(&[lim], 48_000, true), vec!["alimiter=limit=0.891250938:attack=5:release=50:asc=0:level=0:latency=1"]);
+    }
+
+    #[test]
+    fn pan_follows_the_stereo_panner() {
+        assert_eq!(pan_matrix(stereo_pan(0.0)), "pan=stereo|c0=1*c0|c1=1*c1");
+        assert_eq!(pan_matrix(stereo_pan(-1.0)), "pan=stereo|c0=1*c0+1*c1|c1=0*c0");
+        assert_eq!(pan_matrix(stereo_pan(0.5)), "pan=stereo|c0=0.707107*c0|c1=0.707107*c0+1*c1");
+        assert_eq!(pan_matrix(ChannelMap::Left.matrix().map(|r| r.map(f64::from))), "pan=stereo|c0=1*c0|c1=1*c0");
+    }
+
+    #[test]
+    fn audio_routes_channels_effects_and_track_submix() {
+        let (mut p, seq) = project_with_clip();
+        if let Some(a) = p.media[0].info.as_mut().and_then(|i| i.audio.as_mut()) {
+            a.channels = 1;
+        }
+        let comp = AudioEffect {
+            id: uuid::Uuid::nil(),
+            enabled: true,
+            kind: AudioEffectKind::Compressor { threshold_db: -20.0, ratio: 4.0, attack_ms: 5.0, release_ms: 80.0, knee_db: 6.0, makeup_db: 0.0 },
+        };
+        {
+            let s = p.sequence_mut(seq).unwrap();
+            let track = s.tracks.iter_mut().find(|t| t.kind == TrackKind::Audio && !t.clips.is_empty()).unwrap();
+            track.volume_db = -6.0;
+            track.mono = true;
+            track.effects = vec![comp.clone()];
+            let clip = &mut track.clips[0];
+            clip.channels = ChannelMap::Swap;
+            clip.pan = -0.5;
+            clip.volume_db = 2.0;
+            clip.audio_effects = vec![AudioEffect { kind: AudioEffectKind::Limiter { ceiling_db: -6.0, release_ms: 30.0 }, ..comp }];
+        }
+        let plan = plan(&p, p.sequence(seq).unwrap(), &settings(), Path::new("C:/tmp"), &[]).unwrap();
+        let g = &plan.graph;
+        // Mono source on both sides at full level, then the map, the effects, the clip gain alone, the pan.
+        let order = ["pan=stereo|c0=c0|c1=c0", "aformat=", "pan=stereo|c0=1*c1|c1=1*c0", "alimiter=limit=0.501187234", "volume=2dB", "pan=stereo|c0=1*c0+0.707107*c1|c1=0.707107*c1"];
+        let at: Vec<usize> = order.iter().map(|f| g.find(f).unwrap_or_else(|| panic!("{f} missing in {g}"))).collect();
+        assert!(at.windows(2).all(|w| w[0] < w[1]), "{g}");
+        // The track: folded to mono, compressed, then its volume.
+        assert!(g.contains("[a1]pan=stereo|c0=0.5*c0+0.5*c1|c1=0.5*c0+0.5*c1,acompressor=threshold=0.1:ratio=4"), "{g}");
+        assert!(g.contains(":link=average,volume=-6dB[at"), "{g}");
+        assert!(plan.measure.is_none());
+    }
+
+    #[test]
+    fn loudness_is_measured_first() {
+        let (p, seq) = project_with_clip();
+        let s = ExportSettings { loudness: Some(LoudnessTarget { integrated: -14.0, true_peak: -1.0 }), ..settings() };
+        let plan = plan(&p, p.sequence(seq).unwrap(), &s, Path::new("C:/tmp"), &[]).unwrap();
+        assert!(plan.graph.contains(&format!(",{LOUDNORM_MARK},aresample=48000,apad=")), "{}", plan.graph);
+        let m = plan.measure.unwrap();
+        assert!(m.graph.contains("loudnorm=I=-14:TP=-1:LRA=50:print_format=json,aresample=48000"), "{}", m.graph);
+        // The measuring pass reads only the audio input, as input 0.
+        assert!(m.graph.contains("[0:a:0]"), "{}", m.graph);
+        let args: Vec<String> = m.args.iter().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert_eq!(args.iter().filter(|a| *a == "-i").count(), 1);
+        assert!(args.ends_with(&["-f".into(), "null".into(), "-".into()]));
+
+        let log = r#"[Parsed_loudnorm_3 @ 000001]
+{
+	"input_i" : "-27.61",
+	"input_tp" : "-4.47",
+	"input_lra" : "18.06",
+	"input_thresh" : "-39.20",
+	"output_i" : "-14.00",
+	"output_tp" : "-1.00",
+	"output_lra" : "17.00",
+	"output_thresh" : "-25.20",
+	"normalization_type" : "linear",
+	"target_offset" : "0.01"
+}
+[out#0/null @ 000002] video:0KiB audio:1KiB"#;
+        let measured = parse_loudnorm(log).unwrap();
+        assert!(measured.audible());
+        assert_eq!(
+            m.target.filter(Some(measured)),
+            "loudnorm=I=-14:TP=-1:LRA=50:print_format=none:measured_I=-27.61:measured_TP=-4.47:measured_LRA=18.06:measured_thresh=-39.2:offset=0.01:linear=true"
+        );
+        let silent = log.replace("\"-27.61\"", "\"-inf\"");
+        assert!(!parse_loudnorm(&silent).unwrap().audible());
     }
 }

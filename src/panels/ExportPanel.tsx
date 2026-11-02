@@ -134,6 +134,13 @@ function estimateBytes(s: ExportSettings, seconds: number): { bytes: number; exa
   return { bytes: ((video + audio) * seconds) / 8, exact };
 }
 
+const LOUDNESS_PRESETS = [
+  { value: -14, label: "−14 LUFS · Streaming" },
+  { value: -16, label: "−16 LUFS · Podcast" },
+  { value: -23, label: "−23 LUFS · EBU R128" },
+  { value: -24, label: "−24 LUFS · ATSC A/85" },
+];
+
 const hwFor = (codec: VideoCodec, encoders: string[] | null) =>
   (encoders ?? []).filter((e) => e.startsWith(codec === "hevc" ? "hevc_" : codec === "h264" ? "h264_" : "none"));
 
@@ -395,6 +402,24 @@ export function ExportPanel() {
           <Field label="Abtastrate">
             <Select width={110} value={s.sampleRate} onChange={(v) => upd({ sampleRate: v })} options={[44100, 48000].map((r) => ({ value: r, label: `${r / 1000} kHz` }))} />
           </Field>
+          <Field label="Lautheit">
+            <Select
+              width={170}
+              label="Lautheit normalisieren"
+              value={s.loudness ? (LOUDNESS_PRESETS.some((p) => p.value === s.loudness!.integrated) ? String(s.loudness.integrated) : "custom") : "off"}
+              onChange={(v) => upd({ loudness: v === "off" ? null : { integrated: v === "custom" ? (s.loudness?.integrated ?? -18) : Number(v), truePeak: s.loudness?.truePeak ?? -1 } })}
+              options={[{ value: "off", label: "Unverändert" }, ...LOUDNESS_PRESETS.map((p) => ({ value: String(p.value), label: p.label })), { value: "custom", label: "Eigener Zielwert" }]}
+            />
+          </Field>
+          {s.loudness && (
+            <>
+              <Field label="Ziel">
+                <NumberField label="Integrierte Lautheit" value={s.loudness.integrated} min={-70} max={-5} step={0.1} precision={1} unit=" LUFS" width={92} onCommit={(v) => upd({ loudness: { ...s.loudness!, integrated: v } })} />
+                <NumberField label="True Peak" value={s.loudness.truePeak} min={-9} max={0} step={0.1} precision={1} unit=" dBTP" width={86} onCommit={(v) => upd({ loudness: { ...s.loudness!, truePeak: v } })} />
+              </Field>
+              <p className="pb-1 text-[10.5px] leading-relaxed text-fg-4">Zwei Durchgänge: Kerf misst die fertige Mischung und verstärkt sie dann gleichmäßig auf den Zielwert. Lassen die Spitzen das nicht zu, regelt FFmpeg (loudnorm) dynamisch nach.</p>
+            </>
+          )}
         </Section>
         {seq.subtitles.cues.length > 0 && (
           <Section title="Untertitel">
@@ -560,7 +585,7 @@ function RenderQueue({ jobs }: { jobs: ExportJob[] }) {
             <>
               <Progress value={j.progress.fraction} indeterminate={j.status === "queued"} />
               <div className="tc flex justify-between text-[10.5px] text-fg-3">
-                <span>{j.status === "queued" ? "Wartet …" : `${Math.round(j.progress.fraction * 100)} %${j.progress.speed ? ` · ${j.progress.speed.toFixed(1).replace(".", ",")}×` : ""}`}</span>
+                <span>{j.status === "queued" ? "Wartet …" : `${j.progress.measuring ? "Lautheit messen · " : ""}${Math.round(j.progress.fraction * 100)} %${j.progress.speed && !j.progress.measuring ? ` · ${j.progress.speed.toFixed(1).replace(".", ",")}×` : ""}`}</span>
                 <span>{j.progress.eta !== null && j.status === "running" ? `noch ${formatDuration(j.progress.eta)}` : ""}</span>
               </div>
             </>

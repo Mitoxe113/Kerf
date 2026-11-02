@@ -387,6 +387,7 @@ export function NumberField({
   format,
   parse,
   label,
+  disabled,
 }: {
   value: number;
   onCommit: (v: number) => void;
@@ -400,6 +401,7 @@ export function NumberField({
   format?: (v: number) => string;
   parse?: (s: string) => number | null;
   label?: string;
+  disabled?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState("");
@@ -434,7 +436,8 @@ export function NumberField({
   return (
     <button
       aria-label={label}
-      className="tc flex h-6 cursor-ew-resize items-center justify-end gap-0.5 rounded-sm bg-field px-1.5 text-xs text-fg hover:bg-hover"
+      disabled={disabled}
+      className="tc flex h-6 cursor-ew-resize items-center justify-end gap-0.5 rounded-sm bg-field px-1.5 text-xs text-fg hover:bg-hover disabled:cursor-default disabled:opacity-40 disabled:hover:bg-field"
       style={{ width }}
       onPointerDown={(e) => {
         e.currentTarget.setPointerCapture(e.pointerId);

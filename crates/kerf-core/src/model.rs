@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub use crate::audio::{AudioEffect, AudioEffectKind, ChannelMap, EqBand, EqShape};
 pub use crate::text::{Cue, Subtitles, TextAlign, TextStyle, TitleSpec};
 use crate::time::{Frame, Rational};
 
@@ -413,6 +414,12 @@ pub struct Track {
     /// Row height in px; 0 = the timeline default.
     #[serde(default)]
     pub height: u16,
+    /// Audio tracks: effects on the track's mix, before its volume.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effects: Vec<AudioEffect>,
+    /// Audio tracks: the mix is folded to mono (same on both sides).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mono: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -532,6 +539,8 @@ impl Track {
             volume_db: 0.0,
             color: LabelColor::None,
             height: 0,
+            effects: Vec::new(),
+            mono: false,
         }
     }
 
@@ -549,6 +558,8 @@ impl Track {
             volume_db: self.volume_db,
             color: self.color,
             height: self.height,
+            effects: self.effects.clone(),
+            mono: self.mono,
         }
     }
 }
@@ -605,6 +616,12 @@ pub struct Clip {
     /// valid while that clip ends exactly where this one starts).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transition: Option<Transition>,
+    /// Audio effects in order, before the clip volume (audio clips).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub audio_effects: Vec<AudioEffect>,
+    /// Routing of the source channels (audio clips).
+    #[serde(default, skip_serializing_if = "ChannelMap::is_stereo")]
+    pub channels: ChannelMap,
 }
 
 impl Clip {
@@ -630,6 +647,8 @@ impl Clip {
             keys: BTreeMap::new(),
             effects: Vec::new(),
             transition: None,
+            audio_effects: Vec::new(),
+            channels: ChannelMap::Stereo,
         }
     }
 

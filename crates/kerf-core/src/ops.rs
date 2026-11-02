@@ -50,6 +50,9 @@ pub struct TrackPatch {
     pub color: Option<LabelColor>,
     /// Row height in px; 0 resets to the timeline default.
     pub height: Option<u16>,
+    /// Audio tracks: effects on the track mix.
+    pub effects: Option<Vec<AudioEffect>>,
+    pub mono: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -75,6 +78,7 @@ pub struct ClipPatch {
     pub fade_out: Option<Frame>,
     pub color: Option<ColorAdjust>,
     pub label: Option<LabelColor>,
+    pub channels: Option<ChannelMap>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -92,6 +96,19 @@ pub struct MarkerPatch {
 pub struct ClipGain {
     pub clip: Uuid,
     pub volume_db: f32,
+    /// Also ends the clip's effects with a limiter holding the clip's output
+    /// at this ceiling (dBFS), replacing a limiter that already ends them.
+    /// The effects run before the clip volume, so the limiter's own ceiling
+    /// is this minus the new volume.
+    #[serde(default)]
+    pub limit_db: Option<f32>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioEffectsEdit {
+    pub clip: Uuid,
+    pub effects: Vec<AudioEffect>,
 }
 
 /// A clip on the clipboard together with where it came from.
@@ -197,6 +214,8 @@ pub enum EditCommand {
     SetEffects { sequence: Uuid, clips: Vec<Uuid>, effects: Vec<Effect> },
     /// Sets or removes the transition into each clip from its left neighbour.
     SetTransitions { sequence: Uuid, items: Vec<TransitionEdit> },
+    /// Replaces the audio effects of audio clips, each with its own list.
+    SetAudioEffects { sequence: Uuid, items: Vec<AudioEffectsEdit> },
     /// Sets the gain of several audio clips in one step (normalizing); volume
     /// keyframes move by the same amount.
     SetClipGain { sequence: Uuid, gains: Vec<ClipGain> },
@@ -259,6 +278,7 @@ impl EditCommand {
             C::SetKeyframes { .. } => "setKeyframes",
             C::SetEffects { .. } => "setEffects",
             C::SetTransitions { .. } => "setTransition",
+            C::SetAudioEffects { .. } => "setAudioEffects",
             C::SetClipGain { .. } => "normalizeAudio",
             C::LinkClips { .. } => "linkClips",
             C::UnlinkClips { .. } => "unlinkClips",
@@ -295,6 +315,7 @@ impl EditCommand {
             | C::SetKeyframes { sequence, .. }
             | C::SetEffects { sequence, .. }
             | C::SetTransitions { sequence, .. }
+            | C::SetAudioEffects { sequence, .. }
             | C::SetClipGain { sequence, .. }
             | C::LinkClips { sequence, .. }
             | C::UnlinkClips { sequence, .. }
@@ -592,6 +613,17 @@ fn edit_sequence(seq: &mut Sequence, media: &[MediaAsset], cmd: &EditCommand, ou
             if let Some(v) = patch.height {
                 t.height = if v == 0 { 0 } else { v.clamp(24, 320) };
             }
+            if patch.effects.is_some() || patch.mono.is_some() {
+                if t.kind != TrackKind::Audio {
+                    return Err(EditError::Invalid("track effects apply to audio tracks".into()));
+                }
+                if let Some(e) = &patch.effects {
+                    t.effects = crate::audio::sanitize_effects(e).ok_or_else(|| EditError::Invalid("audio effect parameter".into()))?;
+                }
+                if let Some(v) = patch.mono {
+                    t.mono = v;
+                }
+            }
             Ok(*t != before)
         }
         C::PlaceMedia { media: media_id, video_track, audio_track, at, mode, source_in, source_out, match_sequence, .. } => {
@@ -628,6 +660,7 @@ fn edit_sequence(seq: &mut Sequence, media: &[MediaAsset], cmd: &EditCommand, ou
         C::SetKeyframes { clip, param, keys, .. } => set_keyframes(seq, *clip, *param, keys),
         C::SetEffects { clips, effects, .. } => set_effects(seq, clips, effects),
         C::SetTransitions { items, .. } => set_transitions(seq, items),
+        C::SetAudioEffects { items, .. } => set_audio_effects(seq, items),
         C::SetClipGain { gains, .. } => set_clip_gain(seq, gains),
         C::RemoveRange { start, end, ripple, tracks, .. } => remove_range(seq, *start, *end, *ripple, tracks.as_deref()),
         C::ReplaceMedia { clip, media: id, .. } => replace_media(seq, media, *clip, *id),
@@ -1571,6 +1604,29 @@ fn set_transitions(seq: &mut Sequence, items: &[TransitionEdit]) -> Result<bool>
     Ok(changed)
 }
 
+fn set_audio_effects(seq: &mut Sequence, items: &[AudioEffectsEdit]) -> Result<bool> {
+    let mut at = Vec::with_capacity(items.len());
+    for item in items {
+        let (ti, ci) = seq.locate(item.clip).ok_or(EditError::ClipNotFound)?;
+        let t = &seq.tracks[ti];
+        if t.locked {
+            return Err(EditError::TrackLocked);
+        }
+        if t.kind != TrackKind::Audio {
+            return Err(EditError::Invalid("audio effects apply to audio clips".into()));
+        }
+        let clean = crate::audio::sanitize_effects(&item.effects).ok_or_else(|| EditError::Invalid("audio effect parameter".into()))?;
+        at.push((ti, ci, clean));
+    }
+    let mut changed = false;
+    for (ti, ci, effects) in at {
+        let c = &mut seq.tracks[ti].clips[ci];
+        changed |= c.audio_effects != effects;
+        c.audio_effects = effects;
+    }
+    Ok(changed)
+}
+
 fn set_clip_gain(seq: &mut Sequence, gains: &[ClipGain]) -> Result<bool> {
     // Validate everything first so a bad entry leaves the sequence untouched.
     let mut at = Vec::with_capacity(gains.len());
@@ -1580,7 +1636,7 @@ fn set_clip_gain(seq: &mut Sequence, gains: &[ClipGain]) -> Result<bool> {
         if t.locked {
             return Err(EditError::TrackLocked);
         }
-        if t.kind != TrackKind::Audio || !g.volume_db.is_finite() {
+        if t.kind != TrackKind::Audio || !g.volume_db.is_finite() || g.limit_db.is_some_and(|v| !v.is_finite()) {
             return Err(EditError::Invalid("gain applies to audio clips".into()));
         }
         at.push((ti, ci));
@@ -1590,6 +1646,20 @@ fn set_clip_gain(seq: &mut Sequence, gains: &[ClipGain]) -> Result<bool> {
     for (g, (ti, ci)) in gains.iter().zip(at) {
         let c = &mut seq.tracks[ti].clips[ci];
         let target = g.volume_db.clamp(lo, hi);
+        if let Some(ceiling) = g.limit_db {
+            let limiter = AudioEffectKind::Limiter { ceiling_db: ceiling - target, release_ms: 50.0 }.sanitized().expect("finite");
+            match c.audio_effects.last_mut() {
+                Some(e) if matches!(e.kind, AudioEffectKind::Limiter { .. }) => {
+                    changed |= e.kind != limiter || !e.enabled;
+                    e.kind = limiter;
+                    e.enabled = true;
+                }
+                _ => {
+                    c.audio_effects.push(AudioEffect { id: Uuid::new_v4(), enabled: true, kind: limiter });
+                    changed = true;
+                }
+            }
+        }
         let delta = target - c.volume_db;
         if delta == 0.0 {
             continue;
@@ -1752,6 +1822,9 @@ fn update_clips(seq: &mut Sequence, media: &[MediaAsset], ids: &[Uuid], p: &Clip
         }
         if let Some(l) = p.label {
             c.label = l;
+        }
+        if let Some(m) = p.channels {
+            c.channels = m;
         }
         if let Some(s) = p.speed {
             if !s.is_finite() {
@@ -2190,7 +2263,7 @@ mod tests {
         let b = fx.place(100, Some(0), Some(50), PlaceMode::Overwrite)[1];
         let k = |at, value| Keyframe { at, value, ease: Ease::Linear };
         fx.run(EditCommand::SetKeyframes { sequence: fx.seq, clip: a, param: Param::Volume, keys: vec![k(0, -6.0), k(50, 0.0)] });
-        let gains = vec![ClipGain { clip: a, volume_db: 4.5 }, ClipGain { clip: b, volume_db: -200.0 }];
+        let gains = vec![ClipGain { clip: a, volume_db: 4.5, limit_db: None }, ClipGain { clip: b, volume_db: -200.0, limit_db: None }];
         let out = fx.run(EditCommand::SetClipGain { sequence: fx.seq, gains });
         assert_eq!(out.label, "normalizeAudio");
         let clips = &fx.a1().clips;
@@ -2199,8 +2272,41 @@ mod tests {
         assert_eq!(clips[1].volume_db, Param::Volume.range().0, "clamped");
         // Video clips have no gain; nothing changes when one is included.
         let before = fx.clone_project();
-        assert!(apply(&mut fx.p, &EditCommand::SetClipGain { sequence: fx.seq, gains: vec![ClipGain { clip: b, volume_db: 0.0 }, ClipGain { clip: v, volume_db: 1.0 }] }).is_err());
+        assert!(apply(&mut fx.p, &EditCommand::SetClipGain { sequence: fx.seq, gains: vec![ClipGain { clip: b, volume_db: 0.0, limit_db: None }, ClipGain { clip: v, volume_db: 1.0, limit_db: None }] }).is_err());
         assert_eq!(fx.p, before);
+    }
+
+    #[test]
+    fn audio_effects_channels_and_track_mix() {
+        let mut fx = Fx::new(10.0, true);
+        let created = fx.place(0, Some(0), Some(100), PlaceMode::Overwrite);
+        let (v, a) = (created[0], created[1]);
+        let comp = AudioEffect {
+            id: Uuid::new_v4(),
+            enabled: true,
+            kind: AudioEffectKind::Compressor { threshold_db: -100.0, ratio: 4.0, attack_ms: 10.0, release_ms: 100.0, knee_db: 6.0, makeup_db: 2.0 },
+        };
+        let set = |clip, effects: Vec<AudioEffect>| EditCommand::SetAudioEffects { sequence: fx.seq, items: vec![AudioEffectsEdit { clip, effects }] };
+        assert!(apply(&mut fx.p, &set(v, vec![comp.clone()])).is_err(), "video clips have no audio effects");
+        let out = fx.run(set(a, vec![comp.clone()]));
+        assert_eq!(out.label, "setAudioEffects");
+        assert!(matches!(fx.a1().clips[0].audio_effects[0].kind, AudioEffectKind::Compressor { threshold_db, .. } if threshold_db == -60.0));
+        // Normalising with a limiter appends one, a second time replaces it.
+        for ceiling in [-1.0, -2.0] {
+            fx.run(EditCommand::SetClipGain { sequence: fx.seq, gains: vec![ClipGain { clip: a, volume_db: 3.0, limit_db: Some(ceiling) }] });
+        }
+        let kinds: Vec<_> = fx.a1().clips[0].audio_effects.iter().map(|e| e.kind.clone()).collect();
+        assert_eq!(kinds.len(), 2);
+        // Ahead of the +3 dB clip volume: 3 dB lower.
+        assert_eq!(kinds[1], AudioEffectKind::Limiter { ceiling_db: -5.0, release_ms: 50.0 });
+        fx.run(EditCommand::UpdateClips { sequence: fx.seq, clips: vec![a], patch: ClipPatch { channels: Some(ChannelMap::Left), ..Default::default() } });
+        assert_eq!(fx.a1().clips[0].channels, ChannelMap::Left);
+        // Track mix: effects and mono only on audio tracks.
+        let (vt, at) = (fx.v1().id, fx.a1().id);
+        let patch = TrackPatch { effects: Some(vec![comp]), mono: Some(true), ..Default::default() };
+        assert!(apply(&mut fx.p, &EditCommand::UpdateTrack { sequence: fx.seq, track: vt, patch: patch.clone() }).is_err());
+        fx.run(EditCommand::UpdateTrack { sequence: fx.seq, track: at, patch });
+        assert!(fx.a1().mono && fx.a1().effects.len() == 1);
     }
 
     #[test]

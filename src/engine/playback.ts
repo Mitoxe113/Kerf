@@ -10,7 +10,7 @@ import { fpsOf } from "../lib/time";
 import { animate } from "../lib/keys";
 import { previewSource } from "../lib/media";
 import type { Clip, ClipPatch, MediaAsset, Sequence, Subtitles, TitleSpec, Track, Uuid } from "../lib/types";
-import { AudioMixer } from "./audio";
+import { AudioMixer, effectsMessage } from "./audio";
 import { transitionInto, type TransitionSpan } from "../timeline/geometry";
 import { Compositor, type DrawItem, type Layer, type LayerSource } from "./compositor";
 import { activeEffects } from "./effects";
@@ -31,6 +31,10 @@ interface Voice {
   pending: number | null;
   lastUsed: number;
   // audio only
+  source?: MediaElementAudioSourceNode;
+  /** Clip effects and channel map, between the source and the gain. */
+  fx?: AudioWorkletNode;
+  fxSent?: string;
   gain?: GainNode;
   pan?: StereoPannerNode;
   track?: Uuid;
@@ -100,10 +104,16 @@ export class PlaybackEngine {
   loop = false;
   readonly mixer = new AudioMixer();
 
+  constructor() {
+    this.mixer.onEffectsReady = () => this.requestRender();
+  }
+
   private seq: Sequence | null = null;
   private media = new Map<Uuid, MediaAsset>();
   private opts: EngineOptions = { useProxies: false, quality: 1 };
   private overrides = new Map<Uuid, Partial<Clip>>();
+  /** Live track changes (mixer fader, track effects) until the edit is committed. */
+  private trackOverrides = new Map<Uuid, Partial<Track>>();
   /** Live title and subtitle-style edits (inspector), keyed by media id. */
   private titleOverrides = new Map<Uuid, TitleSpec>();
   private subtitleOverride: Subtitles | null = null;
@@ -190,6 +200,13 @@ export class PlaybackEngine {
   setOverride(clip: Uuid, patch: Partial<Clip> | ClipPatch | null) {
     if (patch) this.overrides.set(clip, { ...this.overrides.get(clip), ...patch });
     else this.overrides.delete(clip);
+    this.requestRender();
+  }
+
+  /** Live, uncommitted track changes (null = stored). */
+  setTrackOverride(track: Uuid, patch: Partial<Track> | null) {
+    if (patch) this.trackOverrides.set(track, { ...this.trackOverrides.get(track), ...patch });
+    else this.trackOverrides.delete(track);
     this.requestRender();
   }
 
@@ -408,10 +425,14 @@ export class PlaybackEngine {
         el.addEventListener("loadeddata", () => this.requestRender());
         if (kind === "audio") {
           const ctx = this.mixer.context();
-          const node = ctx.createMediaElementSource(el);
+          v.source = ctx.createMediaElementSource(el);
           v.gain = ctx.createGain();
+          // Mono media plays on both sides at full level, as in the export.
+          v.gain.channelCount = 2;
+          v.gain.channelCountMode = "explicit";
+          v.gain.channelInterpretation = "speakers";
           v.pan = ctx.createStereoPanner();
-          node.connect(v.gain).connect(v.pan);
+          v.source.connect(v.gain).connect(v.pan);
         }
       }
       this.voices.set(key, v);
@@ -520,6 +541,7 @@ export class PlaybackEngine {
             const g = dbToGain(animate(c, frame).volumeDb) * fadeGain(c, frame) * weight;
             v.gain.gain.setTargetAtTime(g, ctx.currentTime, 0.01);
             v.pan.pan.setTargetAtTime(c.pan, ctx.currentTime, 0.01);
+            this.syncEffects(v, c);
             if (v.track !== track.id) {
               v.pan.disconnect();
               v.pan.connect(this.mixer.bus(track.id));
@@ -531,7 +553,9 @@ export class PlaybackEngine {
       }
       if (kind === "audio") {
         const audible = !track.muted && (!anySolo || track.solo);
-        this.mixer.setBusGain(track.id, audible ? dbToGain(track.volumeDb) : 0);
+        const t = { ...track, ...this.trackOverrides.get(track.id) };
+        this.mixer.setBusGain(track.id, audible ? dbToGain(t.volumeDb) : 0);
+        this.mixer.setBusEffects(track.id, t.effects, !!t.mono);
       }
       if (ahead > 0) {
         const next = nextClipAfter(track, frame);
@@ -554,6 +578,28 @@ export class PlaybackEngine {
     }
   }
 
+  /** Puts the clip's effects node in or out and sends it changed settings. */
+  private syncEffects(v: Voice, c: Clip) {
+    if (!v.source || !v.gain) return;
+    const msg = effectsMessage(c.audioEffects, c.channels);
+    const key = msg ? JSON.stringify(msg) : "";
+    if (key === (v.fxSent ?? "")) return;
+    if (msg && !v.fx) {
+      const fx = this.mixer.effectsNode();
+      if (!fx) return; // still loading; onEffectsReady syncs again
+      v.source.disconnect();
+      v.source.connect(fx).connect(v.gain);
+      v.fx = fx;
+    } else if (!msg && v.fx) {
+      v.source.disconnect();
+      v.fx.disconnect();
+      v.fx = undefined;
+      v.source.connect(v.gain);
+    }
+    if (msg) v.fx!.port.postMessage(msg);
+    v.fxSent = key;
+  }
+
   private releaseVoice(v: Voice) {
     this.voices.delete(v.key);
     this.compositor?.release(v.key);
@@ -562,6 +608,7 @@ export class PlaybackEngine {
       v.el.removeAttribute("src");
       v.el.load();
     }
+    v.fx?.disconnect();
     v.gain?.disconnect();
     v.pan?.disconnect();
   }

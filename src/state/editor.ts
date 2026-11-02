@@ -126,6 +126,7 @@ export type Dialog =
   | { kind: "recovery" }
   | { kind: "versions" }
   | { kind: "normalize"; clips: Uuid[] }
+  | { kind: "trackEffects"; sequence: Uuid; track: Uuid }
   | { kind: "curve"; sequence: Uuid; clip: Uuid; params: KeyParam[]; at: number }
   | { kind: "palette"; query: string }
   | { kind: "preferences" }

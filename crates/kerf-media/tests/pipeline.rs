@@ -8,7 +8,7 @@ use kerf_core::history::History;
 use kerf_core::model::*;
 use kerf_core::ops::{ClipPatch, EditCommand, PlaceMode, TransitionEdit};
 use kerf_core::time::Rational;
-use kerf_media::render::{self, AudioCodec, ExportSettings, RateControl, VideoCodec};
+use kerf_media::render::{self, AudioCodec, ExportSettings, LoudnessTarget, RateControl, VideoCodec};
 use kerf_media::{analysis, probe, Tools};
 use uuid::Uuid;
 
@@ -213,6 +213,7 @@ fn edit_and_render_real_media() {
         use_in_out: false,
         subtitles: Default::default(),
         title_files: Default::default(),
+        loudness: None,
     };
     let plan = render::plan(&p, sequence, &settings, d, &[]).unwrap();
     assert_eq!(plan.inputs, 6, "2 video halves + still + 2 audio halves + tone\n{}", plan.graph);
@@ -288,6 +289,7 @@ fn cancelled_render_leaves_no_file() {
         use_in_out: false,
         subtitles: Default::default(),
         title_files: Default::default(),
+        loudness: None,
     };
     let plan = render::plan(&p, p.sequence(seq).unwrap(), &settings, dir.path(), &[]).unwrap();
     let cancel = AtomicBool::new(false);
@@ -377,6 +379,7 @@ fn keyframed_position_opacity_and_volume_render() {
         use_in_out: false,
         subtitles: Default::default(),
         title_files: Default::default(),
+        loudness: None,
     };
     let plan = render::plan(&p, p.sequence(seq).unwrap(), &export, dir.path(), &[]).unwrap();
     render::render(&tools, &plan, &AtomicBool::new(false), |_| {}).expect("render with keyframes");
@@ -435,6 +438,7 @@ fn animated_colour_renders() {
         use_in_out: false,
         subtitles: Default::default(),
         title_files: Default::default(),
+        loudness: None,
     };
     let plan = render::plan(&p, p.sequence(seq).unwrap(), &export, dir.path(), &[]).unwrap();
     render::render(&tools, &plan, &AtomicBool::new(false), |_| {}).expect("render with colour keys");
@@ -495,6 +499,7 @@ fn effect_stack_renders() {
         use_in_out: false,
         subtitles: Default::default(),
         title_files: Default::default(),
+        loudness: None,
     };
     let plan = render::plan(&p, p.sequence(seq).unwrap(), &export, dir.path(), &[]).unwrap();
     let mut log = String::new();
@@ -572,6 +577,7 @@ fn subtitles_burn_embed_and_sidecar() {
             embed: true,
         },
         title_files: Default::default(),
+        loudness: None,
     };
     let plan = render::plan(&p, p.sequence(seq).unwrap(), &export, dir.path(), &[]).unwrap();
     let mut log = String::new();
@@ -649,6 +655,7 @@ fn transitions_render() {
             use_in_out: range.is_some(),
             subtitles: Default::default(),
             title_files: Default::default(),
+            loudness: None,
         };
         let plan = render::plan(p, p.sequence(seq).unwrap(), &export, dir.path(), &[]).unwrap();
         let mut log = String::new();
@@ -700,4 +707,126 @@ fn transitions_render() {
     let f = render(&mut p, TransitionKind::DipBlack, Some(42));
     // Frame 42: the fade-out (30..50) is at 0.4, under the dip colour at 2 * 0.1.
     near(mean_luma(&tools, &f, 0.0), w * 0.4 * 0.8, "fade continues from before the range");
+}
+
+/// RMS (0..1) of the left and right channel in `t..t+0.5` seconds, and the peak of both.
+fn channel_levels(tools: &Tools, file: &Path, t: f64) -> (f64, f64, f64) {
+    let out = tools
+        .ffmpeg_cmd()
+        .args(["-ss", &format!("{t}"), "-t", "0.5", "-i"])
+        .arg(file)
+        .args(["-vn", "-ac", "2", "-f", "f32le", "pipe:1"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let s: Vec<f64> = out.stdout.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]) as f64).collect();
+    let rms = |c: usize| (s.iter().skip(c).step_by(2).map(|v| v * v).sum::<f64>() / (s.len() / 2).max(1) as f64).sqrt();
+    (rms(0), rms(1), s.iter().fold(0.0f64, |m, v| m.max(v.abs())))
+}
+
+#[test]
+fn audio_effects_and_loudness_render() {
+    let Some(tools) = tools() else { return };
+    let dir = tempfile::tempdir().unwrap();
+    // Mono 1 kHz at 0.25 (-12 dBFS), 4 s.
+    let src = dir.path().join("mono.wav");
+    ffmpeg(&tools, &[
+        "-f", "lavfi", "-i", "aevalsrc=0.25*sin(2*PI*1000*t):s=48000:d=4",
+        "-ac", "1", "-c:a", "pcm_s16le", "-y", &src.to_string_lossy(),
+    ]);
+    let asset = import(&tools, &src, &dir.path().join("cache"));
+    assert_eq!(asset.info.as_ref().unwrap().audio.as_ref().unwrap().channels, 1);
+    let mut p = Project::new("t", 0);
+    let id = asset.id;
+    p.media.push(asset);
+    let seq = p.active_sequence;
+    let settings = SequenceSettings { width: 320, height: 180, fps: Rational::new(25, 1), sample_rate: 48_000 };
+    kerf_core::ops::apply(&mut p, &EditCommand::UpdateSequenceSettings { sequence: seq, settings }).unwrap();
+    kerf_core::ops::apply(&mut p, &EditCommand::PlaceMedia {
+        sequence: seq, media: id, video_track: None, audio_track: None, at: 0,
+        mode: PlaceMode::Overwrite, source_in: Some(0), source_out: Some(100), match_sequence: false,
+    })
+    .unwrap();
+    let render = |p: &Project, name: &str, loudness: Option<LoudnessTarget>| {
+        let file = dir.path().join(name);
+        let export = ExportSettings {
+            output: file.clone(),
+            video_codec: VideoCodec::H264,
+            hardware: false,
+            width: 320,
+            height: 180,
+            fps: Rational::new(25, 1),
+            rate: RateControl::Quality { crf: 30 },
+            audio_codec: AudioCodec::Pcm,
+            audio_bitrate_kbps: 192,
+            sample_rate: 48_000,
+            audio_channels: 2,
+            use_in_out: false,
+            subtitles: Default::default(),
+            title_files: Default::default(),
+            loudness,
+        };
+        let plan = render::plan(p, p.sequence(seq).unwrap(), &export, dir.path(), &[]).unwrap();
+        let mut log = String::new();
+        let mut measured = false;
+        let res = render::render_logged(&tools, &plan, &AtomicBool::new(false), |s| measured |= s.measuring, &mut log);
+        assert!(res.is_ok(), "{name}: {res:?}\n{log}");
+        assert_eq!(measured, loudness.is_some(), "{log}");
+        (file, log)
+    };
+    let edit = |p: &mut Project, f: &dyn Fn(&mut Track)| {
+        let s = p.sequence_mut(seq).unwrap();
+        f(s.tracks.iter_mut().find(|t| t.kind == TrackKind::Audio && !t.clips.is_empty()).unwrap());
+    };
+    let sine_rms = 0.25 / 2f64.sqrt();
+    let near = |v: f64, want: f64, what: &str| assert!((v - want).abs() < want.max(0.01) * 0.05, "{what}: {v:.4}, want {want:.4}");
+
+    // A mono source plays on both sides at full level, as in the preview.
+    let (f, _) = render(&p, "mono.mov", None);
+    let (l, r, _) = channel_levels(&tools, &f, 1.0);
+    near(l, sine_rms, "left");
+    near(r, sine_rms, "right");
+
+    // Panned fully right with WebAudio's law: the left side moves over.
+    edit(&mut p, &|t| t.clips[0].pan = 1.0);
+    let (f, _) = render(&p, "pan.mov", None);
+    let (l, r, _) = channel_levels(&tools, &f, 1.0);
+    assert!(l < 1e-4, "left is silent: {l}");
+    near(r, 2.0 * sine_rms, "right takes both");
+
+    // Clip limiter at -18 dBFS; the track folded to mono and 6 dB down.
+    edit(&mut p, &|t| {
+        t.clips[0].pan = 0.0;
+        t.clips[0].channels = ChannelMap::Left;
+        t.clips[0].audio_effects = vec![AudioEffect { id: Uuid::nil(), enabled: true, kind: AudioEffectKind::Limiter { ceiling_db: -18.0, release_ms: 50.0 } }];
+        t.mono = true;
+        t.volume_db = -6.0;
+        t.effects = vec![AudioEffect {
+            id: Uuid::nil(),
+            enabled: true,
+            kind: AudioEffectKind::Eq { bands: vec![EqBand { shape: EqShape::HighPass, freq: 80.0, gain_db: 0.0, q: 0.707, enabled: true }] },
+        }];
+    });
+    let (f, log) = render(&p, "fx.mov", None);
+    assert!(log.contains("alimiter=") && log.contains("highpass=f=80"), "{log}");
+    let (l, r, peak) = channel_levels(&tools, &f, 1.0);
+    let ceiling = 10f64.powf(-18.0 / 20.0) * 10f64.powf(-6.0 / 20.0);
+    assert!(peak <= ceiling * 1.02 && peak > ceiling * 0.9, "limited, then -6 dB: {peak:.4} vs {ceiling:.4}");
+    near(l, r, "mono");
+
+    // Loudness: two passes to -20 LUFS.
+    edit(&mut p, &|t| {
+        t.clips[0].audio_effects.clear();
+        t.clips[0].channels = ChannelMap::Stereo;
+        t.effects.clear();
+        t.mono = false;
+        t.volume_db = 0.0;
+    });
+    let (f, log) = render(&p, "loud.mov", Some(LoudnessTarget { integrated: -20.0, true_peak: -1.0 }));
+    assert!(log.contains("gemessen:") && log.contains("linear=true"), "{log}");
+    let m = analysis::loudness(&tools, &f, 0.0, None).unwrap();
+    assert!((m.integrated.unwrap() + 20.0).abs() < 0.5, "{m:?}\n{log}");
+    // The length is unchanged by loudnorm's resampling.
+    let (_, info) = probe::probe(&tools, &f).unwrap();
+    assert!((info.duration - 4.0).abs() < 0.05, "{}", info.duration);
 }

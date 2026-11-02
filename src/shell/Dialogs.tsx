@@ -6,7 +6,8 @@ import { ACTIONS } from "../actions/registry";
 import { api } from "../lib/ipc";
 import { formatRate, STANDARD_RATES } from "../lib/time";
 import { formatBytes } from "../lib/media";
-import type { ClipGain, Loudness, RecoveryInfo, SequenceSettings, Uuid, VersionInfo } from "../lib/types";
+import type { AudioEffect, ClipGain, Loudness, RecoveryInfo, SequenceSettings, Uuid, VersionInfo } from "../lib/types";
+import { AddAudioEffect, AudioEffectsEditor } from "../panels/AudioEffects";
 import { currentLayout, useEditor, type Dialog } from "../state/editor";
 import { activeSequence, edit, reportError, useProject } from "../state/project";
 import { toast } from "../state/toasts";
@@ -347,20 +348,49 @@ const LUFS_PRESETS = [
   { value: -23, label: "−23 EBU R128" },
 ];
 // Remembered for the session.
-const normDefaults = { mode: "peak" as NormMode, target: { peak: -1, truePeak: -1, lufs: -14 } as Record<NormMode, number>, together: false };
+const normDefaults = { mode: "peak" as NormMode, target: { peak: -1, truePeak: -1, lufs: -14 } as Record<NormMode, number>, together: false, limit: false, ceiling: -1 };
 const fmtDb = (v: number) => `${v < 0 ? "−" : v > 0 ? "+" : ""}${Math.abs(v).toFixed(1).replace(".", ",")}`;
+
+/** Effects of an audio track (after the sum of its clips, before its fader). */
+function TrackEffectsDialog({ sequence, track: id, onClose }: { sequence: Uuid; track: Uuid; onClose: () => void }) {
+  const track = useProject((s) => s.project?.sequences.find((q) => q.id === sequence)?.tracks.find((t) => t.id === id));
+  if (!track) return null;
+  const effects = track.effects ?? [];
+  const onChange = (next: AudioEffect[], live: boolean) => {
+    engine.setTrackOverride(id, { effects: next });
+    if (live) return;
+    void edit({ type: "updateTrack", sequence, track: id, patch: { effects: next } }).finally(() => engine.setTrackOverride(id, null));
+  };
+  return (
+    <Modal title={`Spureffekte – ${track.name}`} onClose={onClose} footer={<Button variant="primary" onClick={onClose}>Fertig</Button>}>
+      <div className="w-[380px] space-y-2">
+        <div className="flex items-center justify-between">
+          <label className="flex items-center gap-2 text-sm">
+            <Toggle checked={!!track.mono} onChange={(v) => void edit({ type: "updateTrack", sequence, track: id, patch: { mono: v } })} label="Mono" />
+            <span>Mono</span>
+            <span className="text-xs text-fg-4">(L+R)/2 vor den Effekten</span>
+          </label>
+          <AddAudioEffect effects={effects} onChange={onChange} />
+        </div>
+        <AudioEffectsEditor effects={effects} onChange={onChange} empty="Keine Spureffekte. Mit + hinzufügen; sie wirken auf die Summe der Clips, vor dem Regler." />
+      </div>
+    </Modal>
+  );
+}
 
 function NormalizeDialog({ clips, onClose }: { clips: Uuid[]; onClose: () => void }) {
   const [mode, setMode] = useState(normDefaults.mode);
   const [targets, setTargets] = useState(normDefaults.target);
   const [together, setTogether] = useState(normDefaults.together);
+  const [limit, setLimit] = useState(normDefaults.limit);
+  const [ceiling, setCeiling] = useState(normDefaults.ceiling);
   const [busy, setBusy] = useState(false);
   const target = targets[mode];
   const unit = NORM_MODES.find((m) => m.value === mode)!.unit;
   const run = async () => {
     const s = activeSequence(useProject.getState().project);
     if (!s) return;
-    Object.assign(normDefaults, { mode, target: targets, together });
+    Object.assign(normDefaults, { mode, target: targets, together, limit, ceiling });
     setBusy(true);
     try {
       const res = await api.measureClips(s.id, clips);
@@ -379,11 +409,12 @@ function NormalizeDialog({ clips, onClose }: { clips: Uuid[]; onClose: () => voi
       }
       // Together: one shared change so the loudest clip (with its current gain) hits the target.
       const shared = target - Math.max(...valid.map((v) => v.level + v.gain));
-      const gains: ClipGain[] = valid.map((v) => ({ clip: v.clip, volumeDb: Math.round((together ? v.gain + shared : target - v.level) * 10) / 10 }));
+      const gains: ClipGain[] = valid.map((v) => ({ clip: v.clip, volumeDb: Math.round((together ? v.gain + shared : target - v.level) * 10) / 10, limitDb: limit ? ceiling : null }));
       await edit({ type: "setClipGain", sequence: s.id, gains });
       const [lo, hi] = [-96, 24];
       const limited = gains.filter((g) => g.volumeDb < lo || g.volumeDb > hi).length;
-      const clipping = valid.filter((v, i) => v.peak + gains[i].volumeDb > 0).length;
+      // The limiter holds the peaks at the ceiling (kerf-core places it below the new gain).
+      const clipping = limit ? 0 : valid.filter((v, i) => v.peak + gains[i].volumeDb > 0).length;
       const notes = [
         skipped && `${skipped} ohne Ton übersprungen`,
         limited && `${limited} durch die Verstärkungsgrenze (+24 dB) begrenzt`,
@@ -435,7 +466,18 @@ function NormalizeDialog({ clips, onClose }: { clips: Uuid[]; onClose: () => voi
             <span className="text-xs text-fg-4">gleiche Änderung für alle, Verhältnis bleibt</span>
           </label>
         )}
-        {mode === "lufs" && <p className="text-xs text-fg-4">Ohne Limiter können laute Spitzen dabei über 0 dBFS steigen – Kerf weist darauf hin.</p>}
+        <div className="flex items-center gap-2 text-sm">
+          <Toggle checked={limit} onChange={setLimit} label="Limiter anfügen" />
+          <span>Limiter anfügen</span>
+          {limit && <NumberField value={ceiling} min={-24} max={0} step={0.1} precision={1} unit=" dBFS" width={92} label="Obergrenze" onCommit={setCeiling} />}
+        </div>
+        <p className="text-xs text-fg-4">
+          {limit
+            ? "Ein Limiter am Ende der Clipeffekte hält die Spitzen nach der Verstärkung unter der Obergrenze; ein vorhandener Limiter dort wird ersetzt."
+            : mode === "lufs"
+              ? "Ohne Limiter können laute Spitzen dabei über 0 dBFS steigen – Kerf weist darauf hin."
+              : "Ohne Limiter bleibt der Klang unverändert, nur die Lautstärke ändert sich."}
+        </p>
       </div>
     </Modal>
   );
@@ -604,6 +646,8 @@ export function Dialogs() {
       return <ExportLogDialog job={dialog.job} title={dialog.title} onClose={close} />;
     case "normalize":
       return <NormalizeDialog clips={dialog.clips} onClose={close} />;
+    case "trackEffects":
+      return <TrackEffectsDialog sequence={dialog.sequence} track={dialog.track} onClose={close} />;
     case "curve":
       return <CurveDialog sequence={dialog.sequence} clip={dialog.clip} params={dialog.params} at={dialog.at} onClose={close} />;
     case "saveWorkspace":

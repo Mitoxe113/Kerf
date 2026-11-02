@@ -1,8 +1,13 @@
 // Preview audio graph:
-//   media element -> clip gain (volume x fades) -> clip pan -> track bus -> master -> meters -> out
-// The AudioContext clock is the master clock for playback.
+//   media element -> [clip effects] -> clip gain (volume x fades) -> clip pan
+//     -> track input -> [track effects] -> track gain -> master -> meters, loudness -> out
+// Effects run in an AudioWorklet (audio-worklet.ts) once it has loaded; until
+// then the clips play dry. The AudioContext clock is the master clock for playback.
 
-import type { Uuid } from "../lib/types";
+import type { AudioEffect, Uuid } from "../lib/types";
+import workletUrl from "./audio-worklet.ts?worker&url";
+import type { EffectsMessage } from "./audio-worklet";
+import { activeKinds, type LoudnessReading } from "./dsp";
 
 export interface MeterReading {
   peak: [number, number];
@@ -10,8 +15,20 @@ export interface MeterReading {
 }
 
 interface Bus {
+  /** Where the clips of the track meet. */
+  input: GainNode;
+  fx: AudioWorkletNode | null;
+  /** Effects the track should run, and the ones sent to `fx`. */
+  want: EffectsMessage;
+  sent: string;
   gain: GainNode;
   analysers: [AnalyserNode, AnalyserNode];
+}
+
+/** Message for an effects node, or null when it would change nothing. */
+export function effectsMessage(effects: AudioEffect[] | undefined, channels: EffectsMessage["channels"]): EffectsMessage | null {
+  const kinds = activeKinds(effects);
+  return kinds.length || (channels && channels !== "stereo") ? { effects: kinds, channels } : null;
 }
 
 export class AudioMixer {
@@ -20,6 +37,12 @@ export class AudioMixer {
   private masterAnalysers: [AnalyserNode, AnalyserNode] | null = null;
   private buses = new Map<Uuid, Bus>();
   private scratch = new Float32Array(2048);
+  private fxLoaded = false;
+  private loudnessNode: AudioWorkletNode | null = null;
+  /** Latest EBU R128 reading of the master, null before the first. */
+  loudness: LoudnessReading | null = null;
+  /** Called once the effect processors are ready (voices then get their effects). */
+  onEffectsReady: (() => void) | null = null;
 
   context(): AudioContext {
     if (!this.ctx) {
@@ -28,8 +51,33 @@ export class AudioMixer {
       this.masterAnalysers = this.meter(ctx, this.master);
       this.master.connect(ctx.destination);
       this.ctx = ctx;
+      ctx.audioWorklet
+        .addModule(workletUrl)
+        .then(() => {
+          this.fxLoaded = true;
+          // Without outputs the meter is pulled by the context on its own.
+          const meter = new AudioWorkletNode(ctx, "kerf-loudness", { numberOfInputs: 1, numberOfOutputs: 0 });
+          meter.port.onmessage = (e: MessageEvent<LoudnessReading>) => (this.loudness = e.data);
+          this.master!.connect(meter);
+          this.loudnessNode = meter;
+          for (const b of this.buses.values()) this.wireBus(b);
+          this.onEffectsReady?.();
+        })
+        .catch((e) => console.warn("audio effects unavailable", e));
     }
     return this.ctx;
+  }
+
+  /** A node running a clip's effects (always two channels out), or null while loading. */
+  effectsNode(): AudioWorkletNode | null {
+    if (!this.fxLoaded || !this.ctx) return null;
+    return new AudioWorkletNode(this.ctx, "kerf-effects", { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2] });
+  }
+
+  /** Starts the integrated loudness over. */
+  resetLoudness() {
+    this.loudnessNode?.port.postMessage("reset");
+    this.loudness = null;
   }
 
   /** Seconds on the audio hardware clock. */
@@ -54,21 +102,55 @@ export class AudioMixer {
     return [mk(0), mk(1)];
   }
 
-  bus(track: Uuid): GainNode {
+  private busOf(track: Uuid): Bus {
     let b = this.buses.get(track);
     if (!b) {
       const ctx = this.context();
+      const input = ctx.createGain();
       const gain = ctx.createGain();
+      input.connect(gain);
       gain.connect(this.master!);
-      b = { gain, analysers: this.meter(ctx, gain) };
+      b = { input, fx: null, want: { effects: [] }, sent: "", gain, analysers: this.meter(ctx, gain) };
       this.buses.set(track, b);
     }
-    return b.gain;
+    return b;
+  }
+
+  /** Input of a track's bus, where its clips connect. */
+  bus(track: Uuid): AudioNode {
+    return this.busOf(track).input;
   }
 
   setBusGain(track: Uuid, gain: number) {
-    const g = this.bus(track);
+    const g = this.busOf(track).gain;
     g.gain.setTargetAtTime(gain, this.context().currentTime, 0.015);
+  }
+
+  /** Track effects, after the sum of its clips (mono folds it first), before its volume. */
+  setBusEffects(track: Uuid, effects: AudioEffect[] | undefined, mono: boolean) {
+    const b = this.busOf(track);
+    b.want = effectsMessage(effects, mono ? "mono" : undefined) ?? { effects: [] };
+    this.wireBus(b);
+  }
+
+  private wireBus(b: Bus) {
+    const key = JSON.stringify(b.want);
+    if (key === b.sent) return;
+    const needed = b.want.effects.length > 0 || b.want.channels === "mono";
+    if (needed && !b.fx) {
+      const fx = this.effectsNode();
+      if (!fx) return;
+      b.input.disconnect();
+      b.input.connect(fx).connect(b.gain);
+      b.fx = fx;
+    } else if (!needed && b.fx) {
+      b.input.disconnect();
+      b.fx.disconnect();
+      b.fx = null;
+      b.input.connect(b.gain);
+    }
+    b.fx?.port.postMessage(b.want);
+    b.sent = key;
   }
 
   setMasterGain(gain: number) {

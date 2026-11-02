@@ -1,13 +1,15 @@
 // Level meters and the track mixer. Meters read the WebAudio analysers at
 // display rate; faders preview on the bus immediately and commit on release.
 
+import { RotateCcw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { engine } from "../engine/playback";
-import { dbToGain } from "../engine/math";
 import type { MeterReading } from "../engine/audio";
+import { activeKinds, type LoudnessReading } from "../engine/dsp";
 import type { Track } from "../lib/types";
+import { useEditor } from "../state/editor";
 import { edit, useActiveSequence } from "../state/project";
-import { cx, PanelHeader } from "../ui/primitives";
+import { cx, IconButton, PanelHeader } from "../ui/primitives";
 
 const FLOOR_DB = -60;
 const toDb = (v: number) => (v <= 0 ? -Infinity : 20 * Math.log10(v));
@@ -134,10 +136,14 @@ function Fader({ track, seqId }: { track: Track; seqId: string }) {
     if (Math.abs(v) < 0.6) v = 0;
     v = Math.round(v * 10) / 10;
     setLive(v);
-    engine.mixer.setBusGain(track.id, track.muted ? 0 : dbToGain(v));
+    engine.setTrackOverride(track.id, { volumeDb: v });
     return v;
   };
-  const patch = (p: Partial<Track>) => void edit({ type: "updateTrack", sequence: seqId, track: track.id, patch: p });
+  const patch = async (p: Partial<Track>) => {
+    await edit({ type: "updateTrack", sequence: seqId, track: track.id, patch: p });
+    engine.setTrackOverride(track.id, null);
+  };
+  const fx = activeKinds(track.effects).length;
   return (
     <div className="flex w-[76px] shrink-0 flex-col items-center gap-2 rounded-md bg-raised px-2 py-2.5">
       <span className="w-full truncate text-center text-xs font-semibold text-fg-2">{track.name}</span>
@@ -153,10 +159,10 @@ function Fader({ track, seqId }: { track: Track; seqId: string }) {
             if (live !== null) setAt(e.clientY);
           }}
           onPointerUp={() => {
-            if (live !== null) patch({ volumeDb: live });
+            if (live !== null) void patch({ volumeDb: live });
             setLive(null);
           }}
-          onDoubleClick={() => patch({ volumeDb: 0 })}
+          onDoubleClick={() => void patch({ volumeDb: 0 })}
         >
           <div className="absolute inset-y-0 left-1/2 w-[3px] -translate-x-1/2 rounded-full bg-ground" />
           <div className="absolute left-0 right-0 h-px bg-fg-4" style={{ bottom: `${((0 - MIN) / (MAX - MIN)) * 100}%` }} />
@@ -168,11 +174,28 @@ function Fader({ track, seqId }: { track: Track; seqId: string }) {
       </div>
       <span className="tc text-[10.5px] text-fg-2">{db <= -60 ? "−∞" : `${db > 0 ? "+" : ""}${db.toFixed(1).replace(".", ",")}`} dB</span>
       <div className="flex gap-1">
-        <button onClick={() => patch({ muted: !track.muted })} className={cx("h-5 w-6 rounded-xs text-[10px] font-semibold", track.muted ? "bg-warn text-black" : "bg-field text-fg-3 hover:text-fg-2")}>
+        <button onClick={() => void patch({ muted: !track.muted })} className={cx("h-5 w-6 rounded-xs text-[10px] font-semibold", track.muted ? "bg-warn text-black" : "bg-field text-fg-3 hover:text-fg-2")}>
           M
         </button>
-        <button onClick={() => patch({ solo: !track.solo })} className={cx("h-5 w-6 rounded-xs text-[10px] font-semibold", track.solo ? "bg-signal text-signal-ink" : "bg-field text-fg-3 hover:text-fg-2")}>
+        <button onClick={() => void patch({ solo: !track.solo })} className={cx("h-5 w-6 rounded-xs text-[10px] font-semibold", track.solo ? "bg-signal text-signal-ink" : "bg-field text-fg-3 hover:text-fg-2")}>
           S
+        </button>
+      </div>
+      <div className="flex gap-1">
+        <button
+          title="Spur in Mono zusammenfassen (L+R)/2"
+          aria-pressed={!!track.mono}
+          onClick={() => void patch({ mono: !track.mono })}
+          className={cx("h-5 w-8 rounded-xs text-[9.5px] font-semibold", track.mono ? "bg-signal text-signal-ink" : "bg-field text-fg-3 hover:text-fg-2")}
+        >
+          Mono
+        </button>
+        <button
+          title="Spureffekte (nach der Summe der Clips, vor dem Regler)"
+          onClick={() => useEditor.getState().set({ dialog: { kind: "trackEffects", sequence: seqId, track: track.id } })}
+          className={cx("h-5 w-6 rounded-xs text-[10px] font-semibold", fx ? "bg-signal text-signal-ink" : "bg-field text-fg-3 hover:text-fg-2")}
+        >
+          FX
         </button>
       </div>
     </div>
@@ -208,7 +231,45 @@ export function Mixer() {
           </div>
           <span className="text-[10.5px] text-fg-4">Peak / RMS</span>
         </div>
+        <LoudnessPanel />
       </div>
+    </div>
+  );
+}
+
+const fmtLufs = (v: number | undefined) => (v === undefined || !isFinite(v) ? "—" : v.toFixed(1).replace(".", ",").replace("-", "−"));
+
+/** EBU R128 loudness of the master (momentary, short-term, integrated since the reset). */
+function LoudnessPanel() {
+  const [r, setR] = useState<LoudnessReading | null>(null);
+  useEffect(() => {
+    const id = window.setInterval(() => setR(engine.mixer.loudness), 200);
+    return () => window.clearInterval(id);
+  }, []);
+  const row = (label: string, v: number | undefined, title: string) => (
+    <div className="flex items-baseline justify-between gap-2" title={title}>
+      <span className="text-[10.5px] text-fg-3">{label}</span>
+      <span className="tc text-sm text-fg">{fmtLufs(v)}</span>
+    </div>
+  );
+  return (
+    <div className="flex w-[112px] shrink-0 flex-col gap-1.5 rounded-md bg-raised px-2.5 py-2.5">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-semibold text-fg">LUFS</span>
+        <IconButton
+          icon={<RotateCcw size={11} />}
+          size={20}
+          label="Integrierte Lautheit zurücksetzen"
+          onClick={() => {
+            engine.mixer.resetLoudness();
+            setR(null);
+          }}
+        />
+      </div>
+      {row("Momentan", r?.momentary, "Über 400 ms")}
+      {row("Kurzzeit", r?.shortTerm, "Über 3 s")}
+      {row("Integriert", r?.integrated, "Seit dem Zurücksetzen, mit Gating nach EBU R128")}
+      <p className="mt-auto text-[10px] leading-snug text-fg-4">Misst die Vorschau am Master (nach Spur- und Clipeffekten).</p>
     </div>
   );
 }

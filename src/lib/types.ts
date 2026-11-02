@@ -209,7 +209,28 @@ export interface Clip {
   effects?: Effect[];
   /** Transition from the previous clip on the track into this one. */
   transition?: Transition | null;
+  /** Audio clips: effects before the clip volume. */
+  audioEffects?: AudioEffect[];
+  /** Audio clips: routing of the source channels (default stereo). */
+  channels?: ChannelMap;
 }
+
+export type EqShape = "highPass" | "lowShelf" | "peak" | "highShelf" | "lowPass";
+export interface EqBand {
+  shape: EqShape;
+  freq: number;
+  gainDb: number;
+  /** Peak bandwidth / pass-filter resonance; shelves use slope 1. */
+  q: number;
+  enabled: boolean;
+}
+export type AudioEffectKind =
+  | { type: "eq"; bands: EqBand[] }
+  | { type: "compressor"; thresholdDb: number; ratio: number; attackMs: number; releaseMs: number; kneeDb: number; makeupDb: number }
+  | { type: "gate"; thresholdDb: number; rangeDb: number; ratio: number; attackMs: number; releaseMs: number }
+  | { type: "limiter"; ceilingDb: number; releaseMs: number };
+export type AudioEffect = { id: Uuid; enabled: boolean } & AudioEffectKind;
+export type ChannelMap = "stereo" | "mono" | "left" | "right" | "swap";
 
 /** Wipes name the direction the edge moves; crossfade is the audio kind. */
 export type TransitionKind = "dissolve" | "dipBlack" | "dipWhite" | "wipeLeft" | "wipeRight" | "wipeUp" | "wipeDown" | "crossfade";
@@ -258,6 +279,10 @@ export interface Track {
   color: LabelColor;
   /** Row height in px; 0 = timeline default. */
   height: number;
+  /** Audio tracks: effects on the track mix, before the track volume. */
+  effects?: AudioEffect[];
+  /** Audio tracks: mix folded to mono. */
+  mono?: boolean;
 }
 
 export type MarkerColor = "signal" | "red" | "amber" | "blue" | "violet";
@@ -352,9 +377,9 @@ export type Edge = "start" | "end";
 export type PlaceMode = "overwrite" | "insert";
 
 export type ClipPatch = Partial<
-  Pick<Clip, "name" | "enabled" | "transform" | "opacity" | "volumeDb" | "pan" | "speed" | "fadeIn" | "fadeOut" | "color" | "label">
+  Pick<Clip, "name" | "enabled" | "transform" | "opacity" | "volumeDb" | "pan" | "speed" | "fadeIn" | "fadeOut" | "color" | "label" | "channels">
 >;
-export type TrackPatch = Partial<Pick<Track, "name" | "muted" | "solo" | "locked" | "hidden" | "volumeDb" | "color" | "height">>;
+export type TrackPatch = Partial<Pick<Track, "name" | "muted" | "solo" | "locked" | "hidden" | "volumeDb" | "color" | "height" | "effects" | "mono">>;
 export type MediaPatch = Partial<Pick<MediaAsset, "favorite" | "label" | "tags" | "note">>;
 
 export interface PasteItem {
@@ -372,6 +397,7 @@ export type EditCommand =
   | { type: "setSourceMarks"; media: Uuid; marks: SourceMarks }
   | { type: "setEffects"; sequence: Uuid; clips: Uuid[]; effects: Effect[] }
   | { type: "setTransitions"; sequence: Uuid; items: { clip: Uuid; transition: Transition | null }[] }
+  | { type: "setAudioEffects"; sequence: Uuid; items: { clip: Uuid; effects: AudioEffect[] }[] }
   | { type: "moveMediaToBin"; media: Uuid[]; bin: Uuid | null }
   | { type: "relinkMedia"; media: Uuid; path: string }
   | { type: "createBin"; name: string; parent: Uuid | null }
@@ -446,6 +472,15 @@ export interface ExportSettings {
   subtitles?: SubtitleOutput;
   /** Freshly drawn title PNGs by media id (see engine/text.ts titleFiles). */
   titleFiles?: Record<Uuid, string>;
+  /** Normalise the mix to this loudness (two passes). */
+  loudness?: LoudnessTarget | null;
+}
+
+export interface LoudnessTarget {
+  /** LUFS, -70..-5. */
+  integrated: number;
+  /** dBTP, -9..0. */
+  truePeak: number;
 }
 
 export interface SubtitleOutput {
@@ -462,6 +497,8 @@ export interface RenderProgress {
   elapsed: number;
   eta: number | null;
   speed: number | null;
+  /** Pass 1 of a loudness normalisation (measuring the mix). */
+  measuring: boolean;
 }
 
 export type ExportStatus = "queued" | "running" | "done" | "failed" | "cancelled";
@@ -522,6 +559,8 @@ export interface ClipLoudness {
 export interface ClipGain {
   clip: Uuid;
   volumeDb: number;
+  /** Also end the clip's effects with a limiter holding the clip's output at this ceiling (dBFS). */
+  limitDb?: number | null;
 }
 
 export interface VersionInfo {

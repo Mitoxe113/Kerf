@@ -5,12 +5,13 @@ import { engine } from "../engine/playback";
 import { IDENTITY_COLOR, IDENTITY_TRANSFORM } from "../engine/math";
 import { codecLabel, formatBytes } from "../lib/media";
 import { formatRate, formatTimecode, parseTimecode } from "../lib/time";
-import type { Clip, ClipPatch, ColorAdjust, ColorParam, Keyframe, KeyParam, Sequence, Transform } from "../lib/types";
+import type { AudioEffect, ChannelMap, Clip, ClipPatch, ColorAdjust, ColorParam, Keyframe, KeyParam, Sequence, Transform } from "../lib/types";
 import { findClip, locate, transitionInto } from "../timeline/geometry";
 import { ALIGNS, defaultTransition, kindsFor, setTransition } from "../actions/transitions";
 import { useEditor } from "../state/editor";
 import { edit, useActiveSequence, useProject } from "../state/project";
 import { Button, cx, Field, IconButton, NumberField, openContextMenu, PanelHeader, Section, Segmented, Select, Slider, Toggle } from "../ui/primitives";
+import { AddAudioEffect, AudioEffectsEditor } from "./AudioEffects";
 import { EffectsSection, GradeSections } from "./Effects";
 import { TitleSection } from "./Text";
 
@@ -114,6 +115,7 @@ export function Inspector() {
         {active === "color" && <GradeSections seq={seq} clips={video} />}
         {active === "effects" && <EffectsSection seq={seq} clips={video} />}
         {active === "audio" && <AudioSection seq={seq} clips={audio} preview={preview} commit={commit} />}
+        {active === "audio" && <AudioFxSection seq={seq} clips={audio} />}
         {active === "audio" && audio.length === 1 && <TransitionSection seq={seq} clip={audio[0]} />}
         <TimingSection seq={seq} clips={clips} commit={commit} />
       </div>
@@ -402,12 +404,21 @@ function ColorSection({ seq, clips, commit }: { seq: Sequence; clips: Clip[]; co
   );
 }
 
+const CHANNEL_MAPS: { value: ChannelMap; label: string }[] = [
+  { value: "stereo", label: "Stereo" },
+  { value: "mono", label: "Mono (L+R)" },
+  { value: "left", label: "Nur links" },
+  { value: "right", label: "Nur rechts" },
+  { value: "swap", label: "Links ↔ rechts" },
+];
+
 function AudioSection({ seq, clips, preview, commit }: { seq: Sequence; clips: Clip[]; preview: Preview; commit: Commit }) {
   const c = clips[0];
   const frame = useKeyFrame(c);
   const pv = useParam(seq, clips, "volume", frame);
+  const channels = c.channels ?? "stereo";
   return (
-    <Section title="Audio" right={<IconButton icon={<RotateCcw size={12} />} size={22} label="Zurücksetzen" disabled={c.volumeDb === 0 && c.pan === 0 && !isAnimated(c, "volume")} onClick={async () => { await commit(clips, { volumeDb: 0, pan: 0 }); for (const x of clips) if (isAnimated(x, "volume")) await setKeys(seq, x, "volume", []); }} />}>
+    <Section title="Audio" right={<IconButton icon={<RotateCcw size={12} />} size={22} label="Zurücksetzen" disabled={c.volumeDb === 0 && c.pan === 0 && channels === "stereo" && !isAnimated(c, "volume")} onClick={async () => { await commit(clips, { volumeDb: 0, pan: 0, channels: "stereo" }); for (const x of clips) if (isAnimated(x, "volume")) await setKeys(seq, x, "volume", []); }} />}>
       <Field label="Lautstärke">
         <Slider label="Lautstärke" value={Math.max(-60, pv.value)} min={-60} max={12} center={0} onPreview={pv.onPreview} onCommit={(v) => void pv.onCommit(+v.toFixed(1))} onReset={() => void pv.onCommit(0)} />
         <NumberField label="Lautstärke" value={pv.value} min={-96} max={24} step={0.1} precision={1} unit=" dB" width={66} onPreview={pv.onPreview} onCommit={pv.onCommit} />
@@ -417,11 +428,34 @@ function AudioSection({ seq, clips, preview, commit }: { seq: Sequence; clips: C
         <Slider label="Balance" value={c.pan} min={-1} max={1} center={0} onPreview={(v) => preview(clips, { pan: v })} onCommit={(v) => void commit(clips, { pan: +v.toFixed(2) })} onReset={() => void commit(clips, { pan: 0 })} />
         <NumberField label="Balance" value={c.pan * 100} min={-100} max={100} step={1} width={66} format={(v) => (Math.round(v) === 0 ? "C" : v < 0 ? `L ${Math.round(-v)}` : `R ${Math.round(v)}`)} onPreview={(v) => preview(clips, { pan: v / 100 })} onCommit={(v) => void commit(clips, { pan: v / 100 })} />
       </Field>
+      <Field label="Kanäle">
+        <Select width={150} label="Kanalzuordnung" value={channels} options={CHANNEL_MAPS} onChange={(v) => void commit(clips, { channels: v })} />
+      </Field>
       <Field label="Pegel">
         <Button size="sm" onClick={() => useEditor.getState().set({ dialog: { kind: "normalize", clips: clips.map((x) => x.id) } })}>
           Normalisieren …
         </Button>
       </Field>
+    </Section>
+  );
+}
+
+/** Effect chain of the first clip, edited for all selected clips together. */
+function AudioFxSection({ seq, clips }: { seq: Sequence; clips: Clip[] }) {
+  const effects = clips[0].audioEffects ?? [];
+  const change = async (next: AudioEffect[], live: boolean) => {
+    if (live) {
+      clips.forEach((c) => engine.setOverride(c.id, { audioEffects: next }));
+      return;
+    }
+    await edit({ type: "setAudioEffects", sequence: seq.id, items: clips.map((c) => ({ clip: c.id, effects: next })) });
+    clips.forEach((c) => engine.setOverride(c.id, null));
+  };
+  const onChange = (next: AudioEffect[], live: boolean) => void change(next, live);
+  return (
+    <Section title="Audioeffekte" right={<AddAudioEffect effects={effects} onChange={onChange} />}>
+      <AudioEffectsEditor effects={effects} onChange={onChange} empty="Keine Effekte. Mit + hinzufügen; sie wirken nach der Kanalzuordnung und vor Lautstärke und Balance, in der Reihenfolge der Liste." />
+      {clips.length > 1 && <p className="pt-1 text-[10.5px] text-fg-4">Änderungen gelten für alle {clips.length} ausgewählten Clips.</p>}
     </Section>
   );
 }

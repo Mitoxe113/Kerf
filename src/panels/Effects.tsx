@@ -111,9 +111,11 @@ function EffectCard({ effect: e, stack, first, last, onMove, onRemove }: { effec
 }
 
 export function ParamRow({ label, value, min, max, step = 0.01, scale = 1, unit = "", precision = 2, onChange }: { label: string; value: number; min: number; max: number; step?: number; scale?: number; unit?: string; precision?: number; onChange: (v: number, live: boolean) => void }) {
+  // A released slider lands on a value the field can show.
+  const snap = (v: number) => Math.round(v * scale * 10 ** precision) / (scale * 10 ** precision);
   return (
     <Field label={label}>
-      <Slider label={label} value={value} min={min} max={max} onPreview={(v) => onChange(v, true)} onCommit={(v) => onChange(v, false)} />
+      <Slider label={label} value={value} min={min} max={max} onPreview={(v) => onChange(v, true)} onCommit={(v) => onChange(snap(v), false)} />
       <NumberField label={label} value={value * scale} min={min * scale} max={max * scale} step={step} precision={precision} unit={unit} width={62} onPreview={(v) => onChange(v / scale, true)} onCommit={(v) => onChange(v / scale, false)} />
     </Field>
   );
