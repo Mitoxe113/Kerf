@@ -152,6 +152,10 @@ pub enum EditCommand {
     AddSequence { name: String, settings: SequenceSettings },
     RemoveSequence { sequence: Uuid },
     RenameSequence { sequence: Uuid, name: String },
+    /// Moves `clips` (with their linked partners) of `sequence` into a new
+    /// sequence named `name` and puts one clip of it where they were (video
+    /// and audio, linked). `created` = [new sequence, its clips].
+    NestClips { sequence: Uuid, clips: Vec<Uuid>, name: String },
     UpdateSequenceSettings { sequence: Uuid, settings: SequenceSettings },
 
     // --- tracks -----------------------------------------------------------
@@ -254,6 +258,7 @@ impl EditCommand {
             C::RenameBin { .. } => "renameBin",
             C::RemoveBin { .. } => "removeBin",
             C::AddSequence { .. } => "addSequence",
+            C::NestClips { .. } => "nestClips",
             C::RemoveSequence { .. } => "removeSequence",
             C::RenameSequence { .. } => "renameSequence",
             C::UpdateSequenceSettings { .. } => "updateSequenceSettings",
@@ -355,8 +360,15 @@ pub fn apply(project: &mut Project, cmd: &EditCommand) -> Result<EditOutcome> {
     let mut out = EditOutcome { label: cmd.label().to_string(), ..Default::default() };
 
     if let Some(seq_id) = cmd.sequence_id() {
+        if let C::PlaceMedia { media, .. } | C::ReplaceMedia { media, .. } = cmd {
+            if project.sequence(*media).is_some() && project.nests(*media, seq_id) {
+                return Err(EditError::NestCycle);
+            }
+        }
         let mut seq = project.sequence(seq_id).ok_or(EditError::SequenceNotFound)?.clone();
-        let changed = edit_sequence(&mut seq, &project.media, cmd, &mut out)?;
+        // Other sequences can be placed like media (nested sequences).
+        let sources = if project.sequences.len() > 1 { std::borrow::Cow::Owned(project.sources_for(seq_id)) } else { std::borrow::Cow::Borrowed(&project.media[..]) };
+        let changed = edit_sequence(&mut seq, &sources, cmd, &mut out)?;
         if changed {
             // Moves, trims and deletes can separate the clips of a transition.
             seq.tracks.iter_mut().for_each(|t| {
@@ -544,6 +556,10 @@ pub fn apply(project: &mut Project, cmd: &EditCommand) -> Result<EditOutcome> {
                 return Err(EditError::LastSequence);
             }
             project.sequence(*sequence).ok_or(EditError::SequenceNotFound)?;
+            let used = project.media_usage(*sequence);
+            if used > 0 {
+                return Err(EditError::SequenceInUse(used));
+            }
             project.sequences.retain(|s| s.id != *sequence);
             if project.active_sequence == *sequence {
                 project.active_sequence = project.sequences[0].id;
@@ -551,6 +567,7 @@ pub fn apply(project: &mut Project, cmd: &EditCommand) -> Result<EditOutcome> {
             out.changed = true;
             out.sequences_changed = true;
         }
+        C::NestClips { sequence, clips, name } => nest_clips(project, *sequence, clips, name, &mut out)?,
         C::RenameSequence { sequence, name } => {
             let name = non_empty(name)?;
             let seq = project.sequence_mut(*sequence).ok_or(EditError::SequenceNotFound)?;
@@ -561,6 +578,83 @@ pub fn apply(project: &mut Project, cmd: &EditCommand) -> Result<EditOutcome> {
         _ => unreachable!("sequence-scoped commands are handled above"),
     }
     Ok(out)
+}
+
+fn nest_clips(project: &mut Project, seq_id: Uuid, ids: &[Uuid], name: &str, out: &mut EditOutcome) -> Result<()> {
+    let name = non_empty(name)?;
+    let mut outer = project.sequence(seq_id).ok_or(EditError::SequenceNotFound)?.clone();
+    // The selection with its linked partners.
+    let mut take = HashSet::new();
+    let mut links = HashSet::new();
+    for id in ids {
+        let (t, c) = outer.locate(*id).ok_or(EditError::ClipNotFound)?;
+        take.insert(*id);
+        links.extend(outer.tracks[t].clips[c].link);
+    }
+    take.extend(outer.tracks.iter().flat_map(|t| &t.clips).filter(|c| c.link.is_some_and(|l| links.contains(&l))).map(|c| c.id));
+    if take.is_empty() {
+        return Err(EditError::Invalid("nothing to nest".into()));
+    }
+
+    // The new sequence mirrors the tracks; its clips start at 0.
+    let mut inner = Sequence::new(name.clone(), outer.settings);
+    inner.tracks = outer.tracks.iter().map(|t| Track { color: t.color, ..Track::new(t.kind, t.name.clone()) }).collect();
+    let (mut lo, mut hi) = (Frame::MAX, Frame::MIN);
+    // Lowest video and audio track the clips came from.
+    let mut from: [Option<usize>; 2] = [None, None];
+    for (ti, t) in outer.tracks.iter_mut().enumerate() {
+        if !t.clips.iter().any(|c| take.contains(&c.id)) {
+            continue;
+        }
+        if t.locked {
+            return Err(EditError::TrackLocked);
+        }
+        from[(t.kind == TrackKind::Audio) as usize].get_or_insert(ti);
+        let (moved, kept): (Vec<Clip>, Vec<Clip>) = t.clips.drain(..).partition(|c| take.contains(&c.id));
+        t.clips = kept;
+        for c in &moved {
+            lo = lo.min(c.start);
+            hi = hi.max(c.end());
+        }
+        inner.tracks[ti].clips = moved;
+    }
+    for c in inner.tracks.iter_mut().flat_map(|t| t.clips.iter_mut()) {
+        c.start -= lo;
+    }
+    for t in inner.tracks.iter_mut().chain(outer.tracks.iter_mut()) {
+        t.tidy_transitions();
+    }
+
+    // One clip of the new sequence per kind, on the track the clips came from when it is free.
+    let src = inner.as_source();
+    let link = (src.has_video() && src.has_audio()).then(Uuid::new_v4);
+    for (kind, has) in [(TrackKind::Video, src.has_video()), (TrackKind::Audio, src.has_audio())] {
+        if !has {
+            continue;
+        }
+        let free = |t: &Track| !t.locked && t.clips.iter().all(|c| c.end() <= lo || c.start >= hi);
+        let found = from[(kind == TrackKind::Audio) as usize]
+            .filter(|&i| free(&outer.tracks[i]))
+            .or_else(|| outer.tracks_of(kind).into_iter().find(|&i| free(&outer.tracks[i])));
+        let ti = match found {
+            Some(i) => i,
+            None => {
+                let id = add_track(&mut outer, kind);
+                outer.track_index(id).expect("just added")
+            }
+        };
+        let mut clip = Clip::new(inner.id, name.clone(), lo, hi - lo, 0);
+        clip.link = link;
+        out.created.push(clip.id);
+        insert_sorted(&mut outer.tracks[ti], clip);
+    }
+    out.created.insert(0, inner.id);
+    *project.sequence_mut(seq_id).expect("exists") = outer;
+    project.sequences.push(inner);
+    out.sequence = Some(seq_id);
+    out.changed = true;
+    out.sequences_changed = true;
+    Ok(())
 }
 
 fn edit_sequence(seq: &mut Sequence, media: &[MediaAsset], cmd: &EditCommand, out: &mut EditOutcome) -> Result<bool> {
@@ -2674,5 +2768,64 @@ mod tests {
         // Moving it away leaves a gap: the transition is dropped in the same step.
         fx.run(EditCommand::MoveClips { sequence: fx.seq, clips: vec![b], delta: 5, track_delta: 0, track_kind: None });
         assert!(fx.v1().clips.iter().all(|c| c.transition.is_none()));
+    }
+
+    #[test]
+    fn nesting_moves_clips_into_a_new_sequence() {
+        let mut fx = Fx::new(4.0, true);
+        fx.place(0, None, None, PlaceMode::Overwrite);
+        let ids = fx.place(150, Some(0), Some(50), PlaceMode::Overwrite);
+        let (keep, nest) = (fx.v1().clips[0].id, ids[0]);
+        // The video clip is selected; its linked audio goes along.
+        let out = fx.run(EditCommand::NestClips { sequence: fx.seq, clips: vec![nest], name: "Nest".into() });
+        let inner_id = out.created[0];
+        assert_eq!(out.created.len(), 3);
+        let inner = fx.p.sequence(inner_id).unwrap();
+        assert_eq!(inner.duration(), 50);
+        assert_eq!(inner.tracks.iter().map(|t| t.clips.len()).sum::<usize>(), 2);
+        assert!(inner.tracks.iter().flat_map(|t| &t.clips).all(|c| c.start == 0 && c.media_id == fx.media));
+        // In its place: a linked pair showing the new sequence.
+        let v = &fx.v1().clips[1];
+        let a = &fx.a1().clips[1];
+        assert_eq!((v.media_id, v.start, v.duration, v.source_in), (inner_id, 150, 50, 0));
+        assert_eq!((a.media_id, a.start, a.duration), (inner_id, 150, 50));
+        assert!(v.link.is_some() && v.link == a.link);
+        assert_eq!(fx.v1().clips[0].id, keep);
+
+        // The nested clip trims like media: no further than the sequence is long.
+        let vid = v.id;
+        fx.run(EditCommand::TrimClip { sequence: fx.seq, clip: vid, edge: Edge::End, delta: 30, ripple: false, linked: true });
+        assert_eq!(fx.v1().clips[1].duration, 50);
+        fx.run(EditCommand::TrimClip { sequence: fx.seq, clip: vid, edge: Edge::Start, delta: 10, ripple: false, linked: true });
+        assert_eq!((fx.v1().clips[1].start, fx.v1().clips[1].source_in), (160, 10));
+    }
+
+    #[test]
+    fn sequences_cannot_contain_themselves() {
+        let mut fx = Fx::new(4.0, false);
+        let ids = fx.place(0, None, None, PlaceMode::Overwrite);
+        let inner = fx.run(EditCommand::NestClips { sequence: fx.seq, clips: ids, name: "Innen".into() }).created[0];
+        // The outer sequence cannot go into the inner one, nor a sequence into itself.
+        let place = |media: Uuid, sequence: Uuid| EditCommand::PlaceMedia {
+            sequence,
+            media,
+            video_track: None,
+            audio_track: None,
+            at: 0,
+            mode: PlaceMode::Overwrite,
+            source_in: None,
+            source_out: None,
+            match_sequence: false,
+        };
+        assert_eq!(apply(&mut fx.p, &place(fx.seq, inner)), Err(EditError::NestCycle));
+        assert_eq!(apply(&mut fx.p, &place(inner, inner)), Err(EditError::NestCycle));
+        // A sequence still nested elsewhere cannot be removed.
+        assert_eq!(apply(&mut fx.p, &EditCommand::RemoveSequence { sequence: inner }), Err(EditError::SequenceInUse(1)));
+        // Placing it again elsewhere works; a third sequence can hold the outer one.
+        fx.run(place(inner, fx.seq));
+        let third = fx.run(EditCommand::AddSequence { name: "Drei".into(), settings: SequenceSettings::default() }).created[0];
+        fx.run(place(fx.seq, third));
+        assert!(fx.p.nests(third, inner) && !fx.p.nests(inner, third));
+        assert_eq!(apply(&mut fx.p, &place(third, inner)), Err(EditError::NestCycle));
     }
 }

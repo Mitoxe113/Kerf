@@ -5,12 +5,19 @@
 // with the clock (hard re-seek on large drift, gentle rate nudging on small
 // drift). Paused, every move of the playhead becomes a coalesced, frame-
 // accurate seek; the composite is redrawn when the decoder delivers the frame.
+//
+// A clip showing another sequence (nested sequence) is evaluated in a scope
+// of its own: the inner sequence at the frame the clip shows, with its own
+// frame rate and the clip's speed. Its pictures are composited as a group
+// layer, its sound runs through buses of its own into the clip's volume,
+// pan and effects. Inside a reversed clip pictures are stepped by seeking
+// and the sound is silent (the export renders it properly).
 
 import { fpsOf } from "../lib/time";
 import { api } from "../lib/ipc";
 import { animate, isWarped, sourceAt, speedAt } from "../lib/keys";
 import { fileUrl, previewSource } from "../lib/media";
-import type { Clip, ClipPatch, MediaAsset, Sequence, Subtitles, TitleSpec, Track, Uuid } from "../lib/types";
+import type { Clip, ClipPatch, MediaAsset, Sequence, Subtitles, TitleSpec, Track, TrackKind, Uuid } from "../lib/types";
 import { AudioMixer, effectsMessage } from "./audio";
 import { transitionInto, type TransitionSpan } from "../timeline/geometry";
 import { Compositor, type DrawItem, type Layer, type LayerSource } from "./compositor";
@@ -22,6 +29,8 @@ const PREROLL_S = 1.2;
 const RELEASE_S = 6;
 const HARD_RESYNC_S = 0.12;
 const SOFT_DRIFT_S = 0.02;
+/** Deepest nesting evaluated (sequences cannot contain themselves; this guards damaged files). */
+const MAX_DEPTH = 8;
 
 interface Voice {
   key: string;
@@ -33,6 +42,9 @@ interface Voice {
   lastUsed: number;
   /** Plays the media's reversed sound (reversed audio clip): source time s is at duration - s. */
   reversed?: boolean;
+  /** Seconds a seek during playback takes (smoothed), and when the running one started. */
+  lag?: number;
+  seekStart?: number;
   // audio only
   source?: MediaElementAudioSourceNode;
   /** Clip effects and channel map, between the source and the gain. */
@@ -41,6 +53,39 @@ interface Voice {
   gain?: GainNode;
   pan?: StereoPannerNode;
   track?: Uuid;
+}
+
+/** Sound of a nested clip: its sequence's buses meet at `source`. */
+interface NestVoice {
+  key: string;
+  source: GainNode;
+  fx?: AudioWorkletNode;
+  fxSent?: string;
+  gain: GainNode;
+  pan: StereoPannerNode;
+  track?: string;
+  lastUsed: number;
+}
+
+/** A sequence being evaluated: the edited one, or one nested in a clip. */
+interface Scope {
+  seq: Sequence;
+  fps: number;
+  /** Frame of `seq` (fractional while playing). */
+  frame: number;
+  /** Real-time speed of its frames; 0 when paused (frames are sought). */
+  rate: number;
+  /** Prefix of voice and bus keys: the nested clips on the way here. */
+  path: string;
+  depth: number;
+  /** Inside a reversed clip: pictures run backwards, sound is silent. */
+  backwards: boolean;
+  /** Where the track buses go (null = the master). */
+  out: AudioNode | null;
+  /** Only tracks of this kind (a nested clip shows its sequence's pictures or sound). */
+  kind: TrackKind | null;
+  /** Canvas pixels per sequence pixel. */
+  px: number;
 }
 
 type Listener = () => void;
@@ -113,6 +158,9 @@ export class PlaybackEngine {
 
   private seq: Sequence | null = null;
   private media = new Map<Uuid, MediaAsset>();
+  /** All sequences of the project (nested clips show them). */
+  private sequences = new Map<Uuid, Sequence>();
+  private nests = new Map<string, NestVoice>();
   private opts: EngineOptions = { useProxies: false, quality: 1 };
   private overrides = new Map<Uuid, Partial<Clip>>();
   /** Reversed sound per media: URL, null while it is made, "" when it cannot be. */
@@ -174,10 +222,11 @@ export class PlaybackEngine {
     for (const l of this.listeners) l();
   }
 
-  update(seq: Sequence | null, media: Map<Uuid, MediaAsset>, opts: EngineOptions) {
+  update(seq: Sequence | null, media: Map<Uuid, MediaAsset>, opts: EngineOptions, sequences: Sequence[] = seq ? [seq] : []) {
     const seqChanged = seq?.id !== this.seq?.id;
     this.seq = seq;
     this.media = media;
+    this.sequences = new Map(sequences.map((s) => [s.id, s]));
     this.opts = opts;
     if (seqChanged) {
       this.pause();
@@ -384,8 +433,57 @@ export class PlaybackEngine {
 
   // --- voices -----------------------------------------------------------------------
 
-  private sourceTime(c: Clip, frame: number): number {
-    return sourceAt(c, frame - c.start) / this.fps;
+  private sourceTime(c: Clip, frame: number, fps: number): number {
+    return sourceAt(c, frame - c.start) / fps;
+  }
+
+  /** The edited sequence as a scope at the playhead. */
+  private rootScope(): Scope | null {
+    const seq = this.seq;
+    if (!seq) return null;
+    const px = this.compositor ? this.compositor.canvas.width / seq.settings.width : 1;
+    return { seq, fps: this.fps, frame: this.previewFrame ?? this.frame, rate: this.playing ? this.rate : 0, path: "", depth: 0, backwards: false, out: null, kind: null, px };
+  }
+
+  /** The sequence clip `c` shows, if it is a nested clip. */
+  private nestedOf(c: Clip, s: Scope): Sequence | null {
+    return s.depth < MAX_DEPTH ? (this.sequences.get(c.mediaId) ?? null) : null;
+  }
+
+  /** Scope of nested clip `c` of `s`: its sequence at the frame the clip shows. */
+  private innerScope(s: Scope, c: Clip, seq: Sequence, kind: TrackKind, out: AudioNode | null): Scope {
+    const fps = fpsOf(seq.settings.fps);
+    const local = s.frame - c.start;
+    const x = (sourceAt(c, local) / s.fps) * fps;
+    // Paused: the whole frame shown (the one below when reversed, as the export).
+    const frame = s.rate !== 0 ? (c.reverse ? x - 1e-3 : x) : c.reverse ? Math.ceil(x - 1e-6) - 1 : Math.floor(x + 1e-6);
+    return {
+      seq,
+      fps,
+      frame,
+      rate: s.rate * speedAt(c, local),
+      path: `${s.path}${c.id}/`,
+      depth: s.depth + 1,
+      backwards: s.backwards !== !!c.reverse,
+      out,
+      kind,
+      px: s.px,
+    };
+  }
+
+  private nestVoice(key: string): NestVoice {
+    let n = this.nests.get(key);
+    if (!n) {
+      const ctx = this.mixer.context();
+      const source = ctx.createGain();
+      const gain = ctx.createGain();
+      const pan = ctx.createStereoPanner();
+      source.connect(gain).connect(pan);
+      n = { key, source, gain, pan, lastUsed: 0 };
+      this.nests.set(key, n);
+    }
+    n.lastUsed = performance.now();
+    return n;
   }
 
   /** URL of the media's reversed sound, requested on first use (null until ready). */
@@ -404,7 +502,7 @@ export class PlaybackEngine {
     return null;
   }
 
-  private voice(clip: Clip, kind: "video" | "audio"): Voice | null {
+  private voice(clip: Clip, kind: "video" | "audio", path = ""): Voice | null {
     const asset = this.media.get(clip.mediaId);
     // Titles are drawn from their definition (layers()), not loaded.
     if (!asset || asset.status.state !== "ready" || asset.title) return null;
@@ -416,7 +514,7 @@ export class PlaybackEngine {
       return null;
     }
     this.pendingMedia.delete(asset.id);
-    const key = `${kind}:${clip.id}`;
+    const key = `${kind}:${path}${clip.id}`;
     let v = this.voices.get(key);
     if (v && v.src !== src) {
       this.releaseVoice(v);
@@ -466,6 +564,11 @@ export class PlaybackEngine {
   private onSeeked(v: Voice) {
     v.seeking = false;
     const el = v.el as HTMLMediaElement;
+    if (v.seekStart !== undefined) {
+      const took = (performance.now() - v.seekStart) / 1000;
+      v.lag = Math.min(0.6, (v.lag ?? took) * 0.5 + took * 0.5);
+      v.seekStart = undefined;
+    }
     if (v.pending !== null && Math.abs(v.pending - el.currentTime) > 0.004) {
       const t = v.pending;
       v.pending = null;
@@ -487,28 +590,29 @@ export class PlaybackEngine {
     el.currentTime = t;
   }
 
-  /** Time in the voice's media for timeline frame `frame` of clip `c`. */
-  private mediaTime(v: Voice, c: Clip, frame: number): number {
+  /** Time in the voice's media for frame `frame` (of scope `s`) of clip `c`. */
+  private mediaTime(v: Voice, c: Clip, frame: number, s: Scope): number {
     const el = v.el as HTMLMediaElement;
-    if (v.reversed) return (el.duration > 0 ? el.duration : (this.media.get(c.mediaId)?.info?.duration ?? 0)) - this.sourceTime(c, frame);
+    const at = this.sourceTime(c, frame, s.fps);
+    if (v.reversed) return (el.duration > 0 ? el.duration : (this.media.get(c.mediaId)?.info?.duration ?? 0)) - at;
     // The frame under the clip's position, or just below it when reversed (as the export).
-    if (isWarped(c)) return this.sourceTime(c, frame) + (c.reverse ? -0.001 : 0.001);
+    if (isWarped(c)) return at + (c.reverse ? -0.001 : 0.001);
     // Aim inside the frame so rounding never shows the previous one.
-    return this.sourceTime(c, frame) + (this.playing ? 0 : 0.35 / this.fps);
+    return at + (s.rate !== 0 ? 0 : 0.35 / s.fps);
   }
 
-  private syncVoice(v: Voice, c: Clip, frame: number, hard: boolean, audible: boolean) {
+  private syncVoice(v: Voice, c: Clip, frame: number, hard: boolean, audible: boolean, s: Scope) {
     if (v.el instanceof HTMLImageElement) return;
     const el = v.el;
     const local = frame - c.start;
-    const want = this.mediaTime(v, c, frame);
+    const want = this.mediaTime(v, c, frame, s);
     // Outside the media (transition handles) the first or last frame holds.
     const last = el.duration > 0 ? el.duration - 0.001 : Infinity;
     const t = Math.min(Math.max(0, want), last);
-    const rate = this.rate * speedAt(c, local);
+    const rate = s.rate * speedAt(c, local);
     // Reversed pictures are stepped by seeking; their sound plays the reversed file.
-    const backwards = c.reverse && !v.reversed;
-    const canPlay = this.playing && !backwards && rate > 0 && rate <= 8 && want >= 0 && want <= last;
+    const backwards = s.backwards !== !!c.reverse && !v.reversed;
+    const canPlay = s.rate !== 0 && !backwards && rate > 0 && rate <= 8 && want >= 0 && want <= last;
     if (!canPlay) {
       if (!el.paused) el.pause();
       this.seekVoice(v, t);
@@ -518,7 +622,10 @@ export class PlaybackEngine {
     const drift = el.currentTime - t;
     if (hard || el.paused || Math.abs(drift) > HARD_RESYNC_S) {
       if (!v.seeking) {
-        el.currentTime = t;
+        // The element plays on (or starts) once the seek is done: aim that far ahead,
+        // or it lags behind by the seek time and is sought again and again.
+        el.currentTime = Math.min(last, t + (v.lag ?? 0.05) * rate);
+        v.seekStart = performance.now();
         v.seeking = true;
       }
       el.playbackRate = rate;
@@ -531,11 +638,31 @@ export class PlaybackEngine {
   }
 
   /** Prepares an upcoming clip so the cut plays without a decode gap. */
-  private preroll(v: Voice, c: Clip, from: number) {
+  private preroll(v: Voice, c: Clip, from: number, s: Scope) {
     if (v.el instanceof HTMLImageElement) return;
     const el = v.el;
     if (!el.paused) el.pause();
-    this.seekVoice(v, Math.max(0, this.mediaTime(v, c, from)));
+    this.seekVoice(v, Math.max(0, this.mediaTime(v, c, from, s)));
+  }
+
+  /** Prerolls the clips a nested sequence starts with. */
+  private prerollScope(s: Scope, used: Set<string>) {
+    for (const track of s.seq.tracks) {
+      if ((s.kind && track.kind !== s.kind) || (track.kind === "video" && track.hidden)) continue;
+      const raw = clipAt(track, s.frame);
+      if (!raw?.enabled) continue;
+      const c = this.effectiveClip(raw);
+      const inner = this.nestedOf(c, s);
+      if (inner) {
+        this.prerollScope(this.innerScope(s, c, inner, track.kind, null), used);
+        continue;
+      }
+      const v = this.voice(c, track.kind, s.path);
+      if (v && !used.has(v.key)) {
+        used.add(v.key);
+        this.preroll(v, c, s.frame, s);
+      }
+    }
   }
 
   /** Clips playing at `frame` on `track` with their mix weight (two in a transition). */
@@ -552,56 +679,10 @@ export class PlaybackEngine {
   }
 
   private syncAll(hard: boolean) {
-    const seq = this.seq;
-    if (!seq) return;
-    const frame = this.previewFrame ?? this.frame;
+    const root = this.rootScope();
+    if (!root) return;
     const used = new Set<string>();
-    const ahead = this.playing && this.rate > 0 ? PREROLL_S * this.fps * this.rate : 0;
-    const anySolo = seq.tracks.some((t) => t.kind === "audio" && t.solo);
-
-    for (const track of seq.tracks) {
-      const kind = track.kind;
-      if (kind === "video" && track.hidden) continue;
-      for (const { c, weight } of this.activeClips(track, frame)) {
-        if (!c.enabled) continue;
-        const v = this.voice(c, kind);
-        if (v) {
-          used.add(v.key);
-          const audible = kind === "audio" && !track.muted && (!anySolo || track.solo);
-          if (kind === "audio" && v.gain && v.pan) {
-            const ctx = this.mixer.context();
-            // A crossfade weighs both clips linearly, like the export's afade.
-            const g = dbToGain(animate(c, frame).volumeDb) * fadeGain(c, frame) * weight;
-            v.gain.gain.setTargetAtTime(g, ctx.currentTime, 0.01);
-            v.pan.pan.setTargetAtTime(c.pan, ctx.currentTime, 0.01);
-            this.syncEffects(v, c);
-            if (v.track !== track.id) {
-              v.pan.disconnect();
-              v.pan.connect(this.mixer.bus(track.id));
-              v.track = track.id;
-            }
-          }
-          this.syncVoice(v, c, frame, hard, audible);
-        }
-      }
-      if (kind === "audio") {
-        const audible = !track.muted && (!anySolo || track.solo);
-        const t = { ...track, ...this.trackOverrides.get(track.id) };
-        this.mixer.setBusGain(track.id, audible ? dbToGain(t.volumeDb) : 0);
-        this.mixer.setBusEffects(track.id, t.effects, !!t.mono);
-      }
-      if (ahead > 0) {
-        const next = nextClipAfter(track, frame);
-        if (next && next.clip.enabled && next.from > frame && next.from - frame < ahead) {
-          const c = this.effectiveClip(next.clip);
-          const v = this.voice(c, kind);
-          if (v && !used.has(v.key)) {
-            used.add(v.key);
-            this.preroll(v, c, next.from);
-          }
-        }
-      }
-    }
+    this.syncScope(root, hard, used);
     // Pause idle voices; release ones not used for a while.
     const now = performance.now();
     for (const v of this.voices.values()) {
@@ -609,10 +690,87 @@ export class PlaybackEngine {
       if (!(v.el instanceof HTMLImageElement) && !v.el.paused) v.el.pause();
       if (now - v.lastUsed > RELEASE_S * 1000) this.releaseVoice(v);
     }
+    for (const n of this.nests.values()) {
+      if (used.has(n.key) || now - n.lastUsed <= RELEASE_S * 1000) continue;
+      for (const node of [n.source, n.fx, n.gain, n.pan]) node?.disconnect();
+      this.nests.delete(n.key);
+    }
+  }
+
+  /** Volume, pan and effects of an audio clip (or nested clip), into its track's bus. */
+  private syncGain(v: { gain: GainNode; pan: StereoPannerNode; track?: string; source?: AudioNode; fx?: AudioWorkletNode; fxSent?: string }, c: Clip, frame: number, weight: number, bus: string, s: Scope) {
+    const ctx = this.mixer.context();
+    // A crossfade weighs both clips linearly, like the export's afade.
+    const g = dbToGain(animate(c, frame).volumeDb) * fadeGain(c, frame) * weight;
+    v.gain.gain.setTargetAtTime(g, ctx.currentTime, 0.01);
+    v.pan.pan.setTargetAtTime(c.pan, ctx.currentTime, 0.01);
+    this.syncEffects(v, c);
+    if (v.track !== bus) {
+      v.pan.disconnect();
+      v.pan.connect(this.mixer.bus(bus, s.out));
+      v.track = bus;
+    }
+  }
+
+  /** Syncs the voices of scope `s`, and of the sequences nested in it. */
+  private syncScope(s: Scope, hard: boolean, used: Set<string>) {
+    const { seq, frame } = s;
+    const ahead = s.rate > 0 ? PREROLL_S * s.fps * s.rate : 0;
+    const anySolo = seq.tracks.some((t) => t.kind === "audio" && t.solo);
+
+    for (const track of seq.tracks) {
+      const kind = track.kind;
+      if (s.kind && kind !== s.kind) continue;
+      if (kind === "video" && track.hidden) continue;
+      const on = !track.muted && (!anySolo || track.solo);
+      const audible = kind === "audio" && on && !s.backwards;
+      const bus = s.path + track.id;
+      for (const { c, weight } of this.activeClips(track, frame)) {
+        if (!c.enabled) continue;
+        const inner = this.nestedOf(c, s);
+        if (inner) {
+          let out: AudioNode | null = null;
+          if (kind === "audio") {
+            const n = this.nestVoice(`nest:${s.path}${c.id}`);
+            used.add(n.key);
+            this.syncGain(n, c, frame, weight, bus, s);
+            out = n.source;
+          }
+          this.syncScope(this.innerScope(s, c, inner, kind, out), hard, used);
+          continue;
+        }
+        const v = this.voice(c, kind, s.path);
+        if (!v) continue;
+        used.add(v.key);
+        if (kind === "audio" && v.gain && v.pan) this.syncGain(v as Voice & { gain: GainNode; pan: StereoPannerNode }, c, frame, weight, bus, s);
+        this.syncVoice(v, c, frame, hard, audible, s);
+      }
+      if (kind === "audio") {
+        const t = { ...track, ...this.trackOverrides.get(track.id) };
+        this.mixer.setBusGain(bus, on ? dbToGain(t.volumeDb) : 0, s.out);
+        this.mixer.setBusEffects(bus, t.effects, !!t.mono, s.out);
+      }
+      if (ahead > 0) {
+        const next = nextClipAfter(track, frame);
+        if (next && next.clip.enabled && next.from > frame && next.from - frame < ahead) {
+          const c = this.effectiveClip(next.clip);
+          const inner = this.nestedOf(c, s);
+          if (inner) {
+            this.prerollScope(this.innerScope({ ...s, frame: next.from }, c, inner, kind, null), used);
+            continue;
+          }
+          const v = this.voice(c, kind, s.path);
+          if (v && !used.has(v.key)) {
+            used.add(v.key);
+            this.preroll(v, c, next.from, s);
+          }
+        }
+      }
+    }
   }
 
   /** Puts the clip's effects node in or out and sends it changed settings. */
-  private syncEffects(v: Voice, c: Clip) {
+  private syncEffects(v: { source?: AudioNode; gain?: GainNode; fx?: AudioWorkletNode; fxSent?: string }, c: Clip) {
     if (!v.source || !v.gain) return;
     const msg = effectsMessage(c.audioEffects, c.channels);
     const key = msg ? JSON.stringify(msg) : "";
@@ -648,21 +806,40 @@ export class PlaybackEngine {
 
   private releaseAll() {
     for (const v of [...this.voices.values()]) this.releaseVoice(v);
+    for (const n of this.nests.values()) for (const node of [n.source, n.fx, n.gain, n.pan]) node?.disconnect();
+    this.nests.clear();
   }
 
   // --- compositing ----------------------------------------------------------------
 
-  /** Layer of video clip `c` at `frame`, null when it shows nothing. */
-  private layerOf(c: Clip, frame: number, W: number, H: number): Layer | null {
+  /** Layer of video clip `c` in scope `s`, null when it shows nothing. */
+  private layerOf(c: Clip, s: Scope): Layer | null {
     if (!c.enabled) return null;
-    const title = this.media.get(c.mediaId)?.title;
-    const v = title ? undefined : this.voices.get(`video:${c.id}`);
-    const src: LayerSource | undefined = title ? titleCanvas(this.titleOverrides.get(c.mediaId) ?? title) : (v?.el as LayerSource | undefined);
-    if (!src) return null;
-    const [sw, sh] =
-      src instanceof HTMLVideoElement ? [src.videoWidth, src.videoHeight] : src instanceof HTMLImageElement ? [src.naturalWidth, src.naturalHeight] : [src.width, src.height];
-    if (!sw || !sh) return null;
-    if (src instanceof HTMLVideoElement && src.readyState < 2) return null;
+    const frame = s.frame;
+    const { width: W, height: H } = s.seq.settings;
+    const inner = this.nestedOf(c, s);
+    let src: LayerSource | undefined;
+    let group: Layer["group"];
+    let key: string;
+    let sw: number;
+    let sh: number;
+    if (inner) {
+      // The nested sequence composited at the preview's pixel density (bounded).
+      [sw, sh] = [inner.settings.width, inner.settings.height];
+      const k = Math.min(s.px, 4096 / Math.max(sw, sh));
+      group = { items: this.layersOf({ ...this.innerScope(s, c, inner, "video", null), px: k }), width: Math.max(1, Math.round(sw * k)), height: Math.max(1, Math.round(sh * k)) };
+      key = `group:${s.path}${c.id}`;
+    } else {
+      const title = this.media.get(c.mediaId)?.title;
+      const v = title ? undefined : this.voices.get(`video:${s.path}${c.id}`);
+      src = title ? titleCanvas(this.titleOverrides.get(c.mediaId) ?? title) : (v?.el as LayerSource | undefined);
+      if (!src) return null;
+      [sw, sh] =
+        src instanceof HTMLVideoElement ? [src.videoWidth, src.videoHeight] : src instanceof HTMLImageElement ? [src.naturalWidth, src.naturalHeight] : [src.width, src.height];
+      if (!sw || !sh) return null;
+      if (src instanceof HTMLVideoElement && src.readyState < 2) return null;
+      key = v?.key ?? `title:${s.path}${c.id}`;
+    }
     const a = animate(c, frame);
     const t = a.transform;
     const opacity = a.opacity * fadeGain(c, frame);
@@ -670,10 +847,11 @@ export class PlaybackEngine {
     const p = place(t, sw, sh, W, H);
     const effects = activeEffects(c.effects);
     // Effects run at the fitted size (scale 1) in canvas pixels.
-    const fxScale = this.compositor ? this.compositor.canvas.width / W : 1;
+    const fxScale = s.px;
     return {
-      key: v?.key ?? `title:${c.id}`,
+      key,
       source: src,
+      group,
       matrix: quadMatrix(p, W, H),
       crop: [t.cropLeft, t.cropTop, t.cropRight, t.cropBottom],
       opacity,
@@ -684,26 +862,33 @@ export class PlaybackEngine {
     };
   }
 
-  private layers(): DrawItem[] {
-    const seq = this.seq;
-    if (!seq) return [];
-    const frame = this.previewFrame ?? this.frame;
-    const { width: W, height: H } = seq.settings;
+  /** Layers of the video tracks of scope `s`, bottom first. */
+  private layersOf(s: Scope): DrawItem[] {
+    const { width: W, height: H } = s.seq.settings;
     const out: DrawItem[] = [];
-    for (const track of seq.tracks) {
+    for (const track of s.seq.tracks) {
       if (track.kind !== "video" || track.hidden) continue;
-      const tr = transitionAt(track, frame);
+      const tr = transitionAt(track, s.frame);
       if (tr) {
-        const [a, b] = [this.layerOf(this.effectiveClip(tr.a), frame, W, H), this.layerOf(this.effectiveClip(tr.b), frame, W, H)];
+        const [a, b] = [this.layerOf(this.effectiveClip(tr.a), s), this.layerOf(this.effectiveClip(tr.b), s)];
         const vertical = tr.span.kind === "wipeUp" || tr.span.kind === "wipeDown";
         const size = vertical ? H : W;
-        if (a || b) out.push({ key: `tr:${tr.b.id}`, kind: tr.span.kind, p: tr.p, edge: Math.floor(size * tr.p + 1e-4) / size, a, b });
+        if (a || b) out.push({ key: `tr:${s.path}${tr.b.id}`, kind: tr.span.kind, p: tr.p, edge: Math.floor(size * tr.p + 1e-4) / size, a, b });
         continue;
       }
-      const raw = clipAt(track, frame);
-      const l = raw && this.layerOf(this.effectiveClip(raw), frame, W, H);
+      const raw = clipAt(track, s.frame);
+      const l = raw && this.layerOf(this.effectiveClip(raw), s);
       if (l) out.push(l);
     }
+    return out;
+  }
+
+  private layers(): DrawItem[] {
+    const root = this.rootScope();
+    if (!root) return [];
+    const { seq, frame } = root;
+    const { width: W, height: H } = seq.settings;
+    const out = this.layersOf(root);
     // Subtitles on top of everything, as the export burns them in.
     const subs = this.subtitleOverride ?? seq.subtitles;
     const cue = subs?.visible ? cueAt(subs, frame) : null;
@@ -748,6 +933,8 @@ export class PlaybackEngine {
       const c = t.clips.find((x) => x.id === clipId);
       const title = c && this.media.get(c.mediaId)?.title;
       if (title) return [title.width, title.height];
+      const inner = c && this.sequences.get(c.mediaId);
+      if (inner) return [inner.settings.width, inner.settings.height];
     }
     const el = this.voices.get(`video:${clipId}`)?.el;
     if (el instanceof HTMLVideoElement) return el.videoWidth ? [el.videoWidth, el.videoHeight] : null;

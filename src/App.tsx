@@ -45,10 +45,10 @@ function syncEngine() {
     const p = useProject.getState();
     const e = useEditor.getState();
     const seq = activeSequence(p.project);
-    const next = [seq, p.mediaById, e.useProxies, e.quality];
+    const next = [seq, p.mediaById, e.useProxies, e.quality, p.project?.sequences];
     if (next.every((v, i) => v === last[i])) return;
     last = next;
-    engine.update(seq, p.mediaById, { useProxies: e.useProxies, quality: e.quality });
+    engine.update(seq, p.mediaById, { useProxies: e.useProxies, quality: e.quality }, p.project?.sequences);
   };
   const a = useProject.subscribe(push);
   const b = useEditor.subscribe(push);

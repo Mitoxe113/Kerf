@@ -585,7 +585,7 @@ function RenderQueue({ jobs }: { jobs: ExportJob[] }) {
             <>
               <Progress value={j.progress.fraction} indeterminate={j.status === "queued"} />
               <div className="tc flex justify-between text-[10.5px] text-fg-3">
-                <span>{j.status === "queued" ? "Wartet …" : `${j.progress.measuring ? "Lautheit messen · " : ""}${Math.round(j.progress.fraction * 100)} %${j.progress.speed && !j.progress.measuring ? ` · ${j.progress.speed.toFixed(1).replace(".", ",")}×` : ""}`}</span>
+                <span>{j.status === "queued" ? "Wartet …" : `${j.progress.nested ? "Verschachtelte Sequenzen · " : j.progress.measuring ? "Lautheit messen · " : ""}${Math.round(j.progress.fraction * 100)} %${j.progress.speed && !j.progress.measuring && !j.progress.nested ? ` · ${j.progress.speed.toFixed(1).replace(".", ",")}×` : ""}`}</span>
                 <span>{j.progress.eta !== null && j.status === "running" ? `noch ${formatDuration(j.progress.eta)}` : ""}</span>
               </div>
             </>

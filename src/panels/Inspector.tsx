@@ -9,7 +9,7 @@ import type { AudioEffect, ChannelMap, Clip, ClipPatch, ColorAdjust, ColorParam,
 import { findClip, locate, transitionInto } from "../timeline/geometry";
 import { ALIGNS, defaultTransition, kindsFor, setTransition } from "../actions/transitions";
 import { useEditor } from "../state/editor";
-import { edit, useActiveSequence, useProject } from "../state/project";
+import { edit, sourceAsset, useActiveSequence, useProject } from "../state/project";
 import { Button, cx, Field, IconButton, NumberField, openContextMenu, PanelHeader, Section, Segmented, Select, Slider, Toggle } from "../ui/primitives";
 import { AddAudioEffect, AudioEffectsEditor } from "./AudioEffects";
 import { EffectsSection, GradeSections } from "./Effects";
@@ -77,7 +77,8 @@ export function Inspector() {
     );
 
   const ref = clips[0];
-  const asset = media.get(ref.mediaId);
+  const asset = media.get(ref.mediaId) ?? sourceAsset(ref.mediaId);
+  const nested = !media.has(ref.mediaId) && !!asset;
   const preview = (targets: Clip[], patch: ClipPatch) => targets.forEach((c) => engine.setOverride(c.id, patch));
   const commit = async (targets: Clip[], patch: ClipPatch) => {
     if (!targets.length) return;
@@ -102,7 +103,7 @@ export function Inspector() {
           <div className="truncate text-sm font-semibold">{clips.length > 1 ? `${clips.length} Clips` : ref.name}</div>
           {asset && (
             <div className="truncate text-xs text-fg-3" title={asset.path}>
-              {[asset.info?.video && `${asset.info.video.width}×${asset.info.video.height}`, asset.info?.video && asset.kind === "video" && `${formatRate(asset.info.video.fps)} fps`, codecLabel(asset.info?.video?.codec ?? asset.info?.audio?.codec), asset.info?.sizeBytes ? formatBytes(asset.info.sizeBytes) : null]
+              {[nested && "Verschachtelte Sequenz", asset.info?.video && `${asset.info.video.width}×${asset.info.video.height}`, asset.info?.video && asset.kind === "video" && `${formatRate(asset.info.video.fps)} fps`, !nested && codecLabel(asset.info?.video?.codec ?? asset.info?.audio?.codec), asset.info?.sizeBytes ? formatBytes(asset.info.sizeBytes) : null]
                 .filter(Boolean)
                 .join(" · ")}
             </div>

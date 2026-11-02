@@ -7,7 +7,7 @@ import { formatRate, formatTimecode } from "../lib/time";
 import type { Clip, ClipPatch, LabelColor, MarkerColor, PlaceMode, Sequence, TrackKind, Uuid } from "../lib/types";
 import { editPoints, expandLinks, findClip, locate } from "../timeline/geometry";
 import { useEditor } from "../state/editor";
-import { activeSequence, edit, reportError, useProject } from "../state/project";
+import { activeSequence, edit, nestedSequence, reportError, sourceAsset, useProject } from "../state/project";
 import { api } from "../lib/ipc";
 import { toast } from "../state/toasts";
 import { prompt } from "./project";
@@ -157,9 +157,8 @@ async function mapSelection(kind: TrackKind, fn: (clip: Clip) => ClipPatch | nul
 /** Scales the selected visuals so they fill (crop) or fit (letterbox) the frame. */
 export function frameVisuals(mode: "fill" | "fit") {
   const s = seq();
-  const { mediaById } = useProject.getState();
   return mapSelection("video", (clip) => {
-    const dims = displaySize(mediaById.get(clip.mediaId));
+    const dims = displaySize(sourceAsset(clip.mediaId));
     if (!s || !dims) return null;
     const t = clip.transform;
     const cw = dims[0] * (1 - t.cropLeft - t.cropRight);
@@ -189,11 +188,11 @@ export async function placeMedia(
 ): Promise<number | null> {
   const s = seq();
   if (!s || !media.length) return null;
-  const { mediaById } = useProject.getState();
   let pos = at ?? playhead();
   const created: Uuid[] = [];
   for (const id of media) {
-    const a = mediaById.get(id);
+    // Media, or another sequence (placed as a nested clip).
+    const a = sourceAsset(id);
     if (!a) continue;
     if (a.status.state !== "ready") {
       toast.info(`„${a.name}“ ist noch nicht bereit`, a.status.state === "missing" ? "Datei offline" : "Analyse läuft …");
@@ -408,11 +407,44 @@ export async function replaceClipMedia(clip: Uuid) {
   await edit({ type: "replaceMedia", sequence: s.id, clip, media: media[0] });
 }
 
+/** Moves the selection into a new sequence and puts it back as one nested clip. */
+export async function nestSelection() {
+  const s = seq();
+  const ids = selection();
+  if (!s || !ids.length) return;
+  const n = (useProject.getState().project?.sequences.length ?? 0) + 1;
+  const name = await prompt({ title: "Verschachteln", label: "Name der neuen Sequenz", value: `Verschachtelt ${String(n).padStart(2, "0")}`, confirm: "Verschachteln" });
+  if (!name?.trim()) return;
+  const d = await edit({ type: "nestClips", sequence: s.id, clips: ids, name: name.trim() });
+  if (d) useEditor.getState().select(d.outcome.created.slice(1));
+}
+
+/** Opens the sequence a nested clip shows, at the frame under the playhead. */
+export async function openNested(clip: Clip) {
+  const inner = nestedSequence(clip.mediaId);
+  const outer = seq();
+  if (!inner || !outer) return;
+  const local = Math.min(Math.max(playhead() - clip.start, 0), clip.duration - 1);
+  const at = Math.floor(((clip.sourceIn + local * clip.speed) * inner.settings.fps.num * outer.settings.fps.den) / (outer.settings.fps.num * inner.settings.fps.den) + 1e-6);
+  await openSequence(inner.id);
+  engine.seek(Math.max(0, at));
+}
+
+/** Makes `id` the edited sequence. */
+export async function openSequence(id: Uuid) {
+  const p = useProject.getState().project;
+  if (!p || id === p.activeSequence) return;
+  await api.setActiveSequence(id);
+  useProject.getState().setActiveSequence(id);
+  useEditor.getState().set({ selection: [], scrollX: 0 });
+}
+
 /** Shows the clip's media in the media browser (bin, selection, panel focus). */
 export function revealInProject(clip?: Uuid) {
   const s = seq();
   const c = s && (clip ? findClip(s, clip) : selectedClips(s)[0]);
   if (!c) return;
+  if (nestedSequence(c.mediaId)) return void openNested(c);
   const bin = useProject.getState().mediaById.get(c.mediaId)?.bin ?? null;
   const ed = useEditor.getState();
   ed.set({ mediaSelection: [c.mediaId], currentBin: bin, mediaSearch: "", mediaFilter: "all" });

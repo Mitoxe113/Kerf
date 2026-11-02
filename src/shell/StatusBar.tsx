@@ -94,8 +94,9 @@ export function Toasts() {
 export function DragGhost() {
   const drag = useDragGhost((s) => s.drag);
   const media = useProject((s) => s.mediaById);
+  const sequences = useProject((s) => s.project?.sequences);
   if (!drag) return null;
-  const first = media.get(drag.media[0]);
+  const first = media.get(drag.media[0]) ?? sequences?.find((q) => q.id === drag.media[0]);
   return (
     <div className="pointer-events-none fixed z-[990] rounded-sm bg-raised px-2 py-1 text-xs text-fg shadow-pop ring-1 ring-signal" style={{ left: drag.x + 12, top: drag.y + 12 }}>
       {first?.name}

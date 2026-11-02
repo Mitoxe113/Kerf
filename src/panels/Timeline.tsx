@@ -2,6 +2,8 @@ import { useShallow } from "zustand/react/shallow";
 import { shownFrame, slippedIn } from "../lib/keys";
 import { Eye, EyeOff, Lock, Magnet, Plus, Unlock, Link2, Film, Music } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { nestSelection, openNested, openSequence } from "../actions/editing";
+import { startMediaDrag } from "../ui/dnd";
 import { MAX_ZOOM, MIN_ZOOM, placeMedia, selectClips, setTimelineViewport, zoomBy, copySelection, deleteSelection, paste, toggleEnabled, linkSelection, applyFades, addTrack, renameSelection, labelSelection, replaceClipMedia, revealInProject, freezeFrame, openNormalize, selectedAudioClips } from "../actions/editing";
 import { LABEL_NAMES, LABELS, labelColor } from "../lib/labels";
 import { TOOLS } from "../actions/registry";
@@ -11,8 +13,7 @@ import { formatTimecode, fpsOf } from "../lib/time";
 import type { Clip, MarkerColor, Sequence, Track, Transition, Uuid } from "../lib/types";
 import { ALIGNS, applyDefaultTransitions, kindsFor, removeTransitions, setTransition } from "../actions/transitions";
 import { useEditor, type ToolId } from "../state/editor";
-import { edit, useActiveSequence, useProject } from "../state/project";
-import { api } from "../lib/ipc";
+import { edit, nestedSequence, sourceAsset, useActiveSequence, useProject } from "../state/project";
 import {
   clampRoll,
   clampSlide,
@@ -97,15 +98,15 @@ function SequenceTabs() {
       {project.sequences.map((s) => (
         <button
           key={s.id}
-          onClick={() => {
-            if (s.id === project.activeSequence) return;
-            void api.setActiveSequence(s.id).then(() => {
-              useProject.getState().setActiveSequence(s.id);
-              set({ selection: [], scrollX: 0 });
-            });
-          }}
+          title={s.id === project.activeSequence ? undefined : "Klicken zum Öffnen, in die Timeline ziehen zum Verschachteln"}
+          onClick={() => void openSequence(s.id)}
+          // Another sequence can be dragged into the timeline as a nested clip.
+          onPointerDown={(e) => s.id !== project.activeSequence && startMediaDrag(e, [s.id])}
           onContextMenu={(e) =>
             openContextMenu(e, [
+              { label: "Am Playhead einfügen (verschachtelt)", disabled: s.id === project.activeSequence, onSelect: () => void placeMedia([s.id], "insert") },
+              { label: "Am Playhead überschreiben (verschachtelt)", disabled: s.id === project.activeSequence, onSelect: () => void placeMedia([s.id], "overwrite") },
+              { separator: true },
               { label: "Sequenzeinstellungen …", onSelect: () => set({ dialog: { kind: "sequenceSettings", sequence: s.id } }) },
               { label: "Löschen", danger: true, disabled: project.sequences.length < 2, onSelect: () => void edit({ type: "removeSequence", sequence: s.id }) },
             ])
@@ -258,6 +259,8 @@ function TrackHeader({ row, seq }: { row: TrackRow; seq: Sequence }) {
 export function Timeline() {
   const seq = useActiveSequence();
   const mediaById = useProject((s) => s.mediaById);
+  const sequences = useProject((s) => s.project?.sequences);
+  const sequenceNames = useMemo(() => new Map((sequences ?? []).map((q) => [q.id, q.name])), [sequences]);
   const ed = useEditor(
     useShallow((s) => ({
       clipboard: s.clipboard,
@@ -324,11 +327,11 @@ export function Timeline() {
     const ctx = c.getContext("2d")!;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, v.width, v.height);
-    drawTracks(ctx, layout, v, { seq, media: mediaById, selection, activeTransition: ed.activeTransition, redraw: () => requestBase() });
+    drawTracks(ctx, layout, v, { seq, media: mediaById, sequences: sequenceNames, selection, activeTransition: ed.activeTransition, redraw: () => requestBase() });
     drawSubtitleLane(ctx, seq, v, ed.activeCue);
     drawRuler(ctx, seq, v);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [seq, layout, mediaById, selection, ed.activeCue, ed.activeTransition]);
+  }, [seq, layout, mediaById, sequenceNames, selection, ed.activeCue, ed.activeTransition]);
 
   // The queued frame must draw the latest state, not the closure that queued it.
   const drawBaseRef = useRef(drawBase);
@@ -524,7 +527,7 @@ export function Timeline() {
         const y = cy - r.top;
         cursorRef.current = { x, y };
         const v = viewRef.current;
-        const assets = media.map((id) => useProject.getState().mediaById.get(id)).filter(Boolean);
+        const assets = media.map((id) => sourceAsset(id)).filter(Boolean);
         const range = mediaDragRange();
         const full = assets.reduce((sum, a) => sum + (mediaLength(a!, s) ?? Math.round(fpsOf(s.settings.fps) * 5)), 0);
         const length = range ? (range.sourceOut ?? full) - range.sourceIn : full;
@@ -623,7 +626,7 @@ export function Timeline() {
   };
 
   const markerAt = (x: number) => seq.markers.find((m) => Math.abs(m.frame * view.zoom - view.scrollX - x) <= 6) ?? null;
-  const lenOf = (c: Clip) => mediaLength(mediaById.get(c.mediaId), seq);
+  const lenOf = (c: Clip) => mediaLength(sourceAsset(c.mediaId), seq);
   const targets = (exclude?: Set<Uuid>) => snapTargets(seq, engine.frame, exclude);
 
   const setCursor = (c: string) => {
@@ -1042,6 +1045,8 @@ export function Timeline() {
       { separator: true },
       { label: "Am Mauszeiger schneiden", onSelect: () => void edit({ type: "splitAt", sequence: seq.id, frame: Math.round(frameAt(x)), clips: ids }) },
       { label: h.clip.enabled ? "Deaktivieren" : "Aktivieren", shortcut: "⇧+E", onSelect: () => void toggleEnabled() },
+      ...(nestedSequence(h.clip.mediaId) ? [{ label: "Verschachtelte Sequenz öffnen", onSelect: () => void openNested(h.clip) }] : []),
+      { label: "Verschachteln …", onSelect: () => void nestSelection() },
       { label: "Verknüpfen", disabled: ids.length < 2, onSelect: () => void linkSelection(true) },
       { label: "Verknüpfung lösen", disabled: !h.clip.link, onSelect: () => void linkSelection(false) },
       { label: "Ein- und Ausblenden (½ s)", onSelect: () => void applyFades() },
@@ -1135,7 +1140,10 @@ export function Timeline() {
               onContextMenu={onContextMenu}
               onDoubleClick={(e) => {
                 const { x, y } = local(e);
-                if (y >= RULER_H && !hitTest(x, y)) engine.seek(Math.round(frameAt(x)));
+                const h = y >= RULER_H ? hitTest(x, y) : null;
+                // A nested clip opens its sequence; empty space seeks.
+                if (h?.zone === "body" && nestedSequence(h.clip.mediaId)) void openNested(h.clip);
+                else if (y >= RULER_H && !h) engine.seek(Math.round(frameAt(x)));
               }}
             />
             {markerEdit && (

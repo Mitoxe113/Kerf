@@ -51,6 +51,8 @@ impl From<EditError> for CommandError {
             EditError::TrackOutOfRange => "trackOutOfRange",
             EditError::NoNeighbor => "noNeighbor",
             EditError::LastSequence => "lastSequence",
+            EditError::NestCycle => "nestCycle",
+            EditError::SequenceInUse(_) => "sequenceInUse",
             EditError::Invalid(_) => "invalid",
         };
         Self::new(code, e)

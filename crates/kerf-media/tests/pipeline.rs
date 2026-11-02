@@ -946,3 +946,94 @@ fn reverse_and_speed_ramps_render() {
         assert_eq!(frame_number(&tools, &f, l).round(), want, "reversed ramp frame {l}");
     }
 }
+
+/// Mean luma (0..255) of the `w`x`h` region at `x`, `y` of the frame at `t` seconds.
+fn region_luma(tools: &Tools, file: &Path, t: f64, (x, y, w, h): (u32, u32, u32, u32)) -> f64 {
+    let out = tools
+        .ffmpeg_cmd()
+        .args(["-ss", &format!("{t}"), "-i"])
+        .arg(file)
+        .args(["-frames:v", "1", "-vf", &format!("crop={w}:{h}:{x}:{y}"), "-f", "rawvideo", "-pix_fmt", "gray", "pipe:1"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    out.stdout.iter().map(|b| *b as f64).sum::<f64>() / out.stdout.len().max(1) as f64
+}
+
+#[test]
+fn nested_sequences_render() {
+    let Some(tools) = tools() else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    let (bg, fg) = (d.join("grey.mp4"), d.join("white.mp4"));
+    ffmpeg(&tools, &["-f", "lavfi", "-i", "color=c=0x808080:s=320x180:r=25:d=2", "-c:v", "libx264", "-preset", "ultrafast", "-y", &bg.to_string_lossy()]);
+    ffmpeg(&tools, &[
+        "-f", "lavfi", "-i", "color=c=white:s=320x180:r=25:d=2",
+        "-f", "lavfi", "-i", "aevalsrc=0.5*sin(2*PI*1000*t):s=48000:d=2",
+        "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-shortest", "-y", &fg.to_string_lossy(),
+    ]);
+    let (bg, fg) = (import(&tools, &bg, &d.join("cache")), import(&tools, &fg, &d.join("cache")));
+    let (bg_id, fg_id) = (bg.id, fg.id);
+    let mut p = Project::new("n", 0);
+    p.media.extend([bg, fg]);
+    let settings = SequenceSettings { width: 640, height: 360, fps: Rational::new(25, 1), sample_rate: 48_000 };
+    let run = |p: &mut Project, cmd: EditCommand| kerf_core::ops::apply(p, &cmd).unwrap();
+    let place = |sequence, media, video_track| EditCommand::PlaceMedia {
+        sequence, media, video_track, audio_track: None, at: 0,
+        mode: PlaceMode::Overwrite, source_in: None, source_out: None, match_sequence: false,
+    };
+    let outer = p.active_sequence;
+    run(&mut p, EditCommand::UpdateSequenceSettings { sequence: outer, settings });
+
+    // Innermost: a half-transparent white box in the left half, with a tone.
+    let inner = run(&mut p, EditCommand::AddSequence { name: "Innen".into(), settings }).created[0];
+    let box_clip = run(&mut p, place(inner, fg_id, None)).created[0];
+    run(&mut p, EditCommand::UpdateClips {
+        sequence: inner, clips: vec![box_clip],
+        patch: ClipPatch { transform: Some(Transform { x: -200.0, scale: 0.25, ..Default::default() }), opacity: Some(0.5), ..Default::default() },
+    });
+
+    // Outer: grey on V1, the inner sequence over it on V2; then both nested once more.
+    let v2 = p.sequence(outer).unwrap().tracks[1].id;
+    let grey = run(&mut p, place(outer, bg_id, None)).created[0];
+    let nested = run(&mut p, place(outer, inner, Some(v2))).created;
+    assert_eq!(nested.len(), 2, "picture and sound of the nested sequence");
+    let wrap = run(&mut p, EditCommand::NestClips { sequence: outer, clips: vec![grey, nested[0]], name: "Ebene 2".into() }).created[0];
+    assert!(p.nests(outer, inner) && p.nests(wrap, inner));
+
+    let file = d.join("nested.mp4");
+    let export = ExportSettings {
+        output: file.clone(),
+        video_codec: VideoCodec::H264,
+        hardware: false,
+        width: 640,
+        height: 360,
+        fps: Rational::new(25, 1),
+        rate: RateControl::Quality { crf: 12 },
+        audio_codec: AudioCodec::Aac,
+        audio_bitrate_kbps: 192,
+        sample_rate: 48_000,
+        audio_channels: 2,
+        use_in_out: false,
+        subtitles: Default::default(),
+        title_files: Default::default(),
+        loudness: None,
+    };
+    let plan = render::plan(&p, p.sequence(outer).unwrap(), &export, d, &[]).unwrap();
+    assert_eq!(plan.nested.len(), 2, "both levels render first");
+    let mut saw_nested = false;
+    render::render(&tools, &plan, &AtomicBool::new(false), |pr| saw_nested |= pr.nested).expect("render nested");
+    assert!(saw_nested);
+    assert!(plan.nested.iter().all(|n| !n.output.exists()), "intermediate files are removed");
+
+    // Box centre: half white over grey (straight alpha, not darkened twice); right: grey.
+    // (Read back as full-range grey, so half white over grey is their mean.)
+    let boxed = region_luma(&tools, &file, 1.0, (100, 160, 40, 40));
+    let right = region_luma(&tools, &file, 1.0, (420, 20, 200, 300));
+    eprintln!("box {boxed:.1} right {right:.1}");
+    assert!((right - 126.0).abs() < 6.0, "grey from the nested V1");
+    assert!((boxed - (255.0 + right) / 2.0).abs() < 5.0, "half-transparent box");
+    let rms = audio_rms(&tools, &file, 1.0);
+    eprintln!("rms {rms:.3}");
+    assert!(rms > 0.25, "tone through two levels");
+}

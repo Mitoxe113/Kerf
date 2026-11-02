@@ -28,6 +28,10 @@ pub enum EditError {
     NoNeighbor,
     #[error("cannot remove the last sequence")]
     LastSequence,
+    #[error("a sequence cannot contain itself")]
+    NestCycle,
+    #[error("the sequence is nested in {0} clip(s)")]
+    SequenceInUse(usize),
     #[error("invalid value: {0}")]
     Invalid(String),
 }

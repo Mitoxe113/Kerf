@@ -7,6 +7,11 @@
 // Transitions composite into a framebuffer: the stack so far is kept, the
 // outgoing clip drawn over it, the incoming clip over a copy, and the two
 // mixed (as the export renderer does).
+// A nested sequence is a group layer: its layers are composited into a
+// transparent framebuffer (drawn upside down, so the texture has the row
+// order of an uploaded image), which is then placed like any clip, its
+// premultiplied colours divided by alpha first, as the export reads the
+// nested sequence's file with straight alpha.
 
 import { api } from "../lib/ipc";
 import type { ColorAdjust, EffectKind, TransitionKind } from "../lib/types";
@@ -15,9 +20,18 @@ import { colorMatrix, contrastSlope, IDENTITY_COLOR, type Mat3 } from "./math";
 
 export type LayerSource = HTMLVideoElement | HTMLImageElement | HTMLCanvasElement;
 
+/** Layers of a nested sequence, composited at `width` x `height` canvas pixels. */
+export interface Group {
+  items: DrawItem[];
+  width: number;
+  height: number;
+}
+
 export interface Layer {
   key: string;
-  source: LayerSource;
+  /** What is drawn: a decoded frame or picture, or a nested sequence. */
+  source?: LayerSource;
+  group?: Group;
   matrix: Mat3;
   /** Crop in source UV space: left, top, right, bottom fractions. */
   crop: [number, number, number, number];
@@ -66,9 +80,11 @@ uniform mat3 u_color;
 uniform float u_contrast;
 uniform float u_opacity;
 uniform float u_premul;
+uniform float u_unpremul;
 out vec4 outColor;
 void main() {
   vec4 s = texture(u_tex, v_uv);
+  if (u_unpremul > 0.5) s.rgb = s.a > 0.0 ? s.rgb / s.a : vec3(0.0);
   vec3 rgb = clamp(u_color * s.rgb, 0.0, 1.0);
   rgb = clamp((rgb - 0.5) * u_contrast + 0.5, 0.0, 1.0);
   float a = s.a * u_opacity;
@@ -92,6 +108,8 @@ export class Compositor {
   readonly scopePixels = new Uint8Array(SCOPE_W * SCOPE_H * 4);
   private fx: EffectPipeline;
   private solids = new Map<string, WebGLTexture>();
+  /** Drawing into a group's framebuffer: layer matrices are flipped vertically. */
+  private flip = false;
 
   constructor(
     readonly canvas: HTMLCanvasElement,
@@ -102,7 +120,7 @@ export class Compositor {
     this.gl = gl;
     this.program = link(gl, VS, FS);
     this.loc = Object.fromEntries(
-      ["u_matrix", "u_crop", "u_tex", "u_color", "u_contrast", "u_opacity", "u_premul"].map((n) => [n, gl.getUniformLocation(this.program, n)]),
+      ["u_matrix", "u_crop", "u_tex", "u_color", "u_contrast", "u_opacity", "u_premul", "u_unpremul"].map((n) => [n, gl.getUniformLocation(this.program, n)]),
     );
     const vao = gl.createVertexArray()!;
     gl.bindVertexArray(vao);
@@ -152,8 +170,19 @@ export class Compositor {
     gl.uniform1i(this.loc.u_tex, 0);
   }
 
-  private quad(matrix: Mat3, crop: [number, number, number, number], color: ColorAdjust, opacity: number, premul: boolean) {
+  /** `m` for the current target: flipped vertically inside a group. */
+  private placed(m: Mat3): Mat3 {
+    if (!this.flip) return m;
+    const f = Float32Array.from(m);
+    f[1] = -f[1];
+    f[4] = -f[4];
+    f[7] = -f[7];
+    return f;
+  }
+
+  private quad(matrix: Mat3, crop: [number, number, number, number], color: ColorAdjust, opacity: number, premul: boolean, unpremul = false) {
     const gl = this.gl;
+    gl.uniform1f(this.loc.u_unpremul, unpremul ? 1 : 0);
     gl.uniformMatrix3fv(this.loc.u_matrix, false, matrix);
     gl.uniform4fv(this.loc.u_crop, crop);
     gl.uniformMatrix3fv(this.loc.u_color, false, colorMatrix(color));
@@ -166,39 +195,59 @@ export class Compositor {
   /** Draws one layer onto `target`, which the main program is bound to. */
   private drawLayer(l: Layer, target: WebGLFramebuffer | null, width: number, height: number, upload: boolean) {
     const gl = this.gl;
-    gl.bindTexture(gl.TEXTURE_2D, this.texture(l.key));
-    if (upload) {
-      try {
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, l.source);
-      } catch {
-        return; // frame not decodable yet
+    // A nested sequence is composited first; its texture holds premultiplied colours.
+    const group = l.group ? this.renderGroup(l.group, upload) : null;
+    if (group) {
+      this.bindMain(target, width, height);
+      gl.bindTexture(gl.TEXTURE_2D, group.tex);
+    } else {
+      if (!l.source) return;
+      gl.bindTexture(gl.TEXTURE_2D, this.texture(l.key));
+      if (upload) {
+        try {
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, l.source);
+        } catch {
+          return; // frame not decodable yet
+        }
       }
     }
+    const unpremul = !!group;
     if (!l.effects?.length || !l.work) {
-      this.quad(l.matrix, l.crop, l.color, l.opacity, true);
-      return;
+      this.quad(this.placed(l.matrix), l.crop, l.color, l.opacity, true, unpremul);
+    } else {
+      // Crop and colour into a framebuffer at the fitted size, run the effects, then place.
+      const [w, h] = l.work.map((v) => Math.max(1, Math.round(v)));
+      const first = this.fx.acquire(w, h);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, first.fbo);
+      gl.viewport(0, 0, w, h);
+      gl.disable(gl.BLEND);
+      this.quad(FULL_QUAD, l.crop, l.color, 1, false, unpremul);
+      const out = this.fx.apply(first, l.effects, l.fxScale ?? 1);
+      this.bindMain(target, width, height);
+      gl.bindTexture(gl.TEXTURE_2D, out.tex);
+      this.quad(this.placed(l.matrix), NO_CROP, IDENTITY_COLOR, l.opacity, true);
+      this.fx.release(out);
     }
-    // Crop and colour into a framebuffer at the fitted size, run the effects, then place.
-    const [w, h] = l.work.map((v) => Math.max(1, Math.round(v)));
-    const first = this.fx.acquire(w, h);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, first.fbo);
-    gl.viewport(0, 0, w, h);
-    gl.disable(gl.BLEND);
-    this.quad(FULL_QUAD, l.crop, l.color, 1, false);
-    const out = this.fx.apply(first, l.effects, l.fxScale ?? 1);
-    this.bindMain(target, width, height);
-    gl.bindTexture(gl.TEXTURE_2D, out.tex);
-    this.quad(l.matrix, NO_CROP, IDENTITY_COLOR, l.opacity, true);
-    this.fx.release(out);
+    if (group) this.fx.release(group);
   }
 
-  private drawLayers(items: DrawItem[], target: WebGLFramebuffer | null, width: number, height: number, upload: boolean) {
+  /** Composites a nested sequence into a transparent framebuffer (released by the caller). */
+  private renderGroup(g: Group, upload: boolean) {
+    const t = this.fx.acquire(g.width, g.height);
+    const flip = this.flip;
+    this.flip = true;
+    this.drawLayers(g.items, t.fbo, g.width, g.height, upload, true);
+    this.flip = flip;
+    return t;
+  }
+
+  private drawLayers(items: DrawItem[], target: WebGLFramebuffer | null, width: number, height: number, upload: boolean, transparent = false) {
     const gl = this.gl;
     // With transitions the frame is built in a framebuffer and drawn at the end.
     const acc = items.some(isTransition) ? this.fx.acquire(width, height) : null;
     const into = acc?.fbo ?? target;
     this.bindMain(into, width, height);
-    gl.clearColor(0, 0, 0, 1);
+    gl.clearColor(0, 0, 0, transparent ? 0 : 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
     for (const it of items) {
       if (!isTransition(it)) {
@@ -270,14 +319,15 @@ export class Compositor {
       case "wipeRight":
       case "wipeUp":
       case "wipeDown": {
-        // Window coordinates count from the bottom left.
+        // Window coordinates count from the bottom left (from the top inside a group).
         const ex = Math.round(t.edge * width);
         const ey = Math.round(t.edge * height);
+        const [top, bottom] = this.flip ? [[0, 0, width, ey], [0, height - ey, width, ey]] : [[0, height - ey, width, ey], [0, 0, width, ey]];
         const box = {
           wipeRight: [0, 0, ex, height],
           wipeLeft: [width - ex, 0, ex, height],
-          wipeDown: [0, height - ey, width, ey],
-          wipeUp: [0, 0, width, ey],
+          wipeDown: top,
+          wipeUp: bottom,
         }[t.kind];
         gl.enable(gl.SCISSOR_TEST);
         gl.scissor(box[0], box[1], box[2], box[3]);

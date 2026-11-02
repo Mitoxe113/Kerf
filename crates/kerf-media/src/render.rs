@@ -13,7 +13,7 @@
 //! the same as the preview compositor's: crop -> fit -> scale/rotate about the
 //! anchor -> place anchor at frame centre + offset.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
@@ -24,8 +24,8 @@ use std::time::Instant;
 
 use kerf_core::audio::{active as active_effects, AudioEffect, AudioEffectKind, EqShape, LIMITER_ATTACK_MS};
 use kerf_core::model::{
-    Clip, Cue, CurvePoint, Ease, EffectKind, Keyframe, MediaKind, MediaStatus, Param, Project, Sequence, TrackKind, TransitionKind, TransitionSpan,
-    VideoInfo,
+    Clip, ColorTags, Cue, CurvePoint, Ease, EffectKind, Keyframe, MediaAsset, MediaKind, MediaStatus, Param, Project, Sequence, TrackKind, TransitionKind,
+    TransitionSpan, VideoInfo,
 };
 use kerf_core::text::{write_subtitles, SubtitleFormat};
 use kerf_core::time::{Frame, Rational};
@@ -205,6 +205,9 @@ pub struct RenderPlan {
     pub sidecar: Option<(PathBuf, String)>,
     /// Loudness measurement run before the export (two-pass normalisation).
     pub measure: Option<MeasurePass>,
+    /// Nested sequences, rendered first (deepest first) to the files the
+    /// main pass reads; removed afterwards.
+    pub nested: Vec<RenderPlan>,
 }
 
 #[derive(Clone, Debug)]
@@ -225,6 +228,8 @@ pub struct RenderProgress {
     pub speed: Option<f64>,
     /// Pass 1 of a loudness normalisation is running.
     pub measuring: bool,
+    /// Nested sequences are being rendered (before the export itself).
+    pub nested: bool,
 }
 
 /// Part of a clip that falls into the render range.
@@ -1015,7 +1020,46 @@ fn warped_video(clip: &Clip, seg: &Segment, info: &kerf_core::model::MediaInfo, 
     (args, chain.join(";\n"), n)
 }
 
+/// Sequences nested in `seq` (at any depth), deepest first, each once.
+fn nested_order(project: &Project, seq: &Sequence) -> Vec<Uuid> {
+    fn visit(project: &Project, seq: &Sequence, seen: &mut HashSet<Uuid>, order: &mut Vec<Uuid>) {
+        for c in seq.tracks.iter().flat_map(|t| &t.clips) {
+            if let Some(inner) = project.sequence(c.media_id) {
+                if seen.insert(inner.id) {
+                    visit(project, inner, seen, order);
+                    order.push(inner.id);
+                }
+            }
+        }
+    }
+    let mut seen = HashSet::from([seq.id]);
+    let mut order = Vec::new();
+    visit(project, seq, &mut seen, &mut order);
+    order
+}
+
+/// The rendered file of nested sequence `inner` as a media asset: lossless
+/// RGB with straight alpha (empty areas transparent) and float PCM sound.
+fn nested_asset(inner: &Sequence, path: &Path, sample_rate: u32) -> MediaAsset {
+    let mut a = inner.as_source();
+    a.path = path.to_path_buf();
+    if let Some(i) = a.info.as_mut() {
+        if let Some(v) = i.video.as_mut() {
+            v.codec = "ffv1".into();
+            v.pix_fmt = Some("gbrap".into());
+            v.color = ColorTags { space: Some("gbr".into()), range: Some("pc".into()), ..Default::default() };
+        }
+        if let Some(au) = i.audio.as_mut() {
+            au.codec = "pcm_f32le".into();
+            au.sample_rate = sample_rate;
+        }
+    }
+    a
+}
+
 /// Builds the FFmpeg invocation for `seq`. `work_dir` receives the graph script.
+/// Nested sequences become passes of their own whose files the export reads
+/// like media, so everything a clip can do works on them too.
 pub fn plan(
     project: &Project,
     seq: &Sequence,
@@ -1023,17 +1067,61 @@ pub fn plan(
     work_dir: &Path,
     hw_encoders: &[String],
 ) -> Result<RenderPlan, MediaError> {
+    let order = nested_order(project, seq);
+    if order.is_empty() {
+        return plan_one(project, seq, s, work_dir, hw_encoders, false);
+    }
+    let mut p = project.clone();
+    let mut nested = Vec::new();
+    for id in order {
+        let inner = p.sequence(id).expect("listed").clone();
+        if inner.duration() == 0 {
+            continue;
+        }
+        let path = work_dir.join(format!("nested-{}.mkv", Uuid::new_v4()));
+        let settings = ExportSettings {
+            output: path.clone(),
+            hardware: false,
+            width: inner.settings.width,
+            height: inner.settings.height,
+            fps: inner.settings.fps,
+            use_in_out: false,
+            subtitles: SubtitleOutput::default(),
+            loudness: None,
+            audio_channels: 2,
+            ..s.clone()
+        };
+        nested.push(plan_one(&p, &inner, &settings, work_dir, &[], true)?);
+        // Deeper sequences come first, so the ones holding them find their files.
+        p.media.push(nested_asset(&inner, &path, settings.sample_rate.clamp(8_000, 192_000)));
+    }
+    let mut main = plan_one(&p, seq, s, work_dir, hw_encoders, false)?;
+    main.nested = nested;
+    Ok(main)
+}
+
+/// One pass: the export itself, or (`intermediate`) a nested sequence to a
+/// lossless file with alpha at the sequence's own size and rate.
+fn plan_one(
+    project: &Project,
+    seq: &Sequence,
+    s: &ExportSettings,
+    work_dir: &Path,
+    hw_encoders: &[String],
+    intermediate: bool,
+) -> Result<RenderPlan, MediaError> {
     let ext = s.output.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
     let container = match ext.as_str() {
+        _ if intermediate => "matroska",
         "mp4" | "m4v" => "mp4",
         "mov" => "mov",
         _ => return Err(MediaError::Unsupported("output must be .mp4 or .mov".into())),
     };
-    let prores = matches!(s.video_codec, VideoCodec::ProRes422 | VideoCodec::ProRes422Hq);
+    let prores = !intermediate && matches!(s.video_codec, VideoCodec::ProRes422 | VideoCodec::ProRes422Hq);
     if prores && container != "mov" {
         return Err(MediaError::Unsupported("ProRes requires a .mov file".into()));
     }
-    if s.audio_codec == AudioCodec::Pcm && container != "mov" {
+    if s.audio_codec == AudioCodec::Pcm && container == "mp4" {
         return Err(MediaError::Unsupported("PCM audio requires a .mov file".into()));
     }
     if !s.fps.is_valid() {
@@ -1062,7 +1150,8 @@ pub fn plan(
     let mut inputs = 0usize;
 
     chains.push(format!(
-        "color=c=black:s={}x{}:r={}:d={},format=rgba[base]",
+        "color=c={}:s={}x{}:r={}:d={},format=rgba[base]",
+        if intermediate { "black@0" } else { "black" },
         seq.settings.width,
         seq.settings.height,
         rate_str(of),
@@ -1353,14 +1442,19 @@ pub fn plan(
     // A different output aspect (e.g. 9:16 from a 16:9 sequence) is letterboxed
     // on the sequence canvas first, so the colour conversion stays in one scale.
     let (target, src) = (ow as f64 / oh as f64, w / h);
-    if (target - src).abs() > 1e-3 {
-        let (pw, ph) = if target > src { (even(h * target), h as u32) } else { (w as u32, even(w / target)) };
-        chains.push(format!("[{last}]pad={pw}:{ph}:(ow-iw)/2:(oh-ih)/2:color=black[boxed]"));
-        last = "boxed".into();
+    if intermediate {
+        // Planar RGB with alpha: what was composited, without a colour conversion.
+        chains.push(format!("[{last}]format=gbrap[vout]"));
+    } else {
+        if (target - src).abs() > 1e-3 {
+            let (pw, ph) = if target > src { (even(h * target), h as u32) } else { (w as u32, even(w / target)) };
+            chains.push(format!("[{last}]pad={pw}:{ph}:(ow-iw)/2:(oh-ih)/2:color=black[boxed]"));
+            last = "boxed".into();
+        }
+        chains.push(format!(
+            "[{last}]scale={ow}:{oh}:flags=bicubic:out_color_matrix=bt709:out_range=tv,format={pix_fmt}[vout]"
+        ));
     }
-    chains.push(format!(
-        "[{last}]scale={ow}:{oh}:flags=bicubic:out_color_matrix=bt709:out_range=tv,format={pix_fmt}[vout]"
-    ));
 
     // --- audio ----------------------------------------------------------------
     let mix = audio_mix(project, seq, s, (t0, t1), inputs, s.loudness.map(|_| LOUDNORM_MARK.to_string()))?;
@@ -1397,6 +1491,10 @@ pub fn plan(
     let rate = s.rate;
     let mut v: Vec<String> = Vec::new();
     let encoder = match s.video_codec {
+        _ if intermediate => {
+            v.extend(["-c:v", "ffv1", "-level", "3", "-slices", "4"].map(String::from));
+            "ffv1".to_string()
+        }
         VideoCodec::ProRes422 | VideoCodec::ProRes422Hq => {
             let profile = if s.video_codec == VideoCodec::ProRes422Hq { "3" } else { "2" };
             v.extend(["-c:v", "prores_ks", "-profile:v", profile, "-vendor", "apl0"].map(String::from));
@@ -1474,8 +1572,13 @@ pub fn plan(
         }
     };
     args.extend(v.into_iter().map(OsString::from));
-    args.extend(["-pix_fmt", pix_fmt, "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv"].map(OsString::from));
+    if intermediate {
+        args.extend(["-pix_fmt", "gbrap", "-c:a", "pcm_f32le"].map(OsString::from));
+    } else {
+        args.extend(["-pix_fmt", pix_fmt, "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv"].map(OsString::from));
+    }
     match s.audio_codec {
+        _ if intermediate => {}
         AudioCodec::Aac => {
             args.extend(["-c:a".into(), "aac".into(), "-b:a".into(), format!("{}k", s.audio_bitrate_kbps.clamp(64, 512)).into()])
         }
@@ -1511,6 +1614,7 @@ pub fn plan(
         files,
         sidecar,
         measure,
+        nested: Vec::new(),
     })
 }
 
@@ -1615,6 +1719,43 @@ fn run_ffmpeg(tools: &Tools, args: &[OsString], cancel: &AtomicBool, mut on: imp
 
 /// [`render`], recording the command line and FFmpeg's warnings and errors in `log`.
 pub fn render_logged(
+    tools: &Tools,
+    plan: &RenderPlan,
+    cancel: &AtomicBool,
+    mut progress: impl FnMut(&RenderProgress),
+    log: &mut String,
+) -> Result<(), MediaError> {
+    let mut result = Ok(());
+    let n = plan.nested.len();
+    for (i, sub) in plan.nested.iter().enumerate() {
+        log.push_str(&format!("# Verschachtelte Sequenz {} von {n}\n", i + 1));
+        result = render_one(
+            tools,
+            sub,
+            cancel,
+            |p| {
+                let mut q = p.clone();
+                q.nested = true;
+                q.fraction = (i as f64 + p.fraction) / n as f64;
+                q.eta = None;
+                progress(&q);
+            },
+            log,
+        );
+        if result.is_err() {
+            break;
+        }
+    }
+    if result.is_ok() {
+        result = render_one(tools, plan, cancel, progress, log);
+    }
+    for sub in &plan.nested {
+        let _ = fs::remove_file(&sub.output);
+    }
+    result
+}
+
+fn render_one(
     tools: &Tools,
     plan: &RenderPlan,
     cancel: &AtomicBool,

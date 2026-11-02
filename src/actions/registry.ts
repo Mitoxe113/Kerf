@@ -105,6 +105,7 @@ const base: Action[] = [
   { id: "clip.enable", group: "Clip", label: "Aktivieren / Deaktivieren", keys: ["Shift+E"], run: E.toggleEnabled, enabled: hasSelection },
   { id: "clip.link", group: "Clip", label: "Verknüpfen", keys: ["Ctrl+L"], run: () => E.linkSelection(true), enabled: hasSelection },
   { id: "clip.unlink", group: "Clip", label: "Verknüpfung lösen", keys: ["Ctrl+Alt+L"], run: () => E.linkSelection(false), enabled: hasSelection },
+  { id: "clip.nest", group: "Clip", label: "Verschachteln …", keys: [], run: E.nestSelection, enabled: hasSelection },
   { id: "clip.nudgeLeft", group: "Clip", label: "1 Frame nach links", keys: ["Alt+ArrowLeft"], run: () => E.nudgeSelection(-1), enabled: hasSelection },
   { id: "clip.nudgeRight", group: "Clip", label: "1 Frame nach rechts", keys: ["Alt+ArrowRight"], run: () => E.nudgeSelection(1), enabled: hasSelection },
   { id: "clip.matchFrame", group: "Clip", label: "Match Frame (Quelle am Playhead öffnen)", keys: ["F"], run: matchFrame },

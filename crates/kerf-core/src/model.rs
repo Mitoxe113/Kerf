@@ -4,7 +4,7 @@
 //! never overlap) are maintained by [`crate::ops`]; [`Project::normalize`]
 //! re-establishes them after loading foreign or damaged files.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -63,6 +63,33 @@ impl Project {
 
     pub fn media_mut(&mut self, id: Uuid) -> Option<&mut MediaAsset> {
         self.media.iter_mut().find(|m| m.id == id)
+    }
+
+    /// True when sequence `outer` is `inner` or contains it, directly or
+    /// deeper: nesting `outer` into `inner` would make a cycle.
+    pub fn nests(&self, outer: Uuid, inner: Uuid) -> bool {
+        let mut stack = vec![outer];
+        let mut seen = HashSet::new();
+        while let Some(id) = stack.pop() {
+            if id == inner {
+                return true;
+            }
+            if !seen.insert(id) {
+                continue;
+            }
+            if let Some(s) = self.sequence(id) {
+                stack.extend(s.tracks.iter().flat_map(|t| &t.clips).map(|c| c.media_id).filter(|m| self.sequence(*m).is_some()));
+            }
+        }
+        false
+    }
+
+    /// What clips of sequence `seq` can show: the media and every sequence
+    /// that does not contain `seq` (as [`Sequence::as_source`]).
+    pub fn sources_for(&self, seq: Uuid) -> Vec<MediaAsset> {
+        let mut out = self.media.clone();
+        out.extend(self.sequences.iter().filter(|s| !self.nests(s.id, seq)).map(Sequence::as_source));
+        out
     }
 
     /// Number of clips (in all sequences) that reference `media_id`.
@@ -383,6 +410,49 @@ impl Sequence {
 
     pub fn has_clips(&self) -> bool {
         self.tracks.iter().any(|t| !t.clips.is_empty())
+    }
+
+    /// The sequence as the source of a nested clip: a "media file" with the
+    /// sequence's id, length, picture size and frame rate, and stereo sound;
+    /// it has a picture or sound when the sequence has clips of that kind.
+    pub fn as_source(&self) -> MediaAsset {
+        let has = |k: TrackKind| self.tracks.iter().any(|t| t.kind == k && !t.clips.is_empty());
+        let s = &self.settings;
+        let video = has(TrackKind::Video).then(|| VideoInfo {
+            codec: "sequence".into(),
+            profile: None,
+            width: s.width,
+            height: s.height,
+            fps: s.fps,
+            pix_fmt: Some("rgba".into()),
+            bit_rate: None,
+            rotation: 0,
+            color: ColorTags::default(),
+        });
+        let audio = has(TrackKind::Audio).then(|| AudioInfo {
+            codec: "sequence".into(),
+            channels: 2,
+            sample_rate: s.sample_rate,
+            channel_layout: Some("stereo".into()),
+            bit_rate: None,
+        });
+        MediaAsset {
+            id: self.id,
+            path: PathBuf::new(),
+            name: self.name.clone(),
+            kind: MediaKind::Video,
+            status: MediaStatus::Ready,
+            info: Some(MediaInfo { duration: s.fps.frames_to_seconds(self.duration()), size_bytes: 0, container: "sequence".into(), bit_rate: None, video, audio }),
+            bin: None,
+            favorite: false,
+            label: LabelColor::None,
+            tags: Vec::new(),
+            note: String::new(),
+            imported_at: 0,
+            derived: Derived::default(),
+            marks: SourceMarks::default(),
+            title: None,
+        }
     }
 }
 

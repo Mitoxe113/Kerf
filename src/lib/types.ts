@@ -408,6 +408,7 @@ export type EditCommand =
   | { type: "addSequence"; name: string; settings: SequenceSettings }
   | { type: "removeSequence"; sequence: Uuid }
   | { type: "renameSequence"; sequence: Uuid; name: string }
+  | { type: "nestClips"; sequence: Uuid; clips: Uuid[]; name: string }
   | { type: "updateSequenceSettings"; sequence: Uuid; settings: SequenceSettings }
   | { type: "addTrack"; sequence: Uuid; kind: TrackKind }
   | { type: "removeTrack"; sequence: Uuid; track: Uuid }
@@ -501,6 +502,8 @@ export interface RenderProgress {
   speed: number | null;
   /** Pass 1 of a loudness normalisation (measuring the mix). */
   measuring: boolean;
+  /** Nested sequences are rendered before the export itself. */
+  nested: boolean;
 }
 
 export type ExportStatus = "queued" | "running" | "done" | "failed" | "cancelled";

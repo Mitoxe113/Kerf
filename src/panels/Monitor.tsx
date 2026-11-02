@@ -23,7 +23,7 @@ import { displaySize } from "../lib/media";
 import { formatTimecode, parseTimecode } from "../lib/time";
 import type { Clip, Sequence, Transform } from "../lib/types";
 import { cancelPick, NO_GUIDES, useEditor, type Guides } from "../state/editor";
-import { edit, useActiveSequence, useProject } from "../state/project";
+import { edit, sourceAsset, useActiveSequence, useProject } from "../state/project";
 import { cx, IconButton, openContextMenu, PanelHeader, Select, type MenuItem } from "../ui/primitives";
 
 function TimecodeInput({ seq, frame }: { seq: Sequence; frame: number }) {
@@ -71,7 +71,7 @@ function useActiveVisual(seq: Sequence | null, frame: number): Clip | null {
 type Handle = "move" | "scale" | "rotate";
 
 function Gizmo({ clip, seq, view, frame }: { clip: Clip; seq: Sequence; view: { x: number; y: number; s: number }; frame: number }) {
-  const media = useProject((s) => s.mediaById.get(clip.mediaId));
+  const media = useProject((s) => s.mediaById.get(clip.mediaId)) ?? sourceAsset(clip.mediaId);
   const [live, setLive] = useState<Transform | null>(null);
   const dims = engine.sourceSize(clip.id) ?? displaySize(media);
   useEffect(() => setLive(null), [clip.transform, clip.keys]);

@@ -114,6 +114,59 @@ export function activeSequence(p: Project | null): Sequence | null {
 
 export const useActiveSequence = () => useProject((s) => activeSequence(s.project));
 
+const SEQ_SOURCES = new WeakMap<Sequence, MediaAsset>();
+
+/**
+ * A sequence as the source of nested clips, as kerf_core Sequence::as_source:
+ * a "video file" with the sequence's length, size and rate and stereo sound,
+ * with a picture or sound when the sequence has clips of that kind.
+ */
+export function sequenceSource(s: Sequence): MediaAsset {
+  let a = SEQ_SOURCES.get(s);
+  if (a) return a;
+  const has = (k: "video" | "audio") => s.tracks.some((t) => t.kind === k && t.clips.length);
+  const end = Math.max(0, ...s.tracks.map((t) => t.clips.at(-1)).map((c) => (c ? c.start + c.duration : 0)));
+  const { fps, width, height, sampleRate } = s.settings;
+  a = {
+    id: s.id,
+    path: "",
+    name: s.name,
+    kind: "video",
+    status: { state: "ready" },
+    info: {
+      duration: (end * fps.den) / fps.num,
+      sizeBytes: 0,
+      container: "sequence",
+      bitRate: null,
+      video: has("video") ? { codec: "sequence", profile: null, width, height, fps, pixFmt: "rgba", bitRate: null, rotation: 0 } : null,
+      audio: has("audio") ? { codec: "sequence", channels: 2, sampleRate, channelLayout: "stereo", bitRate: null } : null,
+    },
+    bin: null,
+    favorite: false,
+    label: "none",
+    tags: [],
+    note: "",
+    importedAt: 0,
+    derived: { poster: null, filmstrip: null, peaks: null, proxy: null, previewNative: false },
+  } as MediaAsset;
+  SEQ_SOURCES.set(s, a);
+  return a;
+}
+
+/** The media, or the sequence (nested clips), with id `id`. */
+export function sourceAsset(id: Uuid): MediaAsset | undefined {
+  const st = useProject.getState();
+  const m = st.mediaById.get(id);
+  if (m) return m;
+  const s = st.project?.sequences.find((q) => q.id === id);
+  return s ? sequenceSource(s) : undefined;
+}
+
+/** The sequence a nested clip shows. */
+export function nestedSequence(mediaId: Uuid): Sequence | null {
+  return useProject.getState().project?.sequences.find((q) => q.id === mediaId) ?? null;
+}
+
 export function reportError(e: unknown, fallback = "Die Aktion ist fehlgeschlagen.") {
   if (isCommandError(e)) {
     // Engine detail is only informative for I/O failures and validation errors.

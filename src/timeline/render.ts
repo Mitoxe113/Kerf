@@ -27,6 +27,8 @@ export const COLORS = {
   audioHead: "#192e2c",
   still: "#372f45",
   stillHead: "#2d263a",
+  nest: "#3d3a24",
+  nestHead: "#33301d",
   wave: "#6cc4b9",
   waveClip: "#ff5a4d",
   text: "#e6e6ea",
@@ -150,6 +152,8 @@ export function drawSubtitleLane(ctx: CanvasRenderingContext2D, seq: Sequence, v
 interface DrawContext {
   seq: Sequence;
   media: Map<Uuid, MediaAsset>;
+  /** Names of the sequences (nested clips show one). */
+  sequences?: Map<Uuid, string>;
   selection: Set<Uuid>;
   /** Highlighted transition (the clip it leads into). */
   activeTransition: Uuid | null;
@@ -241,14 +245,15 @@ function drawClip(
   const asset = d.media.get(c.mediaId);
   const selected = d.selection.has(c.id);
   const still = asset?.kind === "image";
+  const nested = !asset && !!d.sequences?.has(c.mediaId);
   const y = rowY + 1;
   const h = rowH - 3;
   // Clamp to viewport (keeps huge clips cheap and labels visible).
   const vx = Math.max(x, -4);
   const vw = Math.min(x + w, v.width + 4) - vx;
   if (vw <= 0) return;
-  const body = kind === "audio" ? COLORS.audio : still ? COLORS.still : COLORS.video;
-  const head = kind === "audio" ? COLORS.audioHead : still ? COLORS.stillHead : COLORS.videoHead;
+  const body = nested ? COLORS.nest : kind === "audio" ? COLORS.audio : still ? COLORS.still : COLORS.video;
+  const head = nested ? COLORS.nestHead : kind === "audio" ? COLORS.audioHead : still ? COLORS.stillHead : COLORS.videoHead;
   // A clip label wins over the track colour.
   const label = labelColor(c.label) ?? labelColor(track.color);
   // Level of detail: sub-pixel clips are one flat rect (no path, clip or images).
@@ -347,6 +352,7 @@ function drawClip(
     const tx = Math.max(x + 6, 6);
     let label = c.name;
     if (c.reverse) label = `◂ ${label}`;
+    if (nested) label = `⧉ ${label}`;
     if (isAnimated(c, "speed")) label += "  Rampe";
     else if (c.speed !== 1) label += `  ${Math.round(c.speed * 100)} %`;
     if (offline) label = `⚠ ${label} (offline)`;

@@ -48,6 +48,7 @@ const EDIT_LABELS: Record<string, string> = {
   subtitleStyle: "Untertitel-Darstellung",
   setKeyframes: "Keyframes",
   normalizeAudio: "Audio normalisieren",
+  nestClips: "Verschachteln",
 };
 
 export const editLabel = (key: string | null | undefined) => (key ? EDIT_LABELS[key] ?? key : "");
@@ -60,6 +61,8 @@ const ERRORS: Record<string, string> = {
   trackOutOfRange: "Dort gibt es keine Spur.",
   noNeighbor: "Hier gibt es keinen angrenzenden Clip.",
   lastSequence: "Die letzte Sequenz kann nicht gelöscht werden.",
+  nestCycle: "Eine Sequenz kann nicht in sich selbst verschachtelt werden.",
+  sequenceInUse: "Die Sequenz ist noch in einer anderen Sequenz verschachtelt.",
   clipNotFound: "Der Clip existiert nicht mehr.",
   openFailed: "Das Projekt konnte nicht geöffnet werden.",
   saveFailed: "Das Projekt konnte nicht gespeichert werden.",

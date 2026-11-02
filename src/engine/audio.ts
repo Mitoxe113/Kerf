@@ -1,6 +1,8 @@
 // Preview audio graph:
 //   media element -> [clip effects] -> clip gain (volume x fades) -> clip pan
 //     -> track input -> [track effects] -> track gain -> master -> meters, loudness -> out
+// The tracks of a nested sequence have buses of their own (keyed by the path of
+// nested clips) that feed the nested clip's input instead of the master.
 // Effects run in an AudioWorklet (audio-worklet.ts) once it has loaded; until
 // then the clips play dry. The AudioContext clock is the master clock for playback.
 
@@ -22,6 +24,8 @@ interface Bus {
   want: EffectsMessage;
   sent: string;
   gain: GainNode;
+  /** Where the bus goes (the master, or a nested clip's input). */
+  dest: AudioNode;
   analysers: [AnalyserNode, AnalyserNode];
 }
 
@@ -102,33 +106,40 @@ export class AudioMixer {
     return [mk(0), mk(1)];
   }
 
-  private busOf(track: Uuid): Bus {
-    let b = this.buses.get(track);
+  /** Bus `key` (a track id, prefixed for nested sequences) going to `dest` (null = master). */
+  private busOf(key: string, dest: AudioNode | null = null): Bus {
+    this.context();
+    const to = dest ?? this.master!;
+    let b = this.buses.get(key);
     if (!b) {
       const ctx = this.context();
       const input = ctx.createGain();
       const gain = ctx.createGain();
       input.connect(gain);
-      gain.connect(this.master!);
-      b = { input, fx: null, want: { effects: [] }, sent: "", gain, analysers: this.meter(ctx, gain) };
-      this.buses.set(track, b);
+      gain.connect(to);
+      b = { input, fx: null, want: { effects: [] }, sent: "", gain, dest: to, analysers: this.meter(ctx, gain) };
+      this.buses.set(key, b);
+    } else if (b.dest !== to) {
+      b.gain.disconnect(b.dest);
+      b.gain.connect(to);
+      b.dest = to;
     }
     return b;
   }
 
   /** Input of a track's bus, where its clips connect. */
-  bus(track: Uuid): AudioNode {
-    return this.busOf(track).input;
+  bus(key: string, dest: AudioNode | null = null): AudioNode {
+    return this.busOf(key, dest).input;
   }
 
-  setBusGain(track: Uuid, gain: number) {
-    const g = this.busOf(track).gain;
+  setBusGain(key: string, gain: number, dest: AudioNode | null = null) {
+    const g = this.busOf(key, dest).gain;
     g.gain.setTargetAtTime(gain, this.context().currentTime, 0.015);
   }
 
   /** Track effects, after the sum of its clips (mono folds it first), before its volume. */
-  setBusEffects(track: Uuid, effects: AudioEffect[] | undefined, mono: boolean) {
-    const b = this.busOf(track);
+  setBusEffects(key: string, effects: AudioEffect[] | undefined, mono: boolean, dest: AudioNode | null = null) {
+    const b = this.busOf(key, dest);
     b.want = effectsMessage(effects, mono ? "mono" : undefined) ?? { effects: [] };
     this.wireBus(b);
   }
