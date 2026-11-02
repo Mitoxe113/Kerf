@@ -7,7 +7,8 @@ import { TOOLS } from "../actions/registry";
 import { formatCombo, keysFor } from "../actions/keymap";
 import { engine, sequenceDuration } from "../engine/playback";
 import { formatTimecode, fpsOf } from "../lib/time";
-import type { Clip, MarkerColor, Sequence, Track, Uuid } from "../lib/types";
+import type { Clip, MarkerColor, Sequence, Track, Transition, Uuid } from "../lib/types";
+import { ALIGNS, applyDefaultTransitions, kindsFor, removeTransitions, setTransition } from "../actions/transitions";
 import { useEditor, type ToolId } from "../state/editor";
 import { edit, useActiveSequence, useProject } from "../state/project";
 import { api } from "../lib/ipc";
@@ -28,6 +29,9 @@ import {
   snap,
   snapTargets,
   tracksOfKind,
+  transitionInto,
+  locate,
+  type TransitionSpan,
   type TrackLayout,
   type TrackRow,
 } from "../timeline/geometry";
@@ -262,6 +266,7 @@ export function Timeline() {
       select: s.select,
       selection: s.selection,
       activeCue: s.activeCue,
+      activeTransition: s.activeTransition,
       focusPanel: s.focusPanel,
       set: s.set,
       setTool: s.setTool,
@@ -318,11 +323,11 @@ export function Timeline() {
     const ctx = c.getContext("2d")!;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, v.width, v.height);
-    drawTracks(ctx, layout, v, { seq, media: mediaById, selection, redraw: () => requestBase() });
+    drawTracks(ctx, layout, v, { seq, media: mediaById, selection, activeTransition: ed.activeTransition, redraw: () => requestBase() });
     drawSubtitleLane(ctx, seq, v, ed.activeCue);
     drawRuler(ctx, seq, v);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [seq, layout, mediaById, selection, ed.activeCue]);
+  }, [seq, layout, mediaById, selection, ed.activeCue, ed.activeTransition]);
 
   // The queued frame must draw the latest state, not the closure that queued it.
   const drawBaseRef = useRef(drawBase);
@@ -601,6 +606,21 @@ export function Timeline() {
     return best;
   };
 
+  /** Transition box under the pointer: its track row and the clip it leads into. */
+  const transitionHit = (x: number, y: number): { row: TrackRow; clip: Clip; span: TransitionSpan } | null => {
+    if (y < RULER_H) return null;
+    const row = rowAt(layout, y - RULER_H + view.scrollY);
+    if (!row || row.track.locked) return null;
+    for (let j = 1; j < row.track.clips.length; j++) {
+      const s = transitionInto(row.track, j);
+      if (!s) continue;
+      const [x0, x1] = [s.t0 * view.zoom - view.scrollX, s.t1 * view.zoom - view.scrollX];
+      const pad = Math.max(0, (5 - (x1 - x0)) / 2);
+      if (x >= x0 - pad && x <= x1 + pad) return { row, clip: row.track.clips[j], span: s };
+    }
+    return null;
+  };
+
   const markerAt = (x: number) => seq.markers.find((m) => Math.abs(m.frame * view.zoom - view.scrollX - x) <= 6) ?? null;
   const lenOf = (c: Clip) => mediaLength(mediaById.get(c.mediaId), seq);
   const targets = (exclude?: Set<Uuid>) => snapTargets(seq, engine.frame, exclude);
@@ -676,6 +696,14 @@ export function Timeline() {
       if (Math.abs(engine.frame - f) * view.zoom <= SNAP_PX) f = Math.round(engine.frame);
       const clips = e.shiftKey ? null : ed.linkedSelection && !e.altKey ? expandLinks(seq, [h.clip.id]) : [h.clip.id];
       void edit({ type: "splitAt", sequence: seq.id, frame: f, clips });
+      return;
+    }
+    // A transition (away from the clip edges at its cut) is picked for the inspector and Delete.
+    const th = tool === "select" && (!h || h.zone === "body") ? transitionHit(x, y) : null;
+    if (th) {
+      ed.select([th.clip.id]);
+      ed.set({ activeTransition: th.clip.id, inspectorTab: th.row.track.kind === "audio" ? "audio" : "clip" });
+      if (e.detail === 2) ed.focusPanel("inspector");
       return;
     }
     if (!h) {
@@ -974,6 +1002,22 @@ export function Timeline() {
     }
     const h = hitTest(x, y);
     const row = rowAt(layout, y - RULER_H + view.scrollY);
+    const th = !h || h.zone === "body" ? transitionHit(x, y) : null;
+    if (th) {
+      const t = th.clip.transition!;
+      const set = (patch: Partial<Transition>) => () => void setTransition(th.clip.id, { ...t, ...patch });
+      const fps = fpsOf(seq.settings.fps);
+      ed.select([th.clip.id]);
+      ed.set({ activeTransition: th.clip.id });
+      return openContextMenu(e, [
+        ...kindsFor(th.row.track.kind === "audio").map((k) => ({ label: k.label, checked: t.kind === k.value, onSelect: set({ kind: k.value }) })),
+        { separator: true },
+        { label: "Dauer", submenu: [0.25, 0.5, 1, 2].map((sec) => ({ label: `${String(sec).replace(".", ",")} s`, checked: t.duration === Math.round(sec * fps), onSelect: set({ duration: Math.max(1, Math.round(sec * fps)) }) })) },
+        { label: "Ausrichtung", submenu: ALIGNS.map((a) => ({ label: a.label, checked: t.align === a.value, onSelect: set({ align: a.value }) })) },
+        { separator: true },
+        { label: "Übergang entfernen", shortcut: "Entf", danger: true, onSelect: () => void setTransition(th.clip.id, null) },
+      ]);
+    }
     if (!h) {
       const items: MenuItem[] = [
         { label: "Hier einfügen", shortcut: "Strg+V", disabled: !ed.clipboard.length, onSelect: () => { engine.seek(Math.round(frameAt(x))); void paste(); } },
@@ -1000,6 +1044,8 @@ export function Timeline() {
       { label: "Verknüpfen", disabled: ids.length < 2, onSelect: () => void linkSelection(true) },
       { label: "Verknüpfung lösen", disabled: !h.clip.link, onSelect: () => void linkSelection(false) },
       { label: "Ein- und Ausblenden (½ s)", onSelect: () => void applyFades() },
+      { label: "Standard-Übergang an den Schnitten", shortcut: "Strg+⇧+D", onSelect: () => void applyDefaultTransitions() },
+      { label: "Übergänge entfernen", disabled: !ids.some((id) => { const l = locate(seq, id); const t = l && seq.tracks[l.track]; return !!t && !!(t.clips[l.clip].transition || t.clips[l.clip + 1]?.transition); }), onSelect: () => void removeTransitions() },
       { label: "Geschwindigkeit", submenu: [0.25, 0.5, 1, 1.5, 2, 4].map((s) => ({ label: `${s * 100} %`, checked: h.clip.speed === s, onSelect: speed(s) })) },
       { label: "Standbild am Playhead einfügen (2 s)", shortcut: "⇧+N", onSelect: () => void freezeFrame(2) },
       { label: "Audio normalisieren …", disabled: !selectedAudioClips().length, onSelect: openNormalize },

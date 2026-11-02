@@ -165,6 +165,8 @@ interface EditorStore {
   inspectorTab: "clip" | "title" | "color" | "effects" | "audio";
   /** Subtitle cue being edited in the subtitles panel. */
   activeCue: Uuid | null;
+  /** Transition clicked in the timeline (id of the clip it leads into); cleared by any selection. */
+  activeTransition: Uuid | null;
   mediaView: "grid" | "list";
   mediaSort: "name" | "date" | "duration" | "kind";
   mediaFilter: "all" | "video" | "audio" | "image" | "favorites";
@@ -242,6 +244,7 @@ export const useEditor = create<EditorStore>((set, get) => ({
   picker: null,
   inspectorTab: "clip",
   activeCue: null,
+  activeTransition: null,
   mediaView: "grid",
   mediaSort: "name",
   mediaFilter: "all",
@@ -260,7 +263,7 @@ export const useEditor = create<EditorStore>((set, get) => ({
 
   set: (p) => set(p),
   setTool: (tool) => set({ tool }),
-  select: (selection) => set({ selection }),
+  select: (selection) => set({ selection, activeTransition: null }),
   setLayout: (ws, layout) => set((s) => ({ layouts: { ...s.layouts, [ws]: layout } })),
   togglePanel: (p) => {
     const layout = currentLayout(get());

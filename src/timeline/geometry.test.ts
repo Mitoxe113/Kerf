@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { IDENTITY_COLOR, IDENTITY_TRANSFORM } from "../engine/math";
-import { clipAt, fadeGain } from "../engine/playback";
+import { clipAt, fadeGain, transitionAt } from "../engine/playback";
 import type { Clip, Sequence, Track } from "../lib/types";
-import { clampRoll, clampSlide, clampSlip, clampTrim, editPoints, expandLinks, snap, snapTargets } from "./geometry";
+import { clampRoll, clampSlide, clampSlip, clampTrim, editPoints, expandLinks, snap, snapTargets, transitionInto } from "./geometry";
 import { NO_SUBTITLES } from "../engine/text";
 
 let n = 0;
@@ -155,5 +155,32 @@ describe("clampSlide", () => {
     const t = track([clip(0, 10), clip(20, 10), clip(40, 10)]);
     expect(clampSlide(t, 1, -50, 100, 100)).toBe(-10);
     expect(clampSlide(t, 1, 50, 100, 100)).toBe(10);
+  });
+});
+
+describe("transitionInto", () => {
+  const tr = (kind: "dissolve" | "crossfade", duration: number, align: "center" | "start" | "end" = "center") => ({ transition: { kind, duration, align } });
+  it("matches the engine: centred, clamped to half of each clip", () => {
+    // Same numbers as transitions_need_adjacent_clips_and_fit_both (kerf-core).
+    const t = track([clip(0, 40), clip(40, 100, 100, tr("dissolve", 25))]);
+    expect(transitionInto(t, 1)).toEqual({ kind: "dissolve", t0: 28, t1: 53, cut: 40 });
+    t.clips[1].transition = { kind: "dissolve", duration: 60, align: "end" };
+    expect(transitionInto(t, 1)).toMatchObject({ t0: 20, t1: 40 });
+    t.clips[1].transition = { kind: "dissolve", duration: 60, align: "start" };
+    expect(transitionInto(t, 1)).toMatchObject({ t0: 40, t1: 90 });
+  });
+  it("needs adjacent clips and a kind that fits the track", () => {
+    expect(transitionInto(track([clip(0, 40), clip(41, 40, 0, tr("dissolve", 10))]), 1)).toBeNull();
+    expect(transitionInto(track([clip(0, 40), clip(40, 40, 0, tr("crossfade", 10))]), 1)).toBeNull();
+    expect(transitionInto(track([clip(0, 40), clip(40, 40, 0, tr("crossfade", 10))], "audio"), 1)).not.toBeNull();
+    expect(transitionInto(track([clip(0, 40, 0, tr("dissolve", 10))]), 0)).toBeNull();
+  });
+  it("transitionAt finds both sides and the progress", () => {
+    const t = track([clip(0, 50), clip(50, 50, 0, tr("dissolve", 20))]);
+    expect(transitionAt(t, 39)).toBeNull();
+    expect(transitionAt(t, 40)?.p).toBe(0);
+    expect(transitionAt(t, 45)).toMatchObject({ a: t.clips[0], b: t.clips[1], p: 0.25 });
+    expect(transitionAt(t, 55)?.p).toBe(0.75);
+    expect(transitionAt(t, 60)).toBeNull();
   });
 });

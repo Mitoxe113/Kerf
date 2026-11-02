@@ -2,7 +2,7 @@
 // mirrors used to draw drag previews. The engine re-validates every edit; the
 // mirrors only make the ghost stop where the engine will stop.
 
-import type { Clip, MediaAsset, Sequence, Track, TrackKind, Uuid } from "../lib/types";
+import type { Clip, MediaAsset, Sequence, Track, TrackKind, TransitionKind, Uuid } from "../lib/types";
 import { fpsOf } from "../lib/time";
 import { TRACK_HEIGHTS, type TrackSize } from "../state/editor";
 
@@ -49,6 +49,31 @@ export function layoutTracks(seq: Sequence, size: TrackSize, resize?: { track: U
     y += h;
   }
   return { rows, dividerY, height: y };
+}
+
+/** Frames `[t0, t1)` a transition plays around the cut at `cut`. */
+export interface TransitionSpan {
+  kind: TransitionKind;
+  t0: number;
+  t1: number;
+  cut: number;
+}
+
+/**
+ * The transition into clip `b` (an index) when it is valid: the clip before
+ * ends where `b` starts and the kind fits the track; each side takes at most
+ * half of its clip. Mirror of `Track::transition_into` (kerf-core).
+ */
+export function transitionInto(track: Track, b: number): TransitionSpan | null {
+  const clip = track.clips[b];
+  const t = clip?.transition;
+  const a = b > 0 ? track.clips[b - 1] : undefined;
+  if (!t || !a || a.start + a.duration !== clip.start || (t.kind === "crossfade") !== (track.kind === "audio") || t.duration <= 0) return null;
+  const half = Math.floor(t.duration / 2);
+  let [left, right] = t.align === "start" ? [0, t.duration] : t.align === "end" ? [t.duration, 0] : [half, t.duration - half];
+  left = Math.min(left, Math.floor(a.duration / 2));
+  right = Math.min(right, Math.floor(clip.duration / 2));
+  return left + right > 0 ? { kind: t.kind, t0: clip.start - left, t1: clip.start + right, cut: clip.start } : null;
 }
 
 export function rowAt(layout: TrackLayout, y: number): TrackRow | null {

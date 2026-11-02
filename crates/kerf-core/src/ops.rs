@@ -104,6 +104,13 @@ pub struct PasteItem {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransitionEdit {
+    pub clip: Uuid,
+    pub transition: Option<Transition>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum EditCommand {
     // --- media & bins -----------------------------------------------------
@@ -188,6 +195,8 @@ pub enum EditCommand {
     SetKeyframes { sequence: Uuid, clip: Uuid, param: Param, keys: Vec<Keyframe> },
     /// Replaces the effect stack of video clips (each gets its own copy).
     SetEffects { sequence: Uuid, clips: Vec<Uuid>, effects: Vec<Effect> },
+    /// Sets or removes the transition into each clip from its left neighbour.
+    SetTransitions { sequence: Uuid, items: Vec<TransitionEdit> },
     /// Sets the gain of several audio clips in one step (normalizing); volume
     /// keyframes move by the same amount.
     SetClipGain { sequence: Uuid, gains: Vec<ClipGain> },
@@ -249,6 +258,7 @@ impl EditCommand {
             C::UpdateClips { .. } => "updateClips",
             C::SetKeyframes { .. } => "setKeyframes",
             C::SetEffects { .. } => "setEffects",
+            C::SetTransitions { .. } => "setTransition",
             C::SetClipGain { .. } => "normalizeAudio",
             C::LinkClips { .. } => "linkClips",
             C::UnlinkClips { .. } => "unlinkClips",
@@ -284,6 +294,7 @@ impl EditCommand {
             | C::UpdateClips { sequence, .. }
             | C::SetKeyframes { sequence, .. }
             | C::SetEffects { sequence, .. }
+            | C::SetTransitions { sequence, .. }
             | C::SetClipGain { sequence, .. }
             | C::LinkClips { sequence, .. }
             | C::UnlinkClips { sequence, .. }
@@ -324,6 +335,10 @@ pub fn apply(project: &mut Project, cmd: &EditCommand) -> Result<EditOutcome> {
         let mut seq = project.sequence(seq_id).ok_or(EditError::SequenceNotFound)?.clone();
         let changed = edit_sequence(&mut seq, &project.media, cmd, &mut out)?;
         if changed {
+            // Moves, trims and deletes can separate the clips of a transition.
+            seq.tracks.iter_mut().for_each(|t| {
+                t.tidy_transitions();
+            });
             *project.sequence_mut(seq_id).expect("sequence exists") = seq;
             out.sequence = Some(seq_id);
             out.changed = true;
@@ -612,6 +627,7 @@ fn edit_sequence(seq: &mut Sequence, media: &[MediaAsset], cmd: &EditCommand, ou
         C::DeleteClips { clips, ripple, .. } => delete_clips(seq, clips, *ripple),
         C::SetKeyframes { clip, param, keys, .. } => set_keyframes(seq, *clip, *param, keys),
         C::SetEffects { clips, effects, .. } => set_effects(seq, clips, effects),
+        C::SetTransitions { items, .. } => set_transitions(seq, items),
         C::SetClipGain { gains, .. } => set_clip_gain(seq, gains),
         C::RemoveRange { start, end, ripple, tracks, .. } => remove_range(seq, *start, *end, *ripple, tracks.as_deref()),
         C::ReplaceMedia { clip, media: id, .. } => replace_media(seq, media, *clip, *id),
@@ -751,6 +767,9 @@ fn add_still(project: &mut Project, sequence: Uuid, asset: &MediaAsset, track: U
         match_sequence: false,
     };
     out.created = place_media(&mut seq, std::slice::from_ref(asset), args, out)?;
+    seq.tracks.iter_mut().for_each(|t| {
+        t.tidy_transitions();
+    });
     project.media.push(asset.clone());
     *project.sequence_mut(sequence).expect("sequence exists") = seq;
     out.sequence = Some(sequence);
@@ -877,6 +896,7 @@ fn split_clip(clip: &Clip, at: Frame, link_map: &mut HashMap<Uuid, Uuid>) -> (Cl
     right.duration = clip.end() - at;
     right.source_in = clip.source_in + clip.source_span(at - clip.start);
     right.fade_in = 0;
+    right.transition = None;
     right.link = clip.link.map(|l| *link_map.entry(l).or_insert_with(Uuid::new_v4));
     clamp_fades(&mut right);
     (left, right)
@@ -910,6 +930,7 @@ fn clear_range(track: &mut Track, from: Frame, to: Frame) {
             right.duration = c.end() - to;
             right.source_in = c.source_in + c.source_span(to - c.start);
             right.fade_in = 0;
+            right.transition = None;
             clamp_fades(&mut right);
             out.push(right);
         }
@@ -1522,6 +1543,34 @@ fn set_effects(seq: &mut Sequence, clips: &[Uuid], effects: &[Effect]) -> Result
     Ok(changed)
 }
 
+fn set_transitions(seq: &mut Sequence, items: &[TransitionEdit]) -> Result<bool> {
+    let mut at = Vec::with_capacity(items.len());
+    for item in items {
+        let (ti, ci) = seq.locate(item.clip).ok_or(EditError::ClipNotFound)?;
+        let t = &seq.tracks[ti];
+        if t.locked {
+            return Err(EditError::TrackLocked);
+        }
+        if let Some(tr) = item.transition {
+            let adjacent = ci > 0 && t.clips[ci - 1].end() == t.clips[ci].start;
+            if !adjacent {
+                return Err(EditError::Invalid("transitions need a clip directly before".into()));
+            }
+            if tr.kind.is_audio() != (t.kind == TrackKind::Audio) || !(1..=MAX_TRANSITION).contains(&tr.duration) {
+                return Err(EditError::Invalid("transition".into()));
+            }
+        }
+        at.push((ti, ci, item.transition));
+    }
+    let mut changed = false;
+    for (ti, ci, tr) in at {
+        let c = &mut seq.tracks[ti].clips[ci];
+        changed |= c.transition != tr;
+        c.transition = tr;
+    }
+    Ok(changed)
+}
+
 fn set_clip_gain(seq: &mut Sequence, gains: &[ClipGain]) -> Result<bool> {
     // Validate everything first so a bad entry leaves the sequence untouched.
     let mut at = Vec::with_capacity(gains.len());
@@ -1647,6 +1696,7 @@ fn paste(seq: &mut Sequence, items: &[PasteItem], at: Frame) -> Result<Vec<Uuid>
         let mut c = item.clip.clone();
         c.id = Uuid::new_v4();
         c.start += offset;
+        c.transition = None;
         c.link = c.link.map(|l| *link_map.entry(l).or_insert_with(Uuid::new_v4));
         let t = seq.track_mut(track_id).expect("resolved");
         clear_range(t, c.start, c.end());
@@ -2363,5 +2413,43 @@ mod tests {
         // Survives a JSON round trip of the project.
         let back: Project = serde_json::from_str(&serde_json::to_string(&fx.p).unwrap()).unwrap();
         assert_eq!(back.sequence(fx.seq).unwrap().subtitles, *s);
+    }
+    #[test]
+    fn transitions_need_adjacent_clips_and_fit_both() {
+        let mut fx = Fx::new(10.0, true);
+        let a = fx.place(0, Some(0), Some(40), PlaceMode::Overwrite);
+        let b = fx.place(40, Some(100), Some(200), PlaceMode::Overwrite);
+        let t = |kind, duration, align| Some(Transition { kind, duration, align });
+        let set = |fx: &mut Fx, clip, transition| apply(&mut fx.p, &EditCommand::SetTransitions { sequence: fx.seq, items: vec![TransitionEdit { clip, transition }] });
+        // Into the first clip of a track there is nothing to transition from.
+        assert!(set(&mut fx, a[0], t(TransitionKind::Dissolve, 10, TransitionAlign::Center)).is_err());
+        // Audio kinds only on audio tracks and the other way round.
+        assert!(set(&mut fx, b[0], t(TransitionKind::Crossfade, 10, TransitionAlign::Center)).is_err());
+        assert!(set(&mut fx, b[1], t(TransitionKind::Dissolve, 10, TransitionAlign::Center)).is_err());
+        assert!(set(&mut fx, b[0], t(TransitionKind::Dissolve, 25, TransitionAlign::Center)).unwrap().changed);
+        assert!(set(&mut fx, b[1], t(TransitionKind::Crossfade, 25, TransitionAlign::Center)).unwrap().changed);
+        let span = fx.v1().transition_into(1).unwrap();
+        assert_eq!((span.t0, span.cut, span.t1), (28, 40, 53));
+        // Each side takes at most half of its clip: A is 40 frames long.
+        set(&mut fx, b[0], t(TransitionKind::DipBlack, 60, TransitionAlign::End)).unwrap();
+        assert_eq!(fx.v1().transition_into(1).map(|s| (s.t0, s.t1)), Some((20, 40)));
+        set(&mut fx, b[0], t(TransitionKind::WipeLeft, 60, TransitionAlign::Start)).unwrap();
+        assert_eq!(fx.v1().transition_into(1).map(|s| (s.t0, s.t1)), Some((40, 90)));
+    }
+
+    #[test]
+    fn transitions_go_when_their_clips_part() {
+        let mut fx = Fx::new(10.0, false);
+        fx.place(0, Some(0), Some(50), PlaceMode::Overwrite);
+        let b = fx.place(50, Some(100), Some(200), PlaceMode::Overwrite)[0];
+        let dissolve = Some(Transition { kind: TransitionKind::Dissolve, duration: 20, align: TransitionAlign::Center });
+        fx.run(EditCommand::SetTransitions { sequence: fx.seq, items: vec![TransitionEdit { clip: b, transition: dissolve }] });
+        // Splitting the incoming clip keeps the transition on its left part only.
+        fx.run(EditCommand::SplitAt { sequence: fx.seq, frame: 100, clips: None });
+        let v = fx.v1();
+        assert!(v.clips[1].transition.is_some() && v.clips[2].transition.is_none());
+        // Moving it away leaves a gap: the transition is dropped in the same step.
+        fx.run(EditCommand::MoveClips { sequence: fx.seq, clips: vec![b], delta: 5, track_delta: 0, track_kind: None });
+        assert!(fx.v1().clips.iter().all(|c| c.transition.is_none()));
     }
 }

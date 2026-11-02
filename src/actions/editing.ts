@@ -43,6 +43,13 @@ export async function deleteSelection(ripple: boolean) {
   const s = seq();
   const ids = selection();
   if (!s || !ids.length) return;
+  // A transition picked in the timeline is deleted on its own.
+  const tr = useEditor.getState().activeTransition;
+  if (tr && findClip(s, tr)?.transition) {
+    await edit({ type: "setTransitions", sequence: s.id, items: [{ clip: tr, transition: null }] });
+    useEditor.getState().set({ activeTransition: null });
+    return;
+  }
   const d = await edit({ type: "deleteClips", sequence: s.id, clips: ids, ripple });
   if (d) useEditor.getState().select([]);
 }

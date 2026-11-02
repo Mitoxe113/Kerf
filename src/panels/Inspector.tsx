@@ -6,10 +6,11 @@ import { IDENTITY_COLOR, IDENTITY_TRANSFORM } from "../engine/math";
 import { codecLabel, formatBytes } from "../lib/media";
 import { formatRate, formatTimecode, parseTimecode } from "../lib/time";
 import type { Clip, ClipPatch, ColorAdjust, ColorParam, Keyframe, KeyParam, Sequence, Transform } from "../lib/types";
-import { findClip, locate } from "../timeline/geometry";
+import { findClip, locate, transitionInto } from "../timeline/geometry";
+import { ALIGNS, defaultTransition, kindsFor, setTransition } from "../actions/transitions";
 import { useEditor } from "../state/editor";
 import { edit, useActiveSequence, useProject } from "../state/project";
-import { Button, cx, Field, IconButton, NumberField, openContextMenu, PanelHeader, Section, Segmented, Slider, Toggle } from "../ui/primitives";
+import { Button, cx, Field, IconButton, NumberField, openContextMenu, PanelHeader, Section, Segmented, Select, Slider, Toggle } from "../ui/primitives";
 import { EffectsSection, GradeSections } from "./Effects";
 import { TitleSection } from "./Text";
 
@@ -108,10 +109,12 @@ export function Inspector() {
         </div>
         {active === "title" && title && <TitleSection key={title.id} asset={title} />}
         {active === "clip" && <VideoSection seq={seq} clips={video} commit={commit} />}
+        {active === "clip" && video.length === 1 && <TransitionSection seq={seq} clip={video[0]} />}
         {active === "color" && <ColorSection seq={seq} clips={video} commit={commit} />}
         {active === "color" && <GradeSections seq={seq} clips={video} />}
         {active === "effects" && <EffectsSection seq={seq} clips={video} />}
         {active === "audio" && <AudioSection seq={seq} clips={audio} preview={preview} commit={commit} />}
+        {active === "audio" && audio.length === 1 && <TransitionSection seq={seq} clip={audio[0]} />}
         <TimingSection seq={seq} clips={clips} commit={commit} />
       </div>
     </div>
@@ -419,6 +422,59 @@ function AudioSection({ seq, clips, preview, commit }: { seq: Sequence; clips: C
           Normalisieren …
         </Button>
       </Field>
+    </Section>
+  );
+}
+
+/** Transitions at both ends of a clip: into it, and out of it into the next one. */
+function TransitionSection({ seq, clip }: { seq: Sequence; clip: Clip }) {
+  const active = useEditor((s) => s.activeTransition);
+  const l = locate(seq, clip.id);
+  if (!l) return null;
+  const track = seq.tracks[l.track];
+  const audio = track.kind === "audio";
+  const ends = [
+    { label: "Am Anfang", index: l.clip },
+    { label: "Am Ende", index: l.clip + 1 },
+  ];
+  return (
+    <Section title="Übergänge">
+      {ends.map(({ label, index }) => {
+        const [a, b] = [track.clips[index - 1], track.clips[index]];
+        const adjacent = !!a && !!b && a.start + a.duration === b.start;
+        const t = adjacent ? (b.transition ?? null) : null;
+        const span = t && transitionInto(track, index);
+        const len = span ? span.t1 - span.t0 : 0;
+        const put = (next: typeof t) => void setTransition(b.id, next);
+        return (
+          <div key={label} className={cx("-mx-1.5 space-y-1 rounded-md px-1.5", t && active === b?.id && "bg-signal/10 ring-1 ring-signal/40")}>
+            <Field label={label}>
+              {adjacent ? (
+                <Select
+                  width={168}
+                  label={`Übergang ${label.toLowerCase()}`}
+                  value={t?.kind ?? "none"}
+                  options={[{ value: "none", label: "Kein Übergang" }, ...kindsFor(audio).map((k) => ({ value: k.value, label: k.label }))]}
+                  onChange={(v) => put(v === "none" ? null : { ...(t ?? defaultTransition(seq, audio)), kind: v })}
+                />
+              ) : (
+                <span className="text-xs text-fg-4">Kein direkt anschließender Clip</span>
+              )}
+            </Field>
+            {t && (
+              <>
+                <Field label="Dauer">
+                  <NumberField label="Dauer" value={t.duration} min={1} max={36000} step={1} unit=" F" width={66} onCommit={(v) => put({ ...t, duration: Math.max(1, Math.round(v)) })} />
+                  {len < t.duration && <span className="text-xs text-fg-4" title="Ein Übergang nimmt höchstens die halbe Länge jedes Clips ein.">wirkt {len} F</span>}
+                </Field>
+                <Field label="Lage">
+                  <Segmented size="sm" value={t.align} options={ALIGNS.map((x) => ({ value: x.value, label: x.label, title: x.title }))} onChange={(v) => put({ ...t, align: v })} />
+                </Field>
+              </>
+            )}
+          </div>
+        );
+      })}
     </Section>
   );
 }

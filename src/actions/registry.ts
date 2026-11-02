@@ -10,6 +10,7 @@ import * as E from "./editing";
 import { matchFrame, source, sourceDuration, useSource } from "../state/source";
 import * as P from "./project";
 import * as T from "./text";
+import * as Tr from "./transitions";
 
 export interface Action {
   id: string;
@@ -124,6 +125,8 @@ const base: Action[] = [
   { id: "fx.fadeIn", group: "Effekte", label: "Einblenden (½ s)", keys: [], run: () => E.applyFades("in"), enabled: hasSelection },
   { id: "fx.fadeOut", group: "Effekte", label: "Ausblenden (½ s)", keys: [], run: () => E.applyFades("out"), enabled: hasSelection },
   { id: "fx.noFades", group: "Effekte", label: "Blenden entfernen", keys: [], run: () => E.applyFades("none"), enabled: hasSelection },
+  { id: "fx.transition", group: "Effekte", label: "Standard-Übergang anwenden", keys: ["Ctrl+Shift+D"], run: Tr.applyDefaultTransitions },
+  { id: "fx.noTransitions", group: "Effekte", label: "Übergänge entfernen", keys: [], run: Tr.removeTransitions, enabled: hasSelection },
   { id: "fx.fill", group: "Effekte", label: "Bildfüllend skalieren", keys: [], run: () => E.frameVisuals("fill"), enabled: hasSelection },
   { id: "fx.fit", group: "Effekte", label: "In Bild einpassen", keys: [], run: () => E.frameVisuals("fit"), enabled: hasSelection },
   { id: "fx.resetMotion", group: "Effekte", label: "Bewegung zurücksetzen", keys: [], run: E.resetMotion, enabled: hasSelection },

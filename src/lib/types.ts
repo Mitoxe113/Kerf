@@ -207,6 +207,17 @@ export interface Clip {
   /** Animated properties; a property with keys ignores its static value. */
   keys: Partial<Record<KeyParam, Keyframe[]>>;
   effects?: Effect[];
+  /** Transition from the previous clip on the track into this one. */
+  transition?: Transition | null;
+}
+
+/** Wipes name the direction the edge moves; crossfade is the audio kind. */
+export type TransitionKind = "dissolve" | "dipBlack" | "dipWhite" | "wipeLeft" | "wipeRight" | "wipeUp" | "wipeDown" | "crossfade";
+export type TransitionAlign = "center" | "start" | "end";
+export interface Transition {
+  kind: TransitionKind;
+  duration: Frame;
+  align: TransitionAlign;
 }
 
 export type CurvePoint = [number, number];
@@ -360,6 +371,7 @@ export type EditCommand =
   | { type: "updateMedia"; media: Uuid[]; patch: MediaPatch }
   | { type: "setSourceMarks"; media: Uuid; marks: SourceMarks }
   | { type: "setEffects"; sequence: Uuid; clips: Uuid[]; effects: Effect[] }
+  | { type: "setTransitions"; sequence: Uuid; items: { clip: Uuid; transition: Transition | null }[] }
   | { type: "moveMediaToBin"; media: Uuid[]; bin: Uuid | null }
   | { type: "relinkMedia"; media: Uuid; path: string }
   | { type: "createBin"; name: string; parent: Uuid | null }

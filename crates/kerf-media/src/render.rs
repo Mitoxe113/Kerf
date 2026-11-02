@@ -22,7 +22,10 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
-use kerf_core::model::{Clip, Cue, CurvePoint, Ease, EffectKind, Keyframe, MediaKind, MediaStatus, Param, Project, Sequence, TrackKind, VideoInfo};
+use kerf_core::model::{
+    Clip, Cue, CurvePoint, Ease, EffectKind, Keyframe, MediaKind, MediaStatus, Param, Project, Sequence, TrackKind, TransitionKind, TransitionSpan,
+    VideoInfo,
+};
 use kerf_core::text::{write_subtitles, SubtitleFormat};
 use kerf_core::time::{Frame, Rational};
 use serde::{Deserialize, Serialize};
@@ -154,10 +157,129 @@ struct Segment {
     head: Frame,
 }
 
-fn segment(c: &Clip, t0: Frame, t1: Frame) -> Option<Segment> {
-    let start = c.start.max(t0);
-    let end = c.end().min(t1);
+/// The part of a clip lengthened by `before`/`after` frames into its
+/// transitions that falls into `[t0, t1)`; `head` is negative where the
+/// segment starts before the clip.
+fn segment_ext(c: &Clip, before: Frame, after: Frame, t0: Frame, t1: Frame) -> Option<Segment> {
+    let start = (c.start - before).max(t0);
+    let end = (c.end() + after).min(t1);
     (end > start).then(|| Segment { start, len: end - start, head: start - c.start })
+}
+
+/// `fade`/`afade` (`name`) of `kind` in/out starting `st` seconds into the
+/// stream. A start before the stream (the rendered range begins inside the
+/// fade) is reached by shifting the timestamps around the filter, which only
+/// takes non-negative starts.
+fn fade_at(name: &str, kind: &str, st: f64, d: f64, extra: &str) -> String {
+    let pts = if name == "afade" { "asetpts" } else { "setpts" };
+    if st >= 0.0 {
+        return format!("{name}=t={kind}:st={}:d={}{extra}", num(st), num(d));
+    }
+    let x = num(-st);
+    format!("{pts}=PTS+{x}/TB,{name}=t={kind}:st=0:d={}{extra},{pts}=PTS-{x}/TB", num(d))
+}
+
+/// A prepared clip stream and where it goes on the frame.
+struct Placed {
+    label: String,
+    /// Input index, names the clip's labels.
+    k: usize,
+    x: String,
+    y: String,
+    /// Timeline frames `[start, end)` the stream covers.
+    start: Frame,
+    end: Frame,
+}
+
+/// Stream laid over a composite at overlay position `x`, `y`.
+struct Layer {
+    label: String,
+    x: String,
+    y: String,
+}
+
+/// Mixes the composite with the outgoing clip (`ca`) into the composite of
+/// `below` with the incoming clip (`clip`, absent when it is not shown)
+/// inside `span`; returns the mixed stream's label. With p = (frame - t0) /
+/// len, as in the preview: dissolve blends by p, wipes show the incoming side
+/// up to an edge at floor(size * p), dips fade to the colour by 2p and back
+/// from it by 2 - 2p, switching at p = 0.5.
+#[allow(clippy::too_many_arguments)]
+fn transition_chains(
+    chains: &mut Vec<String>,
+    span: TransitionSpan,
+    n: usize,
+    ca: &str,
+    below: &str,
+    clip: Option<&Layer>,
+    t0: Frame,
+    sf: Rational,
+    of: Rational,
+    (w, h): (u32, u32),
+) -> String {
+    let frame_s = 1.0 / of.as_f64();
+    let ws = sf.frames_to_seconds(span.t0 - t0);
+    let we = sf.frames_to_seconds(span.t1 - t0);
+    let d = we - ws;
+    let window = |from: f64| format!("between(t,{},{})", num(from), num(we - 0.5 * frame_s));
+    let cb = match clip {
+        Some(l) => {
+            chains.push(format!(
+                "[{below}][{}]overlay=x={}:y={}:eof_action=pass:format=rgb:enable='{}'[cb{n}]",
+                l.label,
+                l.x,
+                l.y,
+                window(ws - 0.5 * frame_s)
+            ));
+            format!("cb{n}")
+        }
+        None => below.to_string(),
+    };
+    // Generated streams run in transition time [0, d) and are moved into place
+    // (cut where the rendered range starts inside the span).
+    let src = |c: &str| format!("color=c={c}:s={w}x{h}:r={}:d={}", rate_str(of), num(d));
+    let place = |chain: String, label: String| {
+        let cut = if ws < 0.0 { format!(",trim=start={}", num(-ws)) } else { String::new() };
+        let shift = if ws < 0.0 { format!("-{}", num(-ws)) } else { format!("+{}", num(ws)) };
+        format!("{chain}{cut},setpts=PTS{shift}/TB[{label}]")
+    };
+    let mask = match span.kind {
+        TransitionKind::DipBlack | TransitionKind::DipWhite => {
+            // The incoming side replaces the outgoing one at the middle, under the colour.
+            let colour = if span.kind == TransitionKind::DipBlack { "black" } else { "white" };
+            chains.push(format!(
+                "[{ca}][{cb}]overlay=eof_action=pass:format=rgb:enable='{}'[dip{n}]",
+                window(ws + d / 2.0 - 1e-3 * frame_s)
+            ));
+            let half = num(d / 2.0);
+            chains.push(place(
+                format!("{},format=rgba,fade=t=in:st=0:d={half}:alpha=1,fade=t=out:st={half}:d={half}:alpha=1", src(colour)),
+                format!("dc{n}"),
+            ));
+            chains.push(format!("[dip{n}][dc{n}]overlay=eof_action=pass:format=rgb[mix{n}]"));
+            return format!("mix{n}");
+        }
+        TransitionKind::Dissolve | TransitionKind::Crossfade => {
+            format!("{},format=rgb24,fade=t=in:st=0:d={},extractplanes=r", src("white"), num(d))
+        }
+        wipe => {
+            // A white block slides over black; its edge is the wipe's edge.
+            let edge = |size: &str| format!("floor({size}*t/{}+0.0001)", num(d));
+            let (x, y) = match wipe {
+                TransitionKind::WipeRight => (format!("-W+{}", edge("W")), "0".to_string()),
+                TransitionKind::WipeLeft => (format!("W-{}", edge("W")), "0".to_string()),
+                TransitionKind::WipeDown => ("0".to_string(), format!("-H+{}", edge("H"))),
+                _ => ("0".to_string(), format!("H-{}", edge("H"))),
+            };
+            chains.push(format!("{},format=rgb24[mb{n}]", src("black")));
+            chains.push(format!("{},format=rgba[mw{n}]", src("white")));
+            format!("[mb{n}][mw{n}]overlay=x='{x}':y='{y}':format=rgb,extractplanes=r")
+        }
+    };
+    chains.push(place(mask, format!("m{n}")));
+    chains.push(format!("[{cb}][m{n}]alphamerge=eof_action=pass[cbm{n}]"));
+    chains.push(format!("[{ca}][cbm{n}]overlay=eof_action=pass:format=rgb:enable='{}'[mix{n}]", window(ws - 0.5 * frame_s)));
+    format!("mix{n}")
 }
 
 /// FFmpeg expression for `param` of `clip` over variable `var`, which counts
@@ -488,19 +610,37 @@ pub fn plan(
     };
 
     // --- video, bottom track first ------------------------------------------
+    // A transition mixes two composites inside its span: the one with the
+    // outgoing clip (the stream so far, where that clip plays on to the span's
+    // end) and the composite under it with the incoming clip laid over. All
+    // streams that are mixed run from the start, so no branch is read ahead.
+    let mut labels = 0usize;
     for track in seq.tracks.iter().filter(|t| t.kind == TrackKind::Video && !t.hidden) {
-        for clip in track.clips.iter().filter(|c| c.enabled && (c.opacity > 0.0 || !c.keys_of(Param::Opacity).is_empty())) {
-            let Some(seg) = segment(clip, t0, t1) else { continue };
+        // Transitions into each clip that reach into the rendered range.
+        let spans: Vec<Option<TransitionSpan>> =
+            (0..track.clips.len()).map(|i| track.transition_into(i).filter(|s| s.t1 > t0 && s.t0 < t1)).collect();
+        // Composite under the outgoing clip of a transition, for the incoming side.
+        let mut below: Option<String> = None;
+        for (ci, clip) in track.clips.iter().enumerate() {
+            let incoming = spans[ci];
+            let outgoing = spans.get(ci + 1).copied().flatten();
+            let placed = 'clip: {
+            let visible = clip.enabled && (clip.opacity > 0.0 || !clip.keys_of(Param::Opacity).is_empty());
+            // The outgoing clip of a transition plays on until its end, the incoming
+            // one starts at its beginning; both hold a frame where the media ends.
+            let head_ext = incoming.map_or(0, |s| s.cut - s.t0);
+            let tail_ext = outgoing.map_or(0, |s| s.t1 - s.cut);
+            let Some(seg) = segment_ext(clip, head_ext, tail_ext, t0, t1).filter(|_| visible) else { break 'clip None };
             // Animated position/scale/rotation: the clip is warped onto the frame by
             // `perspective` with per-frame corner expressions (same math as `place`).
             let animated = [Param::X, Param::Y, Param::Scale, Param::Rotation].iter().any(|p| !clip.keys_of(*p).is_empty());
             let fading = !clip.keys_of(Param::Opacity).is_empty();
-            let Some(asset) = asset_for(clip)? else { continue };
+            let Some(asset) = asset_for(clip)? else { break 'clip None };
             let info = asset.info.as_ref().expect("checked");
-            let Some((dw, dh)) = display_size(info) else { continue };
+            let Some((dw, dh)) = display_size(info) else { break 'clip None };
             let t = &clip.transform;
             if t.scale <= 0.0 && !animated {
-                continue;
+                break 'clip None;
             }
             let cw = dw as f64 * (1.0 - t.crop_left as f64 - t.crop_right as f64);
             let ch = dh as f64 * (1.0 - t.crop_top as f64 - t.crop_bottom as f64);
@@ -511,13 +651,18 @@ pub fn plan(
             let seg_len = sf.frames_to_seconds(seg.len);
             let offset = sf.frames_to_seconds(seg.start - t0);
             let image = asset.kind == MediaKind::Image;
+            // Past the clip's last frame (outgoing side of a transition) the media may
+            // have ended: reading starts at that frame, which holds, and is cut to the segment.
+            let last_used = sf.frames_to_seconds(clip.source_in) + sf.frames_to_seconds(clip.duration - 1) * clip.speed;
+            let read_at = src_start.clamp(0.0, last_used.max(0.0));
+            let skip = (src_start - read_at).max(0.0) / clip.speed;
             if image {
                 args.extend(["-loop", "1", "-framerate"].map(OsString::from));
                 args.push(rate_str(of).into());
                 args.extend(["-t".into(), num(seg_len + 2.0 * frame_s).into()]);
             } else {
-                args.extend(["-ss".into(), num(src_start.max(0.0)).into()]);
-                args.extend(["-t".into(), num(seg_len * clip.speed + 2.0 * frame_s).into()]);
+                args.extend(["-ss".into(), num(read_at).into()]);
+                args.extend(["-t".into(), num((seg_len + skip) * clip.speed + 2.0 * frame_s).into()]);
             }
             args.push("-i".into());
             args.push(s.title_files.get(&asset.id).unwrap_or(&asset.path).clone().into_os_string());
@@ -530,6 +675,16 @@ pub fn plan(
             }
             f.push(format!("setpts=(PTS-STARTPTS)/{}", num(clip.speed)));
             f.push(format!("fps={}", rate_str(of)));
+            // Before the source start (incoming side of a transition) the first frame holds.
+            if src_start < 0.0 && !image {
+                f.push(format!("tpad=start_duration={}:start_mode=clone", num(-src_start / clip.speed)));
+            }
+            if tail_ext > 0 && !image {
+                f.push(format!("tpad=stop_duration={}:stop_mode=clone", num(sf.frames_to_seconds(tail_ext) + skip + 2.0 * frame_s)));
+            }
+            if skip > 0.0 && !image {
+                f.push(format!("trim=start={},setpts=PTS-STARTPTS", num(skip - 0.5 * frame_s)));
+            }
             // Colour first, then the effect stack, then opacity: with effects the
             // alpha multiplier is a second mixer so a key cannot discard it.
             let effects: Vec<&EffectKind> = clip.active_effects().map(|e| &e.kind).collect();
@@ -598,13 +753,14 @@ pub fn plan(
                     f.push(format!("scale={sw}:{sh}:flags=bicubic"));
                 }
             }
-            if clip.fade_in > seg.head {
-                f.push(format!("fade=t=in:st=0:d={}:alpha=1", num(sf.frames_to_seconds(clip.fade_in - seg.head))));
+            // Fades run from the clip's edges, wherever the segment starts.
+            if clip.fade_in > 0 && clip.fade_in > seg.head {
+                f.push(fade_at("fade", "in", sf.frames_to_seconds(-seg.head), sf.frames_to_seconds(clip.fade_in), ":alpha=1"));
             }
             if clip.fade_out > 0 {
                 let st = sf.frames_to_seconds(clip.end() - clip.fade_out - seg.start);
                 if st < seg_len {
-                    f.push(format!("fade=t=out:st={}:d={}:alpha=1", num(st), num(sf.frames_to_seconds(clip.fade_out))));
+                    f.push(fade_at("fade", "out", st, sf.frames_to_seconds(clip.fade_out), ":alpha=1"));
                 }
             }
             let theta = (t.rotation as f64).to_radians();
@@ -625,15 +781,47 @@ pub fn plan(
             let (rx, ry) = (ax * theta.cos() - ay * theta.sin(), ax * theta.sin() + ay * theta.cos());
             let cx = w / 2.0 + t.x as f64 - rx;
             let cy = h / 2.0 + t.y as f64 - ry;
-            let (from, to) = (offset - 0.5 * frame_s, offset + seg_len - 0.5 * frame_s);
-            let out = format!("o{k}");
             let (ox, oy) = if animated { ("0".to_string(), "0".to_string()) } else { (format!("{}-overlay_w/2", num(cx)), format!("{}-overlay_h/2", num(cy))) };
-            chains.push(format!(
-                "[{last}][v{k}]overlay=x={ox}:y={oy}:eof_action=pass:format=rgb:enable='between(t,{},{})'[{out}]",
-                num(from),
-                num(to)
-            ));
-            last = out;
+            Some(Placed { label: format!("v{k}"), k, x: ox, y: oy, start: seg.start, end: seg.start + seg.len })
+            };
+
+            // The clip's own overlay starts where its incoming transition ends.
+            let own = placed.as_ref().is_some_and(|p| incoming.is_none_or(|s| s.t1 < p.end));
+            let mut own_label = placed.as_ref().map(|p| p.label.clone());
+            if let (Some(span), Some(lower)) = (incoming, below.take()) {
+                let n = labels;
+                labels += 1;
+                let lay = placed.as_ref().map(|p| {
+                    let input = if own {
+                        chains.push(format!("[{}]split[{0}t][{0}n]", p.label));
+                        own_label = Some(format!("{}n", p.label));
+                        format!("{}t", p.label)
+                    } else {
+                        p.label.clone()
+                    };
+                    Layer { label: input, x: p.x.clone(), y: p.y.clone() }
+                });
+                last = transition_chains(&mut chains, span, n, &last, &lower, lay.as_ref(), t0, sf, of, (seq.settings.width, seq.settings.height));
+            }
+            if outgoing.is_some() {
+                let n = labels;
+                labels += 1;
+                chains.push(format!("[{last}]split[keep{n}][below{n}]"));
+                last = format!("keep{n}");
+                below = Some(format!("below{n}"));
+            }
+            if let (Some(p), Some(label), true) = (placed, own_label, own) {
+                let from = incoming.map_or(p.start, |s| s.t1.max(p.start));
+                let out = format!("o{}", p.k);
+                chains.push(format!(
+                    "[{last}][{label}]overlay=x={}:y={}:eof_action=pass:format=rgb:enable='between(t,{},{})'[{out}]",
+                    p.x,
+                    p.y,
+                    num(sf.frames_to_seconds(from - t0) - 0.5 * frame_s),
+                    num(sf.frames_to_seconds(p.end - t0) - 0.5 * frame_s)
+                ));
+                last = out;
+            }
         }
     }
 
@@ -699,20 +887,29 @@ pub fn plan(
     let any_solo = audio_tracks.iter().any(|t| t.solo);
     let mut mix_inputs = Vec::new();
     for track in audio_tracks.iter().filter(|t| !t.muted && (!any_solo || t.solo)) {
-        for clip in track.clips.iter().filter(|c| c.enabled) {
+        let spans: Vec<Option<TransitionSpan>> =
+            (0..track.clips.len()).map(|i| track.transition_into(i).filter(|s| s.t1 > t0 && s.t0 < t1)).collect();
+        for (ci, clip) in track.clips.iter().enumerate().filter(|(_, c)| c.enabled) {
             let gain_db = clip.volume_db + track.volume_db;
             let ramped = !clip.keys_of(Param::Volume).is_empty();
             if gain_db <= -96.0 && !ramped {
                 continue;
             }
-            let Some(seg) = segment(clip, t0, t1) else { continue };
+            // Crossfades lengthen both clips like video transitions. A crossfade
+            // the range starts in is rendered from its start and cut afterwards.
+            let (incoming, outgoing) = (spans[ci], spans.get(ci + 1).copied().flatten());
+            let before = incoming.map_or(0, |s| s.cut - s.t0);
+            let after = outgoing.map_or(0, |s| s.t1 - s.cut);
+            let lo = [incoming, outgoing].iter().flatten().fold(t0, |lo, s| lo.min(s.t0));
+            let Some(seg) = segment_ext(clip, before, after, lo, t1) else { continue };
             let Some(asset) = asset_for(clip)? else { continue };
             if !asset.has_audio() {
                 continue;
             }
             let src_start = sf.frames_to_seconds(clip.source_in) + sf.frames_to_seconds(seg.head) * clip.speed;
             let seg_len = sf.frames_to_seconds(seg.len);
-            let offset = sf.frames_to_seconds(seg.start - t0);
+            let lead = sf.frames_to_seconds((t0 - seg.start).max(0));
+            let offset = sf.frames_to_seconds((seg.start - t0).max(0));
             args.extend(["-ss".into(), num(src_start.max(0.0)).into()]);
             args.extend(["-t".into(), num(seg_len * clip.speed + 0.1).into()]);
             args.push("-i".into());
@@ -723,6 +920,10 @@ pub fn plan(
             let mut f = vec!["asetpts=PTS-STARTPTS".to_string()];
             f.extend(atempo_chain(clip.speed));
             f.push(format!("aformat=sample_fmts=fltp:sample_rates={sr}:channel_layouts=stereo"));
+            if src_start < 0.0 {
+                // Silence before the media start (incoming side of a crossfade).
+                f.push(format!("adelay=delays={}S:all=1", (-src_start / clip.speed * sr as f64).round() as u64));
+            }
             if ramped {
                 // Volume keys in dB over output time `t` of this segment.
                 let db = param_expr(clip, Param::Volume, seg.head, "t", frame_s);
@@ -735,16 +936,24 @@ pub fn plan(
                 let r = (1.0 + clip.pan as f64).min(1.0);
                 f.push(format!("pan=stereo|c0={}*c0|c1={}*c1", num(l), num(r)));
             }
-            if clip.fade_in > seg.head {
-                f.push(format!("afade=t=in:st=0:d={}", num(sf.frames_to_seconds(clip.fade_in - seg.head))));
+            if clip.fade_in > 0 && clip.fade_in > seg.head {
+                f.push(fade_at("afade", "in", sf.frames_to_seconds(-seg.head), sf.frames_to_seconds(clip.fade_in), ""));
             }
             if clip.fade_out > 0 {
                 let st = sf.frames_to_seconds(clip.end() - clip.fade_out - seg.start);
                 if st < seg_len {
-                    f.push(format!("afade=t=out:st={}:d={}", num(st), num(sf.frames_to_seconds(clip.fade_out))));
+                    f.push(fade_at("afade", "out", st, sf.frames_to_seconds(clip.fade_out), ""));
                 }
             }
-            f.push(format!("atrim=end={}", num(seg_len)));
+            for (span, kind) in [(incoming, "in"), (outgoing, "out")] {
+                if let Some(s) = span {
+                    f.push(fade_at("afade", kind, sf.frames_to_seconds(s.t0 - seg.start), sf.frames_to_seconds(s.len()), ":curve=tri"));
+                }
+            }
+            if lead > 0.0 {
+                f.push(format!("atrim=start={},asetpts=PTS-STARTPTS", num(lead)));
+            }
+            f.push(format!("atrim=end={}", num(seg_len - lead)));
             let delay = (offset * sr as f64).round() as u64;
             if delay > 0 {
                 f.push(format!("adelay=delays={delay}S:all=1"));

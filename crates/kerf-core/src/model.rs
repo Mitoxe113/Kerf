@@ -415,6 +415,109 @@ pub struct Track {
     pub height: u16,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TransitionKind {
+    Dissolve,
+    DipBlack,
+    DipWhite,
+    /// Wipes name the direction the edge moves (left = from right to left).
+    WipeLeft,
+    WipeRight,
+    WipeUp,
+    WipeDown,
+    /// Audio: linear fade out and in at the same time.
+    Crossfade,
+}
+
+impl TransitionKind {
+    pub fn is_audio(self) -> bool {
+        self == TransitionKind::Crossfade
+    }
+}
+
+/// Where a transition sits relative to the cut.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TransitionAlign {
+    #[default]
+    Center,
+    /// Begins at the cut (uses frames of the outgoing clip after its end).
+    Start,
+    /// Ends at the cut (uses frames of the incoming clip before its start).
+    End,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Transition {
+    pub kind: TransitionKind,
+    pub duration: Frame,
+    #[serde(default)]
+    pub align: TransitionAlign,
+}
+
+/// Longest transition (10 minutes at 60 fps).
+pub const MAX_TRANSITION: Frame = 36_000;
+
+/// The frames `[t0, t1)` a transition plays, around the cut between two clips.
+/// The outgoing clip shows until `t1`, the incoming one from `t0`; both hold
+/// their last/first frame where the media ends.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TransitionSpan {
+    pub kind: TransitionKind,
+    pub t0: Frame,
+    pub t1: Frame,
+    pub cut: Frame,
+}
+
+impl TransitionSpan {
+    pub fn len(&self) -> Frame {
+        self.t1 - self.t0
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.t1 <= self.t0
+    }
+}
+
+impl Track {
+    /// The transition into clip `b` (an index), if it is valid: the previous
+    /// clip ends where `b` starts and the kind fits the track. It takes at most
+    /// half of each clip, so neighbouring transitions never overlap.
+    /// Mirrored by `transitionInto` in `src/timeline/geometry.ts`.
+    pub fn transition_into(&self, b: usize) -> Option<TransitionSpan> {
+        let clip = self.clips.get(b)?;
+        let t = clip.transition?;
+        let a = self.clips.get(b.checked_sub(1)?)?;
+        if a.end() != clip.start || t.kind.is_audio() != (self.kind == TrackKind::Audio) || t.duration <= 0 {
+            return None;
+        }
+        let (left, right) = match t.align {
+            TransitionAlign::Center => (t.duration / 2, t.duration - t.duration / 2),
+            TransitionAlign::Start => (0, t.duration),
+            TransitionAlign::End => (t.duration, 0),
+        };
+        let (left, right) = (left.min(a.duration / 2), right.min(clip.duration / 2));
+        (left + right > 0).then_some(TransitionSpan { kind: t.kind, t0: clip.start - left, t1: clip.start + right, cut: clip.start })
+    }
+
+    /// Drops transitions whose clips are no longer adjacent or that do not
+    /// fit the track; true when something changed.
+    pub fn tidy_transitions(&mut self) -> bool {
+        let mut changed = false;
+        for b in 0..self.clips.len() {
+            let Some(t) = self.clips[b].transition else { continue };
+            let ok = b > 0 && self.clips[b - 1].end() == self.clips[b].start && t.kind.is_audio() == (self.kind == TrackKind::Audio);
+            if !ok {
+                self.clips[b].transition = None;
+                changed = true;
+            }
+        }
+        changed
+    }
+}
+
 impl Track {
     pub fn new(kind: TrackKind, name: impl Into<String>) -> Self {
         Self {
@@ -498,6 +601,10 @@ pub struct Clip {
     /// before opacity and the transform.
     #[serde(default)]
     pub effects: Vec<Effect>,
+    /// Transition from the previous clip on the track into this one (only
+    /// valid while that clip ends exactly where this one starts).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transition: Option<Transition>,
 }
 
 impl Clip {
@@ -522,6 +629,7 @@ impl Clip {
             label: LabelColor::None,
             keys: BTreeMap::new(),
             effects: Vec::new(),
+            transition: None,
         }
     }
 

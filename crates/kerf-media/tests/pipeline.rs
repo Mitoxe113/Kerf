@@ -6,7 +6,7 @@ use std::sync::atomic::AtomicBool;
 
 use kerf_core::history::History;
 use kerf_core::model::*;
-use kerf_core::ops::{ClipPatch, EditCommand, PlaceMode};
+use kerf_core::ops::{ClipPatch, EditCommand, PlaceMode, TransitionEdit};
 use kerf_core::time::Rational;
 use kerf_media::render::{self, AudioCodec, ExportSettings, RateControl, VideoCodec};
 use kerf_media::{analysis, probe, Tools};
@@ -594,4 +594,110 @@ fn subtitles_burn_embed_and_sidecar() {
     assert!(srt.starts_with("1\n00:00:00,400 --> 00:00:00,800\nEins\n\n2\n00:00:01,200 --> 00:00:01,600\nZwei"), "{srt}");
     // Helper files are gone.
     assert!(plan.files.iter().all(|(p, _)| !p.exists()));
+}
+
+#[test]
+fn transitions_render() {
+    let Some(tools) = tools() else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let make = |name: &str, colour: &str, hz: u32| {
+        let src = dir.path().join(name);
+        ffmpeg(&tools, &[
+            "-f", "lavfi", "-i", &format!("color=c={colour}:s=320x180:r=25:d=4"),
+            "-f", "lavfi", "-i", &format!("sine=frequency={hz}:duration=4"),
+            "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-shortest", "-y", &src.to_string_lossy(),
+        ]);
+        import(&tools, &src, &dir.path().join("cache"))
+    };
+    let (white, grey) = (make("white.mp4", "white", 440), make("grey.mp4", "0x404040", 1000));
+    let mut p = Project::new("t", 0);
+    let (wid, gid) = (white.id, grey.id);
+    p.media.extend([white, grey]);
+    let seq = p.active_sequence;
+    let settings = SequenceSettings { width: 320, height: 180, fps: Rational::new(25, 1), sample_rate: 48_000 };
+    kerf_core::ops::apply(&mut p, &EditCommand::UpdateSequenceSettings { sequence: seq, settings }).unwrap();
+    // A: 0..50 from 1 s into the white media, B: 50..100 from 1 s into the grey one;
+    // both have media to spare around the cut.
+    let mut place = |media, at| {
+        kerf_core::ops::apply(&mut p, &EditCommand::PlaceMedia {
+            sequence: seq, media, video_track: None, audio_track: None, at,
+            mode: PlaceMode::Overwrite, source_in: Some(25), source_out: Some(75), match_sequence: false,
+        })
+        .unwrap()
+        .created
+    };
+    let first = place(wid, 0);
+    let b = place(gid, 50);
+    let render = |p: &mut Project, kind, range: Option<i64>| {
+        let t = |kind| Some(Transition { kind, duration: 20, align: TransitionAlign::Center });
+        let items = vec![TransitionEdit { clip: b[0], transition: t(kind) }, TransitionEdit { clip: b[1], transition: t(TransitionKind::Crossfade) }];
+        kerf_core::ops::apply(p, &EditCommand::SetTransitions { sequence: seq, items }).unwrap();
+        kerf_core::ops::apply(p, &EditCommand::SetInOut { sequence: seq, in_point: range, out_point: None }).unwrap();
+        let file = dir.path().join(format!("{kind:?}-{}.mp4", range.is_some()));
+        let export = ExportSettings {
+            output: file.clone(),
+            video_codec: VideoCodec::H264,
+            hardware: false,
+            width: 320,
+            height: 180,
+            fps: Rational::new(25, 1),
+            rate: RateControl::Quality { crf: 12 },
+            audio_codec: AudioCodec::Aac,
+            audio_bitrate_kbps: 192,
+            sample_rate: 48_000,
+            audio_channels: 2,
+            use_in_out: range.is_some(),
+            subtitles: Default::default(),
+            title_files: Default::default(),
+        };
+        let plan = render::plan(p, p.sequence(seq).unwrap(), &export, dir.path(), &[]).unwrap();
+        let mut log = String::new();
+        let res = render::render_logged(&tools, &plan, &AtomicBool::new(false), |_| {}, &mut log);
+        assert!(res.is_ok(), "{kind:?}: {res:?}\n{log}");
+        file
+    };
+    let (w, g) = (255.0, 64.0);
+    let near = |v: f64, want: f64, what: &str| assert!((v - want).abs() < 8.0, "{what}: {v:.1}, want {want:.1}");
+
+    // Dissolve over frames 40..60: p = (frame - 40) / 20.
+    let f = render(&mut p, TransitionKind::Dissolve, None);
+    near(mean_luma(&tools, &f, 1.5), w, "before");
+    near(mean_luma(&tools, &f, 40.0 / 25.0), w, "first frame is the outgoing clip");
+    near(mean_luma(&tools, &f, 2.0), (w + g) / 2.0, "half way");
+    near(mean_luma(&tools, &f, 55.0 / 25.0), w * 0.25 + g * 0.75, "three quarters");
+    near(mean_luma(&tools, &f, 2.5), g, "after");
+    // Audio: both clips at half gain at the cut, each alone outside.
+    let (a, mid, bb) = (audio_rms(&tools, &f, 1.2), audio_rms(&tools, &f, 1.9), audio_rms(&tools, &f, 2.8));
+    eprintln!("rms {a:.4} {mid:.4} {bb:.4}");
+    assert!(mid > a.min(bb) * 0.5 && mid < a.max(bb) * 0.95, "crossfade keeps both, quieter: {mid}");
+
+    // Rendering from inside the transition: frame 45 is the first, p = 0.25.
+    let f = render(&mut p, TransitionKind::Dissolve, Some(45));
+    near(mean_luma(&tools, &f, 0.0), w * 0.75 + g * 0.25, "range starts in the dissolve");
+
+    // Dip to black: colour 2p up to the middle, then the incoming clip from under it.
+    let f = render(&mut p, TransitionKind::DipBlack, None);
+    near(mean_luma(&tools, &f, 45.0 / 25.0), w * 0.5, "quarter way");
+    near(mean_luma(&tools, &f, 2.0), 0.0, "black in the middle");
+    near(mean_luma(&tools, &f, 55.0 / 25.0), g * 0.5, "three quarters");
+
+    // Wipe right: the incoming clip fills the left part up to floor(W * p).
+    let f = render(&mut p, TransitionKind::WipeRight, None);
+    let (l, r) = (half_luma(&tools, &f, 2.0, true), half_luma(&tools, &f, 2.0, false));
+    near(l, g, "left half is new");
+    near(r, w, "right half is old");
+    let (l, r) = (half_luma(&tools, &f, 1.7, true), half_luma(&tools, &f, 1.7, false));
+    assert!(l < w - 30.0 && (r - w).abs() < 8.0, "a quarter in: {l:.1} {r:.1}");
+
+    // The outgoing clip ends with its media (slipped to the last frames): its last
+    // frame holds, also when the range starts after the cut. A fade-out on it that
+    // began before the range is continued, not restarted.
+    kerf_core::ops::apply(&mut p, &EditCommand::SlipClip { sequence: seq, clip: first[0], delta: 25, linked: true }).unwrap();
+    let f = render(&mut p, TransitionKind::Dissolve, Some(55));
+    near(mean_luma(&tools, &f, 0.0), w * 0.25 + g * 0.75, "held last frame three quarters through");
+    let patch = ClipPatch { fade_out: Some(20), ..Default::default() };
+    kerf_core::ops::apply(&mut p, &EditCommand::UpdateClips { sequence: seq, clips: vec![first[0]], patch }).unwrap();
+    let f = render(&mut p, TransitionKind::DipBlack, Some(42));
+    // Frame 42: the fade-out (30..50) is at 0.4, under the dip colour at 2 * 0.1.
+    near(mean_luma(&tools, &f, 0.0), w * 0.4 * 0.8, "fade continues from before the range");
 }

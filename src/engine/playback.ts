@@ -11,7 +11,8 @@ import { animate } from "../lib/keys";
 import { previewSource } from "../lib/media";
 import type { Clip, ClipPatch, MediaAsset, Sequence, Subtitles, TitleSpec, Track, Uuid } from "../lib/types";
 import { AudioMixer } from "./audio";
-import { Compositor, type Layer, type LayerSource } from "./compositor";
+import { transitionInto, type TransitionSpan } from "../timeline/geometry";
+import { Compositor, type DrawItem, type Layer, type LayerSource } from "./compositor";
 import { activeEffects } from "./effects";
 import { dbToGain, IDENTITY_COLOR, IDENTITY_TRANSFORM, place, quadMatrix } from "./math";
 import { cueAt, cueCanvas, setFontListener, titleCanvas } from "./text";
@@ -43,8 +44,8 @@ export interface EngineOptions {
   quality: number;
 }
 
-/** Clip at `frame` on `track` (clips are sorted and non-overlapping). */
-export function clipAt(track: Track, frame: number): Clip | null {
+/** Index of the clip at `frame` on `track` (clips are sorted and non-overlapping), or -1. */
+function clipIndexAt(track: Track, frame: number): number {
   const clips = track.clips;
   let lo = 0;
   let hi = clips.length - 1;
@@ -53,14 +54,33 @@ export function clipAt(track: Track, frame: number): Clip | null {
     const c = clips[mid];
     if (frame < c.start) hi = mid - 1;
     else if (frame >= c.start + c.duration) lo = mid + 1;
-    else return c;
+    else return mid;
+  }
+  return -1;
+}
+
+/** Clip at `frame` on `track`. */
+export function clipAt(track: Track, frame: number): Clip | null {
+  return track.clips[clipIndexAt(track, frame)] ?? null;
+}
+
+/** The transition playing at `frame` on `track`: its clips and progress. */
+export function transitionAt(track: Track, frame: number): { a: Clip; b: Clip; span: TransitionSpan; p: number } | null {
+  const i = clipIndexAt(track, frame);
+  if (i < 0) return null;
+  // Into the clip at the frame, or out of it into the next one.
+  for (const j of [i, i + 1]) {
+    const s = j < track.clips.length ? transitionInto(track, j) : null;
+    if (s && frame >= s.t0 && frame < s.t1) return { a: track.clips[j - 1], b: track.clips[j], span: s, p: (frame - s.t0) / (s.t1 - s.t0) };
   }
   return null;
 }
 
-function nextClipAfter(track: Track, frame: number): Clip | null {
-  for (const c of track.clips) if (c.start > frame) return c;
-  return null;
+/** Next clip after `frame` and the frame it starts playing (earlier with a transition into it). */
+function nextClipAfter(track: Track, frame: number): { clip: Clip; from: number } | null {
+  const i = track.clips.findIndex((c) => c.start > frame);
+  if (i < 0) return null;
+  return { clip: track.clips[i], from: transitionInto(track, i)?.t0 ?? track.clips[i].start };
 }
 
 /** Fade envelope 0..1 at timeline `frame`. */
@@ -95,7 +115,7 @@ export class PlaybackEngine {
   private startFrame = 0;
   private startClock = 0;
   private range: [number, number] | null = null;
-  private lastLayers: Layer[] = [];
+  private lastLayers: DrawItem[] = [];
   /** Frame shown instead of the playhead (trim preview), or null. */
   private previewFrame: number | null = null;
   scopesEnabled = false;
@@ -429,9 +449,12 @@ export class PlaybackEngine {
     const el = v.el;
     const fps = this.fps;
     // Aim inside the frame so rounding never shows the previous one.
-    const t = Math.max(0, this.sourceTime(c, frame) + (this.playing ? 0 : 0.35 / fps));
+    const want = this.sourceTime(c, frame) + (this.playing ? 0 : 0.35 / fps);
+    // Outside the media (transition handles) the first or last frame holds.
+    const last = el.duration > 0 ? el.duration - 0.001 : Infinity;
+    const t = Math.min(Math.max(0, want), last);
     const rate = this.rate * c.speed;
-    const canPlay = this.playing && rate > 0 && rate <= 8;
+    const canPlay = this.playing && rate > 0 && rate <= 8 && want >= 0 && want <= last;
     if (!canPlay) {
       if (!el.paused) el.pause();
       this.seekVoice(v, t);
@@ -454,11 +477,24 @@ export class PlaybackEngine {
   }
 
   /** Prepares an upcoming clip so the cut plays without a decode gap. */
-  private preroll(v: Voice, c: Clip) {
+  private preroll(v: Voice, c: Clip, from: number) {
     if (v.el instanceof HTMLImageElement) return;
     const el = v.el;
     if (!el.paused) el.pause();
-    this.seekVoice(v, this.sourceTime(c, c.start));
+    this.seekVoice(v, Math.max(0, this.sourceTime(c, from)));
+  }
+
+  /** Clips playing at `frame` on `track` with their mix weight (two in a transition). */
+  private activeClips(track: Track, frame: number): { c: Clip; weight: number }[] {
+    const tr = transitionAt(track, frame);
+    if (tr) {
+      return [
+        { c: this.effectiveClip(tr.a), weight: 1 - tr.p },
+        { c: this.effectiveClip(tr.b), weight: tr.p },
+      ];
+    }
+    const raw = clipAt(track, frame);
+    return raw ? [{ c: this.effectiveClip(raw), weight: 1 }] : [];
   }
 
   private syncAll(hard: boolean) {
@@ -472,16 +508,16 @@ export class PlaybackEngine {
     for (const track of seq.tracks) {
       const kind = track.kind;
       if (kind === "video" && track.hidden) continue;
-      const raw = clipAt(track, frame);
-      const c = raw ? this.effectiveClip(raw) : null;
-      if (c && c.enabled) {
+      for (const { c, weight } of this.activeClips(track, frame)) {
+        if (!c.enabled) continue;
         const v = this.voice(c, kind);
         if (v) {
           used.add(v.key);
           const audible = kind === "audio" && !track.muted && (!anySolo || track.solo);
           if (kind === "audio" && v.gain && v.pan) {
             const ctx = this.mixer.context();
-            const g = dbToGain(animate(c, frame).volumeDb) * fadeGain(c, frame);
+            // A crossfade weighs both clips linearly, like the export's afade.
+            const g = dbToGain(animate(c, frame).volumeDb) * fadeGain(c, frame) * weight;
             v.gain.gain.setTargetAtTime(g, ctx.currentTime, 0.01);
             v.pan.pan.setTargetAtTime(c.pan, ctx.currentTime, 0.01);
             if (v.track !== track.id) {
@@ -499,11 +535,12 @@ export class PlaybackEngine {
       }
       if (ahead > 0) {
         const next = nextClipAfter(track, frame);
-        if (next && next.enabled && next.start - frame < ahead) {
-          const v = this.voice(this.effectiveClip(next), kind);
+        if (next && next.clip.enabled && next.from > frame && next.from - frame < ahead) {
+          const c = this.effectiveClip(next.clip);
+          const v = this.voice(c, kind);
           if (v && !used.has(v.key)) {
             used.add(v.key);
-            this.preroll(v, this.effectiveClip(next));
+            this.preroll(v, c, next.from);
           }
         }
       }
@@ -535,44 +572,57 @@ export class PlaybackEngine {
 
   // --- compositing ----------------------------------------------------------------
 
-  private layers(): Layer[] {
+  /** Layer of video clip `c` at `frame`, null when it shows nothing. */
+  private layerOf(c: Clip, frame: number, W: number, H: number): Layer | null {
+    if (!c.enabled) return null;
+    const title = this.media.get(c.mediaId)?.title;
+    const v = title ? undefined : this.voices.get(`video:${c.id}`);
+    const src: LayerSource | undefined = title ? titleCanvas(this.titleOverrides.get(c.mediaId) ?? title) : (v?.el as LayerSource | undefined);
+    if (!src) return null;
+    const [sw, sh] =
+      src instanceof HTMLVideoElement ? [src.videoWidth, src.videoHeight] : src instanceof HTMLImageElement ? [src.naturalWidth, src.naturalHeight] : [src.width, src.height];
+    if (!sw || !sh) return null;
+    if (src instanceof HTMLVideoElement && src.readyState < 2) return null;
+    const a = animate(c, frame);
+    const t = a.transform;
+    const opacity = a.opacity * fadeGain(c, frame);
+    if (t.scale <= 0 || opacity <= 0) return null;
+    const p = place(t, sw, sh, W, H);
+    const effects = activeEffects(c.effects);
+    // Effects run at the fitted size (scale 1) in canvas pixels.
+    const fxScale = this.compositor ? this.compositor.canvas.width / W : 1;
+    return {
+      key: v?.key ?? `title:${c.id}`,
+      source: src,
+      matrix: quadMatrix(p, W, H),
+      crop: [t.cropLeft, t.cropTop, t.cropRight, t.cropBottom],
+      opacity,
+      color: a.color,
+      effects,
+      work: t.scale > 0 ? [(p.width / t.scale) * fxScale, (p.height / t.scale) * fxScale] : undefined,
+      fxScale,
+    };
+  }
+
+  private layers(): DrawItem[] {
     const seq = this.seq;
     if (!seq) return [];
     const frame = this.previewFrame ?? this.frame;
     const { width: W, height: H } = seq.settings;
-    const out: Layer[] = [];
+    const out: DrawItem[] = [];
     for (const track of seq.tracks) {
       if (track.kind !== "video" || track.hidden) continue;
+      const tr = transitionAt(track, frame);
+      if (tr) {
+        const [a, b] = [this.layerOf(this.effectiveClip(tr.a), frame, W, H), this.layerOf(this.effectiveClip(tr.b), frame, W, H)];
+        const vertical = tr.span.kind === "wipeUp" || tr.span.kind === "wipeDown";
+        const size = vertical ? H : W;
+        if (a || b) out.push({ key: `tr:${tr.b.id}`, kind: tr.span.kind, p: tr.p, edge: Math.floor(size * tr.p + 1e-4) / size, a, b });
+        continue;
+      }
       const raw = clipAt(track, frame);
-      if (!raw) continue;
-      const c = this.effectiveClip(raw);
-      if (!c.enabled) continue;
-      const title = this.media.get(c.mediaId)?.title;
-      const v = title ? undefined : this.voices.get(`video:${c.id}`);
-      const src: LayerSource | undefined = title ? titleCanvas(this.titleOverrides.get(c.mediaId) ?? title) : (v?.el as LayerSource | undefined);
-      if (!src) continue;
-      const [sw, sh] =
-        src instanceof HTMLVideoElement ? [src.videoWidth, src.videoHeight] : src instanceof HTMLImageElement ? [src.naturalWidth, src.naturalHeight] : [src.width, src.height];
-      if (!sw || !sh) continue;
-      if (src instanceof HTMLVideoElement && src.readyState < 2) continue;
-      const a = animate(c, frame);
-      const t = a.transform;
-      if (t.scale <= 0 || a.opacity <= 0) continue;
-      const p = place(t, sw, sh, W, H);
-      const effects = activeEffects(c.effects);
-      // Effects run at the fitted size (scale 1) in canvas pixels.
-      const fxScale = this.compositor ? this.compositor.canvas.width / W : 1;
-      out.push({
-        key: v?.key ?? `title:${c.id}`,
-        source: src,
-        matrix: quadMatrix(p, W, H),
-        crop: [t.cropLeft, t.cropTop, t.cropRight, t.cropBottom],
-        opacity: a.opacity * fadeGain(c, frame),
-        color: a.color,
-        effects,
-        work: t.scale > 0 ? [(p.width / t.scale) * fxScale, (p.height / t.scale) * fxScale] : undefined,
-        fxScale,
-      });
+      const l = raw && this.layerOf(this.effectiveClip(raw), frame, W, H);
+      if (l) out.push(l);
     }
     // Subtitles on top of everything, as the export burns them in.
     const subs = this.subtitleOverride ?? seq.subtitles;

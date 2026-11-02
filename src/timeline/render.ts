@@ -7,7 +7,8 @@ import { isAnimated, localOf, paramAt } from "../lib/keys";
 import { labelColor } from "../lib/labels";
 import type { Clip, MediaAsset, Sequence, Track, Uuid } from "../lib/types";
 import { dbToGain } from "../engine/math";
-import { DIVIDER_H, RULER_H, subLane, type TrackLayout } from "./geometry";
+import { TRANSITIONS } from "../actions/transitions";
+import { DIVIDER_H, RULER_H, subLane, transitionInto, type TrackLayout, type TransitionSpan } from "./geometry";
 
 export const COLORS = {
   bg: "#0f0f12",
@@ -150,6 +151,8 @@ interface DrawContext {
   seq: Sequence;
   media: Map<Uuid, MediaAsset>;
   selection: Set<Uuid>;
+  /** Highlighted transition (the clip it leads into). */
+  activeTransition: Uuid | null;
   redraw: () => void;
 }
 
@@ -205,10 +208,16 @@ export function drawTracks(ctx: CanvasRenderingContext2D, layout: TrackLayout, v
       if (clips[mid].start + clips[mid].duration < f0) lo = mid + 1;
       else hi = mid;
     }
-    for (let i = lo; i < clips.length; i++) {
+    let i = lo;
+    for (; i < clips.length; i++) {
       const c = clips[i];
       if (c.start > f1) break;
       drawClip(ctx, c, row.track, c.start * v.zoom - v.scrollX, y, c.duration * v.zoom, row.h, v, d, dim);
+    }
+    // Transitions over the cuts, on top of both clips (one more: it can reach back into view).
+    for (let j = Math.max(1, lo); j <= Math.min(i, clips.length - 1); j++) {
+      const s = transitionInto(row.track, j);
+      if (s) drawTransition(ctx, s, y, row.h, v, d.activeTransition === clips[j].id);
     }
   }
   ctx.fillStyle = COLORS.divider;
@@ -354,6 +363,37 @@ function drawClip(
     ctx.lineWidth = 1;
   }
   ctx.stroke();
+  ctx.restore();
+}
+
+/** Box over the frames a transition plays, with a diagonal like a blend. */
+function drawTransition(ctx: CanvasRenderingContext2D, s: TransitionSpan, rowY: number, rowH: number, v: View, selected: boolean) {
+  const x0 = s.t0 * v.zoom - v.scrollX;
+  const x1 = s.t1 * v.zoom - v.scrollX;
+  if (x1 < -4 || x0 > v.width + 4) return;
+  const w = Math.max(5, x1 - x0);
+  const x = x1 - x0 < 5 ? (x0 + x1) / 2 - 2.5 : x0;
+  const y = rowY + 1;
+  const h = rowH - 3;
+  ctx.save();
+  roundRect(ctx, x + 0.5, y + 0.5, w - 1, h, 3);
+  ctx.fillStyle = selected ? "rgba(200,245,66,0.22)" : "rgba(14,14,18,0.55)";
+  ctx.fill();
+  ctx.strokeStyle = selected ? COLORS.signal : "rgba(255,255,255,0.55)";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.clip();
+  ctx.beginPath();
+  ctx.moveTo(x, y + h);
+  ctx.lineTo(x + w, y);
+  ctx.strokeStyle = selected ? "rgba(200,245,66,0.7)" : "rgba(255,255,255,0.35)";
+  ctx.stroke();
+  if (w > 44 && h >= 16) {
+    ctx.font = "500 10px 'Inter Variable', sans-serif";
+    ctx.textBaseline = "top";
+    ctx.fillStyle = "#e6e6ea";
+    ctx.fillText(fit(ctx, TRANSITIONS.find((t) => t.value === s.kind)?.short ?? "", w - 8), x + 4, y + 3);
+  }
   ctx.restore();
 }
 
