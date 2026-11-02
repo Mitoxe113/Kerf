@@ -13,7 +13,7 @@ use std::sync::Arc;
 use serde::Serialize;
 use uuid::Uuid;
 
-use crate::model::{Bin, MediaAsset, Project, Sequence, Track};
+use crate::model::{Bin, MediaAsset, Multicam, Project, Sequence, Track};
 use crate::ops::{self, EditCommand, EditOutcome};
 use crate::Result;
 
@@ -30,6 +30,7 @@ struct Snapshot {
     time: u64,
     media: Arc<Vec<MediaAsset>>,
     bins: Arc<Vec<Bin>>,
+    multicams: Arc<Vec<Multicam>>,
     sequences: Vec<SeqSnap>,
     active_sequence: Uuid,
 }
@@ -67,6 +68,7 @@ impl Snapshot {
             time,
             media: share(&p.media, prev.map(|s| &s.media)),
             bins: share(&p.bins, prev.map(|s| &s.bins)),
+            multicams: share(&p.multicams, prev.map(|s| &s.multicams)),
             sequences,
             active_sequence: p.active_sequence,
         }
@@ -75,6 +77,7 @@ impl Snapshot {
     fn restore(&self, p: &mut Project) {
         p.media = (*self.media).clone();
         p.bins = (*self.bins).clone();
+        p.multicams = (*self.multicams).clone();
         p.sequences = self
             .sequences
             .iter()
@@ -137,6 +140,7 @@ pub struct SequenceDelta {
 pub struct ProjectDiff {
     pub media: Option<Vec<MediaAsset>>,
     pub bins: Option<Vec<Bin>>,
+    pub multicams: Option<Vec<Multicam>>,
     /// Set when sequences were added, removed or reordered (then `patches` is empty).
     pub sequences: Option<Vec<Sequence>>,
     pub patches: Vec<SequenceDelta>,
@@ -146,6 +150,7 @@ fn diff(before: &Snapshot, after: &Project) -> ProjectDiff {
     let mut d = ProjectDiff {
         media: (*before.media != after.media).then(|| after.media.clone()),
         bins: (*before.bins != after.bins).then(|| after.bins.clone()),
+        multicams: (*before.multicams != after.multicams).then(|| after.multicams.clone()),
         ..Default::default()
     };
     let same_list = before.sequences.len() == after.sequences.len()

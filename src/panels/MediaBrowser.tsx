@@ -151,6 +151,11 @@ export function MediaBrowser() {
       { label: "Im Quellmonitor öffnen", disabled: !ready, onSelect: () => source.open(a.id) },
       { label: "Am Playhead einfügen (Insert)", shortcut: ",", disabled: !ready, onSelect: () => void placeMedia(ids, "insert") },
       { label: "Am Playhead überschreiben", shortcut: ".", disabled: !ready, onSelect: () => void placeMedia(ids, "overwrite") },
+      {
+        label: "Multicam-Clip erstellen …",
+        disabled: ids.filter((id) => { const m = useProject.getState().mediaById.get(id); return m?.status.state === "ready" && m.kind === "video"; }).length < 2,
+        onSelect: () => useEditor.getState().set({ dialog: { kind: "multicam", media: ids } }),
+      },
       { separator: true },
       { label: a.favorite ? "Favorit entfernen" : "Als Favorit markieren", onSelect: () => void edit({ type: "setMediaFavorite", media: ids, favorite: !a.favorite }) },
       { label: "Umbenennen", shortcut: "F2", onSelect: () => setRenaming(a.id) },

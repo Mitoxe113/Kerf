@@ -5,7 +5,7 @@ import { create } from "zustand";
 import type { KeyParam, PasteItem, Rgb, Uuid } from "../lib/types";
 
 export type ToolId = "select" | "razor" | "ripple" | "roll" | "slip" | "slide" | "hand" | "zoom";
-export type PanelId = "media" | "monitor" | "inspector" | "timeline" | "meters" | "scopes" | "export" | "mixer" | "history" | "source" | "subtitles";
+export type PanelId = "media" | "monitor" | "inspector" | "timeline" | "meters" | "scopes" | "export" | "mixer" | "history" | "source" | "subtitles" | "multicam";
 export type WorkspaceId = "edit" | "media" | "color" | "audio" | "export";
 
 export interface LayoutNode {
@@ -48,7 +48,7 @@ const timelineRow = (size: number) => leaf(row(leaf("timeline", 1), leaf("meters
 
 export const DEFAULT_LAYOUTS: Record<WorkspaceId, WorkspaceLayout> = {
   edit: {
-    root: col(leaf(row(leaf(tabs("media", "source", "subtitles"), 0.25), leaf("monitor", 0.49), leaf(tabs("inspector", "history"), 0.26)), 0.57, "top"), timelineRow(0.43)),
+    root: col(leaf(row(leaf(tabs("media", "source", "multicam", "subtitles"), 0.25), leaf("monitor", 0.49), leaf(tabs("inspector", "history"), 0.26)), 0.57, "top"), timelineRow(0.43)),
     hidden: [],
   },
   media: {
@@ -89,6 +89,7 @@ export const PANEL_LABELS: Record<PanelId, string> = {
   history: "Verlauf",
   source: "Quelle",
   subtitles: "Untertitel",
+  multicam: "Multicam",
 };
 
 export interface CustomWorkspace {
@@ -127,6 +128,7 @@ export type Dialog =
   | { kind: "versions" }
   | { kind: "normalize"; clips: Uuid[] }
   | { kind: "trackEffects"; sequence: Uuid; track: Uuid }
+  | { kind: "multicam"; media: Uuid[] }
   | { kind: "curve"; sequence: Uuid; clip: Uuid; params: KeyParam[]; at: number }
   | { kind: "palette"; query: string }
   | { kind: "preferences" }

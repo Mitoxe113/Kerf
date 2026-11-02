@@ -63,6 +63,7 @@ export const api = {
   /** Read-only; waits for queued edits so the clips exist in the engine. */
   measureClips: (sequence: Uuid, clips: Uuid[]) => new Promise<void>((r) => whenIdle(r)).then(() => invoke<ClipLoudness[]>("measure_clips", { sequence, clips })),
   reversedAudio: (media: Uuid) => invoke<string>("reversed_audio", { media }),
+  syncAngles: (media: Uuid[]) => invoke<(number | null)[]>("sync_angles", { media }),
   freezeFrame: (sequence: Uuid, clip: Uuid, frame: number, seconds: number) => serial(() => invoke<Delta>("freeze_frame", { sequence, clip, frame, seconds })),
   undo: () => serial(() => invoke<Delta | null>("undo")),
   redo: () => serial(() => invoke<Delta | null>("redo")),

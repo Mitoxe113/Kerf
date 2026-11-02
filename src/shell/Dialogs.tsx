@@ -6,7 +6,8 @@ import { ACTIONS } from "../actions/registry";
 import { api } from "../lib/ipc";
 import { formatRate, STANDARD_RATES } from "../lib/time";
 import { formatBytes } from "../lib/media";
-import type { AudioEffect, ClipGain, Loudness, RecoveryInfo, SequenceSettings, Uuid, VersionInfo } from "../lib/types";
+import type { AudioEffect, ClipGain, Loudness, PlaceMode, RecoveryInfo, SequenceSettings, Uuid, VersionInfo } from "../lib/types";
+import { createMulticam, type SyncMethod } from "../actions/multicam";
 import { AddAudioEffect, AudioEffectsEditor } from "../panels/AudioEffects";
 import { currentLayout, useEditor, type Dialog } from "../state/editor";
 import { activeSequence, edit, reportError, useProject } from "../state/project";
@@ -378,6 +379,62 @@ function TrackEffectsDialog({ sequence, track: id, onClose }: { sequence: Uuid; 
   );
 }
 
+function MulticamDialog({ media, onClose }: { media: Uuid[]; onClose: () => void }) {
+  const mediaById = useProject((s) => s.mediaById);
+  const angles = media.map((id) => mediaById.get(id)).filter((m): m is NonNullable<typeof m> => !!m && m.status.state === "ready" && m.kind === "video");
+  const [name, setName] = useState(`Multicam ${String((useProject.getState().project?.multicams?.length ?? 0) + 1).padStart(2, "0")}`);
+  const [method, setMethod] = useState<SyncMethod>("audio");
+  const [audio, setAudio] = useState(angles.findIndex((m) => !!m.info?.audio));
+  const [mode, setMode] = useState<PlaceMode>("insert");
+  const [busy, setBusy] = useState(false);
+  const run = async () => {
+    if (!name.trim()) return;
+    setBusy(true);
+    try {
+      await createMulticam(name.trim(), angles.map((m) => m.id), method, audio >= 0 ? audio : null, mode);
+    } finally {
+      onClose();
+    }
+  };
+  return (
+    <Modal
+      title="Multicam-Clip erstellen"
+      onClose={onClose}
+      footer={
+        <>
+          <Button onClick={onClose}>Abbrechen</Button>
+          <Button variant="primary" onClick={() => void run()} disabled={busy || angles.length < 2}>
+            {busy ? (method === "audio" ? "Synchronisiere …" : "Erstelle …") : "Erstellen"}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-2">
+        <Field label="Name">
+          <TextInput autoFocus value={name} onChange={setName} onEnter={() => void run()} />
+        </Field>
+        <Field label="Synchronisieren">
+          <Segmented value={method} onChange={setMethod} options={[{ value: "audio", label: "Über den Ton" }, { value: "start", label: "Am Anfang" }]} />
+        </Field>
+        <Field label="Ton von">
+          <Select value={audio} onChange={setAudio} width={220} options={[{ value: -1, label: "Kein Ton" }, ...angles.map((m, i) => ({ value: i, label: `Kamera ${i + 1}: ${m.name}` }))].filter((o) => o.value < 0 || !!angles[o.value].info?.audio)} />
+        </Field>
+        <Field label="Einfügen">
+          <Segmented value={mode} onChange={setMode} options={[{ value: "insert", label: "Einfügen" }, { value: "overwrite", label: "Überschreiben" }]} />
+        </Field>
+        <ol className="mt-1 space-y-0.5 text-xs text-fg-3">
+          {angles.map((m, i) => (
+            <li key={m.id} className="truncate">
+              <span className="font-mono text-fg-2">{i + 1}</span> {m.name}
+            </li>
+          ))}
+        </ol>
+        <p className="text-xs text-fg-4">Die Kameras werden am Playhead eingefügt; mit den Tasten 1–9 (oder einem Klick im Multicam-Panel) wird ab dem Playhead umgeschaltet, auch während der Wiedergabe.</p>
+      </div>
+    </Modal>
+  );
+}
+
 function NormalizeDialog({ clips, onClose }: { clips: Uuid[]; onClose: () => void }) {
   const [mode, setMode] = useState(normDefaults.mode);
   const [targets, setTargets] = useState(normDefaults.target);
@@ -648,6 +705,8 @@ export function Dialogs() {
       return <NormalizeDialog clips={dialog.clips} onClose={close} />;
     case "trackEffects":
       return <TrackEffectsDialog sequence={dialog.sequence} track={dialog.track} onClose={close} />;
+    case "multicam":
+      return <MulticamDialog media={dialog.media} onClose={close} />;
     case "curve":
       return <CurveDialog sequence={dialog.sequence} clip={dialog.clip} params={dialog.params} at={dialog.at} onClose={close} />;
     case "saveWorkspace":

@@ -53,6 +53,7 @@ impl From<EditError> for CommandError {
             EditError::LastSequence => "lastSequence",
             EditError::NestCycle => "nestCycle",
             EditError::SequenceInUse(_) => "sequenceInUse",
+            EditError::NoFootage => "noFootage",
             EditError::Invalid(_) => "invalid",
         };
         Self::new(code, e)
@@ -741,6 +742,18 @@ pub fn measure_clips(state: State<'_, AppState>, sequence: Uuid, clips: Vec<Uuid
         });
     }
     Ok(out)
+}
+
+/// Offsets (seconds) of the media's sound against the first one's, for a
+/// multicam group; `None` where no match was found.
+#[tauri::command(async)]
+pub fn sync_angles(state: State<'_, AppState>, media: Vec<Uuid>) -> CmdResult<Vec<Option<f64>>> {
+    let tools = state.media.tools.clone().ok_or_else(|| CommandError::new("ffmpegMissing", "FFmpeg not found"))?;
+    let paths = {
+        let s = lock(&state.session);
+        media.iter().map(|id| s.project.media(*id).map(|a| a.path.clone()).ok_or(EditError::MediaNotFound)).collect::<Result<Vec<_>, _>>()?
+    };
+    analysis::sync_offsets(&tools, &paths).map_err(|e| CommandError::new("syncFailed", e))
 }
 
 /// Path of the media's sound played backwards (made on first use), for

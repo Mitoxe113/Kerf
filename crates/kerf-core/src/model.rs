@@ -31,6 +31,29 @@ pub struct Project {
     pub bins: Vec<Bin>,
     pub sequences: Vec<Sequence>,
     pub active_sequence: Uuid,
+    /// Camera angles recorded together (multicam groups).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub multicams: Vec<Multicam>,
+}
+
+/// Camera angles of one take, in sync. Clips of the group show one angle
+/// each; switching the angle swaps the media and moves the source position
+/// by the difference of the offsets, so the picture stays in time.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Multicam {
+    pub id: Uuid,
+    pub name: String,
+    pub angles: Vec<Angle>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Angle {
+    pub media: Uuid,
+    pub name: String,
+    /// Where the media starts on the group's clock, seconds (the earliest is 0).
+    pub offset: f64,
 }
 
 impl Project {
@@ -46,7 +69,12 @@ impl Project {
             bins: Vec::new(),
             active_sequence: seq.id,
             sequences: vec![seq],
+            multicams: Vec::new(),
         }
+    }
+
+    pub fn multicam(&self, id: Uuid) -> Option<&Multicam> {
+        self.multicams.iter().find(|m| m.id == id)
     }
 
     pub fn sequence(&self, id: Uuid) -> Option<&Sequence> {
@@ -696,6 +724,9 @@ pub struct Clip {
     /// Plays the source range backwards.
     #[serde(default, skip_serializing_if = "is_false")]
     pub reverse: bool,
+    /// Multicam group whose angles this clip can switch between.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub multicam: Option<Uuid>,
 }
 
 fn is_false(v: &bool) -> bool {
@@ -728,6 +759,7 @@ impl Clip {
             audio_effects: Vec::new(),
             channels: ChannelMap::Stereo,
             reverse: false,
+            multicam: None,
         }
     }
 

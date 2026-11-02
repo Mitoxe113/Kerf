@@ -104,6 +104,137 @@ pub fn poster(tools: &Tools, src: &Path, kind: MediaKind, info: &MediaInfo, dir:
     Ok(out)
 }
 
+// --- syncing camera angles by their sound -------------------------------------------
+
+/// Sample rate the sound of angles is compared at.
+const SYNC_RATE: usize = 8_000;
+/// Samples per onset value (10 ms).
+const SYNC_BLOCK: usize = SYNC_RATE / 100;
+/// Longest stretch of each file that is compared.
+const SYNC_SECONDS: u32 = 20 * 60;
+
+/// Mono sound of `src` at [`SYNC_RATE`] (first audio stream, at most [`SYNC_SECONDS`]).
+fn sync_samples(tools: &Tools, src: &Path) -> Result<Vec<f32>, MediaError> {
+    let out = tools
+        .ffmpeg_cmd()
+        .arg("-i")
+        .arg(path_arg(src))
+        .args(["-map", "0:a:0", "-ac", "1", "-ar", &SYNC_RATE.to_string(), "-t", &SYNC_SECONDS.to_string(), "-f", "f32le", "pipe:1"])
+        .output()?;
+    if !out.status.success() {
+        return Err(MediaError::failed("sync", &out.stderr));
+    }
+    Ok(out.stdout.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect())
+}
+
+/// Onset strength per block: how much the log energy rises (claps, words and
+/// cuts line up in it whatever each microphone's level and colour), normalised.
+fn onsets(s: &[f32]) -> Vec<f64> {
+    let energy: Vec<f64> = s.chunks(SYNC_BLOCK).map(|c| (c.iter().map(|v| (*v as f64).powi(2)).sum::<f64>() / c.len() as f64 + 1e-10).ln()).collect();
+    let mut d: Vec<f64> = (0..energy.len()).map(|i| if i == 0 { 0.0 } else { (energy[i] - energy[i - 1]).max(0.0) }).collect();
+    let n = d.len().max(1) as f64;
+    let mean = d.iter().sum::<f64>() / n;
+    let sd = (d.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / n).sqrt();
+    for v in &mut d {
+        *v = if sd > 0.0 { (*v - mean) / sd } else { 0.0 };
+    }
+    d
+}
+
+/// In-place radix-2 FFT; the inverse is not scaled. `re.len()` is a power of two.
+fn fft(re: &mut [f64], im: &mut [f64], inverse: bool) {
+    let n = re.len();
+    let mut j = 0;
+    for i in 1..n {
+        let mut bit = n >> 1;
+        while j & bit != 0 {
+            j ^= bit;
+            bit >>= 1;
+        }
+        j |= bit;
+        if i < j {
+            re.swap(i, j);
+            im.swap(i, j);
+        }
+    }
+    let mut len = 2;
+    while len <= n {
+        let angle = 2.0 * std::f64::consts::PI / len as f64 * if inverse { 1.0 } else { -1.0 };
+        let (wr, wi) = (angle.cos(), angle.sin());
+        for start in (0..n).step_by(len) {
+            let (mut cr, mut ci) = (1.0, 0.0);
+            for k in 0..len / 2 {
+                let (a, b) = (start + k, start + k + len / 2);
+                let (tr, ti) = (re[b] * cr - im[b] * ci, re[b] * ci + im[b] * cr);
+                re[b] = re[a] - tr;
+                im[b] = im[a] - ti;
+                re[a] += tr;
+                im[a] += ti;
+                (cr, ci) = (cr * wr - ci * wi, cr * wi + ci * wr);
+            }
+        }
+        len <<= 1;
+    }
+}
+
+/// The lag (in values) at which `x` best matches `r` (`r[i + lag]` ~ `x[i]`),
+/// and how far the peak stands out of the correlation around it.
+fn best_lag(r: &[f64], x: &[f64]) -> (i64, f64) {
+    let n = (r.len() + x.len()).next_power_of_two();
+    let (mut rr, mut ri) = (vec![0.0; n], vec![0.0; n]);
+    let (mut xr, mut xi) = (vec![0.0; n], vec![0.0; n]);
+    rr[..r.len()].copy_from_slice(r);
+    xr[..x.len()].copy_from_slice(x);
+    fft(&mut rr, &mut ri, false);
+    fft(&mut xr, &mut xi, false);
+    // R * conj(X): its inverse is the cross-correlation, negative lags at the end.
+    for k in 0..n {
+        let (a, b) = (rr[k] * xr[k] + ri[k] * xi[k], ri[k] * xr[k] - rr[k] * xi[k]);
+        rr[k] = a;
+        ri[k] = b;
+    }
+    fft(&mut rr, &mut ri, true);
+    let lags = -(x.len() as i64) + 1..r.len() as i64;
+    let at = |lag: i64| rr[if lag >= 0 { lag as usize } else { (n as i64 + lag) as usize }];
+    let best = lags.clone().max_by(|a, b| at(*a).total_cmp(&at(*b))).unwrap_or(0);
+    let mean = lags.clone().map(|l| at(l).abs()).sum::<f64>() / lags.count().max(1) as f64;
+    (best, if mean > 0.0 { at(best) / mean } else { 0.0 })
+}
+
+/// Refines a lag in samples by correlating the samples themselves within `radius`.
+fn refine(r: &[f32], x: &[f32], lag: i64, radius: i64) -> i64 {
+    // Up to 30 s where both have sound.
+    let from = (-lag + radius).max(0) as usize;
+    let to = ((r.len() as i64 - lag - radius).max(0) as usize).min(x.len()).min(from + 30 * SYNC_RATE);
+    if to <= from {
+        return lag;
+    }
+    let score = |l: i64| (from..to).map(|i| r[(i as i64 + l) as usize] as f64 * x[i] as f64).sum::<f64>();
+    (lag - radius..=lag + radius).max_by(|a, b| score(*a).total_cmp(&score(*b))).unwrap_or(lag)
+}
+
+/// Where each file's time 0 lies on the first file's clock, in seconds, found
+/// by lining up their sound; `None` where no clear match was found.
+pub fn sync_offsets(tools: &Tools, files: &[PathBuf]) -> Result<Vec<Option<f64>>, MediaError> {
+    let sounds = std::thread::scope(|s| {
+        let jobs: Vec<_> = files.iter().map(|f| s.spawn(move || sync_samples(tools, f))).collect();
+        jobs.into_iter().map(|j| j.join().unwrap_or_else(|_| Err(MediaError::Unsupported("sync".into())))).collect::<Result<Vec<_>, _>>()
+    })?;
+    let Some(reference) = sounds.first() else { return Ok(Vec::new()) };
+    let r_on = onsets(reference);
+    Ok(sounds
+        .iter()
+        .enumerate()
+        .map(|(k, x)| {
+            if k == 0 {
+                return Some(0.0);
+            }
+            let (lag, prominence) = best_lag(&r_on, &onsets(x));
+            (prominence >= 4.0).then(|| refine(reference, x, lag * SYNC_BLOCK as i64, SYNC_BLOCK as i64 * 2) as f64 / SYNC_RATE as f64)
+        })
+        .collect())
+}
+
 /// Longest media whose sound is reversed for the preview (`areverse` holds it all).
 const MAX_REVERSED_S: f64 = 30.0 * 60.0;
 

@@ -215,6 +215,8 @@ export interface Clip {
   channels?: ChannelMap;
   /** Plays the source range backwards. */
   reverse?: boolean;
+  /** Multicam group whose angles the clip can switch between. */
+  multicam?: Uuid | null;
 }
 
 export type EqShape = "highPass" | "lowShelf" | "peak" | "highShelf" | "lowPass";
@@ -309,6 +311,20 @@ export interface Sequence {
   subtitles: Subtitles;
 }
 
+/** A camera angle of a multicam group. */
+export interface Angle {
+  media: Uuid;
+  name: string;
+  /** Where the media starts on the group's clock, seconds (the earliest is 0). */
+  offset: number;
+}
+
+export interface Multicam {
+  id: Uuid;
+  name: string;
+  angles: Angle[];
+}
+
 export interface Project {
   schemaVersion: number;
   id: Uuid;
@@ -319,6 +335,7 @@ export interface Project {
   bins: Bin[];
   sequences: Sequence[];
   activeSequence: Uuid;
+  multicams?: Multicam[];
 }
 
 export interface HistoryState {
@@ -354,6 +371,7 @@ export interface Delta {
   patches: SequenceDelta[];
   media: MediaAsset[] | null;
   bins: Bin[] | null;
+  multicams?: Multicam[] | null;
 }
 
 /** Clip-level change of one track; `track.clips` is empty. */
@@ -409,6 +427,9 @@ export type EditCommand =
   | { type: "removeSequence"; sequence: Uuid }
   | { type: "renameSequence"; sequence: Uuid; name: string }
   | { type: "nestClips"; sequence: Uuid; clips: Uuid[]; name: string }
+  | { type: "createMulticam"; multicam: Multicam }
+  | { type: "placeMulticam"; sequence: Uuid; multicam: Uuid; at: Frame; mode: PlaceMode; videoAngle: number; audioAngle: number | null; videoTrack: Uuid | null; audioTrack: Uuid | null }
+  | { type: "switchAngle"; sequence: Uuid; clip: Uuid; angle: number; at: Frame | null }
   | { type: "updateSequenceSettings"; sequence: Uuid; settings: SequenceSettings }
   | { type: "addTrack"; sequence: Uuid; kind: TrackKind }
   | { type: "removeTrack"; sequence: Uuid; track: Uuid }

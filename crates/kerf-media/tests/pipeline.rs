@@ -1037,3 +1037,31 @@ fn nested_sequences_render() {
     eprintln!("rms {rms:.3}");
     assert!(rms > 0.25, "tone through two levels");
 }
+
+#[test]
+fn angles_sync_by_their_sound() {
+    let Some(tools) = tools() else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    let (a, b, c) = (d.join("a.wav"), d.join("b.wav"), d.join("c.mp4"));
+    // Noise in irregular bursts, like speech.
+    ffmpeg(&tools, &[
+        "-f", "lavfi", "-i", "anoisesrc=d=40:c=pink:a=0.4:seed=7",
+        "-af", "volume='0.05+0.95*gt(sin(2*PI*t*1.3)*sin(2*PI*t*0.37+1)+0.2*sin(2*PI*t*3.1),0.3)':eval=frame",
+        "-ar", "48000", "-y", &a.to_string_lossy(),
+    ]);
+    // B started 3.37 s after A (and records quieter, through another microphone).
+    ffmpeg(&tools, &["-ss", "3.37", "-i", &a.to_string_lossy(), "-af", "volume=0.3,highpass=f=200", "-y", &b.to_string_lossy()]);
+    // C (a camera file) started 1.5 s before A.
+    ffmpeg(&tools, &[
+        "-f", "lavfi", "-i", "color=c=gray:s=160x90:r=25:d=30",
+        "-i", &a.to_string_lossy(),
+        "-af", "adelay=1500:all=1,volume=0.6", "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-shortest", "-y", &c.to_string_lossy(),
+    ]);
+    let offsets = analysis::sync_offsets(&tools, &[a, b, c]).unwrap();
+    eprintln!("{offsets:?}");
+    assert_eq!(offsets[0], Some(0.0));
+    assert!((offsets[1].unwrap() - 3.37).abs() < 0.002, "B");
+    // AAC adds a little delay of its own; within a frame is what counts.
+    assert!((offsets[2].unwrap() + 1.5).abs() < 0.03, "C");
+}

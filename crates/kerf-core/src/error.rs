@@ -32,6 +32,8 @@ pub enum EditError {
     NestCycle,
     #[error("the sequence is nested in {0} clip(s)")]
     SequenceInUse(usize),
+    #[error("the angle has no footage there")]
+    NoFootage,
     #[error("invalid value: {0}")]
     Invalid(String),
 }

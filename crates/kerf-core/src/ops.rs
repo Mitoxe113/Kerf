@@ -228,6 +228,28 @@ pub enum EditCommand {
     LinkClips { sequence: Uuid, clips: Vec<Uuid> },
     UnlinkClips { sequence: Uuid, clips: Vec<Uuid> },
 
+    // --- multicam ------------------------------------------------------------
+    /// Adds a group of synced angles (offsets are made relative to the earliest).
+    CreateMulticam { multicam: Multicam },
+    /// Places the time all chosen angles cover: the picture of `video_angle`
+    /// and the sound of `audio_angle` (none = no sound), linked.
+    PlaceMulticam {
+        sequence: Uuid,
+        multicam: Uuid,
+        at: Frame,
+        mode: PlaceMode,
+        video_angle: usize,
+        #[serde(default)]
+        audio_angle: Option<usize>,
+        #[serde(default)]
+        video_track: Option<Uuid>,
+        #[serde(default)]
+        audio_track: Option<Uuid>,
+    },
+    /// Shows `angle` in a multicam clip, from `at` on (the clip is cut there)
+    /// or in all of it when `at` is not inside it.
+    SwitchAngle { sequence: Uuid, clip: Uuid, angle: usize, #[serde(default)] at: Option<Frame> },
+
     // --- markers & range ---------------------------------------------------
     AddMarker { sequence: Uuid, frame: Frame, name: String, color: MarkerColor },
     UpdateMarker { sequence: Uuid, marker: Uuid, patch: MarkerPatch },
@@ -259,6 +281,9 @@ impl EditCommand {
             C::RemoveBin { .. } => "removeBin",
             C::AddSequence { .. } => "addSequence",
             C::NestClips { .. } => "nestClips",
+            C::CreateMulticam { .. } => "createMulticam",
+            C::PlaceMulticam { .. } => "placeMulticam",
+            C::SwitchAngle { .. } => "switchAngle",
             C::RemoveSequence { .. } => "removeSequence",
             C::RenameSequence { .. } => "renameSequence",
             C::UpdateSequenceSettings { .. } => "updateSequenceSettings",
@@ -359,6 +384,9 @@ pub fn apply(project: &mut Project, cmd: &EditCommand) -> Result<EditOutcome> {
     use EditCommand as C;
     let mut out = EditOutcome { label: cmd.label().to_string(), ..Default::default() };
 
+    if let C::PlaceMulticam { sequence, .. } | C::SwitchAngle { sequence, .. } = cmd {
+        return multicam_edit(project, *sequence, cmd, out);
+    }
     if let Some(seq_id) = cmd.sequence_id() {
         if let C::PlaceMedia { media, .. } | C::ReplaceMedia { media, .. } = cmd {
             if project.sequence(*media).is_some() && project.nests(*media, seq_id) {
@@ -405,7 +433,8 @@ pub fn apply(project: &mut Project, cmd: &EditCommand) -> Result<EditOutcome> {
         C::RemoveMedia { media } => {
             for id in media {
                 project.media(*id).ok_or(EditError::MediaNotFound)?;
-                let used = project.media_usage(*id);
+                let angles = project.multicams.iter().flat_map(|m| &m.angles).filter(|a| a.media == *id).count();
+                let used = project.media_usage(*id) + angles;
                 if used > 0 {
                     return Err(EditError::MediaInUse(used));
                 }
@@ -568,6 +597,32 @@ pub fn apply(project: &mut Project, cmd: &EditCommand) -> Result<EditOutcome> {
             out.sequences_changed = true;
         }
         C::NestClips { sequence, clips, name } => nest_clips(project, *sequence, clips, name, &mut out)?,
+        C::CreateMulticam { multicam } => {
+            let mut m = multicam.clone();
+            m.name = non_empty(&m.name)?;
+            if !(2..=16).contains(&m.angles.len()) {
+                return Err(EditError::Invalid("a multicam group needs 2 to 16 angles".into()));
+            }
+            if project.multicam(m.id).is_some() {
+                return Err(EditError::Invalid("duplicate multicam id".into()));
+            }
+            for a in &m.angles {
+                let asset = project.media(a.media).ok_or(EditError::MediaNotFound)?;
+                if !asset.has_video() || !a.offset.is_finite() {
+                    return Err(EditError::Invalid("angle".into()));
+                }
+            }
+            let first = m.angles.iter().map(|a| a.offset).fold(f64::INFINITY, f64::min);
+            for a in &mut m.angles {
+                a.offset -= first;
+                if a.name.trim().is_empty() {
+                    a.name = project.media(a.media).map(|x| x.name.clone()).unwrap_or_default();
+                }
+            }
+            out.created.push(m.id);
+            project.multicams.push(m);
+            out.changed = true;
+        }
         C::RenameSequence { sequence, name } => {
             let name = non_empty(name)?;
             let seq = project.sequence_mut(*sequence).ok_or(EditError::SequenceNotFound)?;
@@ -578,6 +633,139 @@ pub fn apply(project: &mut Project, cmd: &EditCommand) -> Result<EditOutcome> {
         _ => unreachable!("sequence-scoped commands are handled above"),
     }
     Ok(out)
+}
+
+/// Multicam edits: they read the project's groups and media, and change one sequence.
+fn multicam_edit(project: &mut Project, seq_id: Uuid, cmd: &EditCommand, mut out: EditOutcome) -> Result<EditOutcome> {
+    use EditCommand as C;
+    let mut seq = project.sequence(seq_id).ok_or(EditError::SequenceNotFound)?.clone();
+    let changed = match cmd {
+        C::PlaceMulticam { multicam, at, mode, video_angle, audio_angle, video_track, audio_track, .. } => {
+            let g = project.multicam(*multicam).ok_or_else(|| EditError::Invalid("multicam".into()))?;
+            out.created = place_multicam(&mut seq, project, g, (*at, *mode), (*video_angle, *audio_angle), (*video_track, *audio_track))?;
+            true
+        }
+        C::SwitchAngle { clip, angle, at, .. } => switch_angle(&mut seq, project, *clip, *angle, *at)?,
+        _ => unreachable!("only multicam commands"),
+    };
+    if changed {
+        seq.tracks.iter_mut().for_each(|t| {
+            t.tidy_transitions();
+        });
+        *project.sequence_mut(seq_id).expect("sequence exists") = seq;
+        out.sequence = Some(seq_id);
+        out.changed = true;
+    }
+    Ok(out)
+}
+
+fn place_multicam(
+    seq: &mut Sequence,
+    project: &Project,
+    g: &Multicam,
+    (at, mode): (Frame, PlaceMode),
+    (video_angle, audio_angle): (usize, Option<usize>),
+    (video_track, audio_track): (Option<Uuid>, Option<Uuid>),
+) -> Result<Vec<Uuid>> {
+    let angle = |i: usize| g.angles.get(i).ok_or_else(|| EditError::Invalid("angle".into()));
+    let ready = |a: &Angle| -> Result<MediaAsset> {
+        let m = project.media(a.media).ok_or(EditError::MediaNotFound)?;
+        if m.status != MediaStatus::Ready || m.info.is_none() {
+            return Err(EditError::MediaNotReady);
+        }
+        Ok(m.clone())
+    };
+    let v = angle(video_angle)?;
+    let vm = ready(v)?;
+    let sound = audio_angle.map(|i| angle(i).and_then(|a| Ok((a, ready(a)?)))).transpose()?;
+    if !vm.has_video() || sound.as_ref().is_some_and(|(_, m)| !m.has_audio()) {
+        return Err(EditError::NoFootage);
+    }
+    // The stretch of the group's clock both angles cover.
+    let length = |m: &MediaAsset| m.info.as_ref().map_or(0.0, |i| i.duration);
+    let (mut s0, mut s1) = (v.offset, v.offset + length(&vm));
+    if let Some((a, am)) = &sound {
+        s0 = s0.max(a.offset);
+        s1 = s1.min(a.offset + length(am));
+    }
+    let rate = seq.settings.fps;
+    let len = rate.seconds_to_frames_floor(s1 - s0);
+    if len <= 0 {
+        return Err(EditError::NoFootage);
+    }
+    let mut scratch = EditOutcome::default();
+    let v_in = rate.seconds_to_frames_round(s0 - v.offset);
+    let picture = MediaAsset { info: vm.info.clone().map(|i| MediaInfo { audio: None, ..i }), ..vm.clone() };
+    let args = PlaceArgs { media: vm.id, video_track, audio_track: None, at, mode, source_in: Some(v_in), source_out: Some(v_in + len), match_sequence: false };
+    let mut created = place_media(seq, std::slice::from_ref(&picture), args, &mut scratch)?;
+    let (t, c) = seq.locate(created[0]).expect("placed");
+    let len = seq.tracks[t].clips[c].duration;
+    seq.tracks[t].clips[c].name = v.name.clone();
+    if let Some((a, am)) = &sound {
+        let a_in = rate.seconds_to_frames_round(s0 - a.offset);
+        let sound_only = MediaAsset { info: am.info.clone().map(|i| MediaInfo { video: None, ..i }), ..am.clone() };
+        // An insert already opened the gap on every track.
+        let args = PlaceArgs { media: am.id, video_track: None, audio_track, at, mode: PlaceMode::Overwrite, source_in: Some(a_in), source_out: Some(a_in + len), match_sequence: false };
+        let ids = place_media(seq, std::slice::from_ref(&sound_only), args, &mut scratch)?;
+        if let Some((t, c)) = ids.first().and_then(|id| seq.locate(*id)) {
+            seq.tracks[t].clips[c].name = a.name.clone();
+        }
+        created.extend(ids);
+    }
+    let link = (created.len() > 1).then(Uuid::new_v4);
+    for id in &created {
+        let (t, c) = seq.locate(*id).expect("placed");
+        let clip = &mut seq.tracks[t].clips[c];
+        clip.link = link;
+        clip.multicam = Some(g.id);
+    }
+    Ok(created)
+}
+
+fn switch_angle(seq: &mut Sequence, project: &Project, clip: Uuid, angle: usize, at: Option<Frame>) -> Result<bool> {
+    let (ti, mut ci) = seq.locate(clip).ok_or(EditError::ClipNotFound)?;
+    if seq.tracks[ti].locked {
+        return Err(EditError::TrackLocked);
+    }
+    let c = &seq.tracks[ti].clips[ci];
+    let g = c.multicam.and_then(|id| project.multicam(id)).ok_or_else(|| EditError::Invalid("not a multicam clip".into()))?;
+    let to = g.angles.get(angle).ok_or_else(|| EditError::Invalid("angle".into()))?;
+    if to.media == c.media_id {
+        return Ok(false);
+    }
+    let from = g.angles.iter().find(|a| a.media == c.media_id).ok_or_else(|| EditError::Invalid("angle".into()))?;
+    let target = project.media(to.media).ok_or(EditError::MediaNotFound)?;
+    let usable = match seq.tracks[ti].kind {
+        TrackKind::Video => target.has_video(),
+        TrackKind::Audio => target.has_audio(),
+    };
+    if !usable {
+        return Err(EditError::NoFootage);
+    }
+    // From `at` on: the clip is cut there, the right part keeps the link.
+    if let Some(at) = at.filter(|&a| a > c.start && a < c.end()) {
+        let (left, mut right) = split_clip(c, at, &mut HashMap::new());
+        right.link = c.link;
+        let t = &mut seq.tracks[ti];
+        t.clips[ci] = left;
+        t.clips.insert(ci + 1, right);
+        ci += 1;
+    }
+    let rate = seq.settings.fps;
+    let shift = rate.seconds_to_frames_round(from.offset - to.offset);
+    let c = &mut seq.tracks[ti].clips[ci];
+    let (new_in, new_out) = (c.source_in + shift, c.source_out() + shift);
+    if new_in < 0 || target.length_frames(rate).is_some_and(|l| new_out > l) {
+        return Err(EditError::NoFootage);
+    }
+    c.media_id = to.media;
+    c.source_in = new_in;
+    c.name = to.name.clone();
+    // Keys sit on source positions: they move with the picture.
+    for k in c.keys.values_mut().flatten() {
+        k.at += shift;
+    }
+    Ok(true)
 }
 
 fn nest_clips(project: &mut Project, seq_id: Uuid, ids: &[Uuid], name: &str, out: &mut EditOutcome) -> Result<()> {
@@ -2827,5 +3015,62 @@ mod tests {
         fx.run(place(fx.seq, third));
         assert!(fx.p.nests(third, inner) && !fx.p.nests(inner, third));
         assert_eq!(apply(&mut fx.p, &place(third, inner)), Err(EditError::NestCycle));
+    }
+
+    #[test]
+    fn multicam_places_the_common_stretch_and_switches_in_sync() {
+        let mut fx = Fx::new(10.0, true);
+        let b = video_asset(10.0, true);
+        let (a_id, b_id) = (fx.media, b.id);
+        fx.p.media.push(b);
+        // Camera B started recording 2 s after camera A.
+        let group = Multicam {
+            id: Uuid::new_v4(),
+            name: "Interview".into(),
+            angles: vec![
+                Angle { media: a_id, name: "A".into(), offset: 5.0 },
+                Angle { media: b_id, name: "".into(), offset: 7.0 },
+            ],
+        };
+        let g = fx.run(EditCommand::CreateMulticam { multicam: group }).created[0];
+        let stored = fx.p.multicam(g).unwrap();
+        assert_eq!((stored.angles[0].offset, stored.angles[1].offset), (0.0, 2.0));
+        assert_eq!(stored.angles[1].name, "clip");
+
+        // Picture of B with the sound of A: the 8 s both cover.
+        let sequence = fx.seq;
+        let place = |video_angle, audio_angle| EditCommand::PlaceMulticam {
+            sequence, multicam: g, at: 0, mode: PlaceMode::Overwrite, video_angle, audio_angle, video_track: None, audio_track: None,
+        };
+        let ids = fx.run(place(1, Some(0))).created;
+        let (v, a) = (&fx.v1().clips[0], &fx.a1().clips[0]);
+        assert_eq!((v.media_id, v.source_in, v.duration, v.name.as_str()), (b_id, 0, 200, "clip"));
+        assert_eq!((a.media_id, a.source_in, a.duration), (a_id, 50, 200));
+        assert!(v.link.is_some() && v.link == a.link && v.multicam == Some(g) && a.multicam == Some(g));
+
+        // Switching to A from frame 100 on: cut there, the right part moves by 2 s of source.
+        fx.run(EditCommand::SwitchAngle { sequence: fx.seq, clip: ids[0], angle: 0, at: Some(100) });
+        assert_eq!(Fx::spans(fx.v1()), vec![(0, 100, 0), (100, 100, 150)]);
+        let (l, r) = (&fx.v1().clips[0], &fx.v1().clips[1]);
+        assert_eq!((l.media_id, r.media_id, r.name.as_str()), (b_id, a_id, "A"));
+        assert_eq!(r.link, l.link, "the parts stay linked to the sound");
+        // Back to B on the right part as a whole.
+        let right = r.id;
+        fx.run(EditCommand::SwitchAngle { sequence: fx.seq, clip: right, angle: 1, at: None });
+        assert_eq!(Fx::spans(fx.v1()), vec![(0, 100, 0), (100, 100, 100)]);
+
+        // A starts before B: the first 50 frames of a clip of A have no picture of B.
+        let mut fx2 = fx.clone_project();
+        let ids = apply(&mut fx2, &place(0, None)).unwrap().created;
+        assert_eq!(ids.len(), 1);
+        let seq = fx2.sequence(fx.seq).unwrap();
+        let c = seq.tracks[0].clips.iter().find(|c| c.id == ids[0]).unwrap();
+        assert_eq!((c.source_in, c.duration), (0, 250));
+        assert_eq!(apply(&mut fx2, &EditCommand::SwitchAngle { sequence: fx.seq, clip: ids[0], angle: 1, at: Some(20) }), Err(EditError::NoFootage));
+        apply(&mut fx2, &EditCommand::SwitchAngle { sequence: fx.seq, clip: ids[0], angle: 1, at: Some(50) }).unwrap();
+        let seq = fx2.sequence(fx.seq).unwrap();
+        assert_eq!(Fx::spans(&seq.tracks[0]), vec![(0, 50, 0), (50, 200, 0)]);
+        // Media used by a group cannot be removed.
+        assert_eq!(apply(&mut fx2, &EditCommand::RemoveMedia { media: vec![b_id] }), Err(EditError::MediaInUse(2)));
     }
 }

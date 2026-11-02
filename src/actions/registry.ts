@@ -2,6 +2,7 @@
 // shortcut editor all read from here, so every visible command is wired.
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { switchAngle } from "./multicam";
 import { engine } from "../engine/playback";
 import { useEditor, WORKSPACES, type ToolId } from "../state/editor";
 import { useProject } from "../state/project";
@@ -106,6 +107,7 @@ const base: Action[] = [
   { id: "clip.link", group: "Clip", label: "Verknüpfen", keys: ["Ctrl+L"], run: () => E.linkSelection(true), enabled: hasSelection },
   { id: "clip.unlink", group: "Clip", label: "Verknüpfung lösen", keys: ["Ctrl+Alt+L"], run: () => E.linkSelection(false), enabled: hasSelection },
   { id: "clip.nest", group: "Clip", label: "Verschachteln …", keys: [], run: E.nestSelection, enabled: hasSelection },
+  ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => ({ id: `multicam.angle${n}`, group: "Multicam", label: `Kamera ${n}`, keys: [String(n)], run: () => switchAngle(n - 1) })),
   { id: "clip.nudgeLeft", group: "Clip", label: "1 Frame nach links", keys: ["Alt+ArrowLeft"], run: () => E.nudgeSelection(-1), enabled: hasSelection },
   { id: "clip.nudgeRight", group: "Clip", label: "1 Frame nach rechts", keys: ["Alt+ArrowRight"], run: () => E.nudgeSelection(1), enabled: hasSelection },
   { id: "clip.matchFrame", group: "Clip", label: "Match Frame (Quelle am Playhead öffnen)", keys: ["F"], run: matchFrame },

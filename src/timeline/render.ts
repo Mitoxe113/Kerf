@@ -353,6 +353,7 @@ function drawClip(
     let label = c.name;
     if (c.reverse) label = `◂ ${label}`;
     if (nested) label = `⧉ ${label}`;
+    if (c.multicam) label = `▦ ${label}`;
     if (isAnimated(c, "speed")) label += "  Rampe";
     else if (c.speed !== 1) label += `  ${Math.round(c.speed * 100)} %`;
     if (offline) label = `⚠ ${label} (offline)`;

@@ -19,6 +19,7 @@ import { Dialogs } from "./shell/Dialogs";
 import { StartScreen } from "./shell/StartScreen";
 import { DragGhost, StatusBar, Toasts } from "./shell/StatusBar";
 import { TitleBar } from "./shell/TitleBar";
+import { MulticamPanel } from "./panels/Multicam";
 import { Workspace } from "./shell/Workspace";
 import { useEditor, type PanelId } from "./state/editor";
 import { activeSequence, useProject } from "./state/project";
@@ -36,6 +37,7 @@ const PANELS: Record<PanelId, React.ReactNode> = {
   history: <HistoryPanel />,
   source: <SourceMonitor />,
   subtitles: <SubtitlesPanel />,
+  multicam: <MulticamPanel />,
 };
 
 /** Keeps the playback engine in sync with the document and view settings. */
