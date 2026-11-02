@@ -16,6 +16,7 @@ use uuid::Uuid;
 
 use crate::error::{EditError, Result};
 use crate::model::*;
+use crate::text::clean_cues;
 use crate::time::{Frame, Rational};
 
 /// Default timeline length of a still image.
@@ -115,6 +116,8 @@ pub enum EditCommand {
     SetSourceMarks { media: Uuid, marks: SourceMarks },
     MoveMediaToBin { media: Vec<Uuid>, bin: Option<Uuid> },
     RelinkMedia { media: Uuid, path: PathBuf },
+    /// Changes a title's definition and its rendered PNG.
+    UpdateTitle { media: Uuid, title: TitleSpec, path: PathBuf },
     CreateBin { name: String, parent: Option<Uuid> },
     RenameBin { bin: Uuid, name: String },
     RemoveBin { bin: Uuid },
@@ -172,6 +175,9 @@ pub enum EditCommand {
     /// Adds a still (e.g. a freeze frame) to the project and inserts it at `at`
     /// on `track`, rippling all unlocked tracks. One undo step.
     InsertStill { sequence: Uuid, asset: Box<MediaAsset>, track: Uuid, at: Frame, duration: Frame },
+    /// Adds a title asset to the project and places it at `at` on `track`
+    /// (overwriting what is there). One undo step.
+    AddTitle { sequence: Uuid, asset: Box<MediaAsset>, track: Uuid, at: Frame, duration: Frame },
     /// Swaps the media of a clip (and its linked partners) keeping position and length.
     ReplaceMedia { sequence: Uuid, clip: Uuid, media: Uuid },
     CloseGap { sequence: Uuid, track: Uuid, frame: Frame },
@@ -193,6 +199,11 @@ pub enum EditCommand {
     UpdateMarker { sequence: Uuid, marker: Uuid, patch: MarkerPatch },
     RemoveMarker { sequence: Uuid, marker: Uuid },
     SetInOut { sequence: Uuid, in_point: Option<Frame>, out_point: Option<Frame> },
+
+    // --- subtitles -----------------------------------------------------------
+    /// Replaces all cues (sorted and de-overlapped).
+    SetSubtitles { sequence: Uuid, cues: Vec<Cue> },
+    SetSubtitleStyle { sequence: Uuid, style: TextStyle, margin: f32, visible: bool },
 }
 
 impl EditCommand {
@@ -208,6 +219,7 @@ impl EditCommand {
             C::SetSourceMarks { .. } => "setSourceMarks",
             C::MoveMediaToBin { .. } => "moveMediaToBin",
             C::RelinkMedia { .. } => "relinkMedia",
+            C::UpdateTitle { .. } => "editTitle",
             C::CreateBin { .. } => "createBin",
             C::RenameBin { .. } => "renameBin",
             C::RemoveBin { .. } => "removeBin",
@@ -230,6 +242,7 @@ impl EditCommand {
             C::RemoveRange { ripple: true, .. } => "extractRange",
             C::ReplaceMedia { .. } => "replaceMedia",
             C::InsertStill { .. } => "insertStill",
+            C::AddTitle { .. } => "addTitle",
             C::CloseGap { .. } => "closeGap",
             C::PasteClips { .. } => "pasteClips",
             C::DuplicateClips { .. } => "duplicateClips",
@@ -243,6 +256,8 @@ impl EditCommand {
             C::UpdateMarker { .. } => "updateMarker",
             C::RemoveMarker { .. } => "removeMarker",
             C::SetInOut { .. } => "setInOut",
+            C::SetSubtitles { .. } => "editSubtitles",
+            C::SetSubtitleStyle { .. } => "subtitleStyle",
         }
     }
 
@@ -276,6 +291,8 @@ impl EditCommand {
             | C::UpdateMarker { sequence, .. }
             | C::RemoveMarker { sequence, .. }
             | C::SetInOut { sequence, .. }
+            | C::SetSubtitles { sequence, .. }
+            | C::SetSubtitleStyle { sequence, .. }
             | C::UpdateSequenceSettings { sequence, .. } => Some(*sequence),
             _ => None,
         }
@@ -325,29 +342,15 @@ pub fn apply(project: &mut Project, cmd: &EditCommand) -> Result<EditOutcome> {
             out.media_changed = out.changed;
         }
         C::InsertStill { sequence, asset, track, at, duration } => {
-            if project.media(asset.id).is_some() {
-                return Err(EditError::Invalid("duplicate media id".into()));
+            add_still(project, *sequence, asset, *track, *at, *duration, PlaceMode::Insert, &mut out)?;
+        }
+        C::AddTitle { sequence, asset, track, at, duration } => {
+            let title = asset.title.as_ref().and_then(TitleSpec::sanitized).ok_or_else(|| EditError::Invalid("title".into()))?;
+            if asset.kind != MediaKind::Image || asset.info.is_none() {
+                return Err(EditError::Invalid("title".into()));
             }
-            if *duration <= 0 {
-                return Err(EditError::Invalid("duration".into()));
-            }
-            let mut seq = project.sequence(*sequence).ok_or(EditError::SequenceNotFound)?.clone();
-            let args = PlaceArgs {
-                media: asset.id,
-                video_track: Some(*track),
-                audio_track: None,
-                at: *at,
-                mode: PlaceMode::Insert,
-                source_in: Some(0),
-                source_out: Some(*duration),
-                match_sequence: false,
-            };
-            out.created = place_media(&mut seq, std::slice::from_ref(&**asset), args, &mut out)?;
-            project.media.push((**asset).clone());
-            *project.sequence_mut(*sequence).expect("sequence exists") = seq;
-            out.sequence = Some(*sequence);
-            out.changed = true;
-            out.media_changed = true;
+            let asset = MediaAsset { title: Some(title), ..(**asset).clone() };
+            add_still(project, *sequence, &asset, *track, *at, *duration, PlaceMode::Overwrite, &mut out)?;
         }
         C::RemoveMedia { media } => {
             for id in media {
@@ -428,6 +431,24 @@ pub fn apply(project: &mut Project, cmd: &EditCommand) -> Result<EditOutcome> {
                 asset.bin = *bin;
             }
             out.media_changed = out.changed;
+        }
+        C::UpdateTitle { media, title, path } => {
+            let title = title.sanitized().ok_or_else(|| EditError::Invalid("title".into()))?;
+            let asset = project.media_mut(*media).ok_or(EditError::MediaNotFound)?;
+            if asset.title.is_none() || path.as_os_str().is_empty() {
+                return Err(EditError::Invalid("not a title".into()));
+            }
+            if asset.title.as_ref() == Some(&title) && asset.path == *path {
+                return Ok(out);
+            }
+            if let Some(v) = asset.info.as_mut().and_then(|i| i.video.as_mut()) {
+                (v.width, v.height) = (title.width, title.height);
+            }
+            asset.title = Some(title);
+            asset.path = path.clone();
+            asset.status = MediaStatus::Ready;
+            out.changed = true;
+            out.media_changed = true;
         }
         C::RelinkMedia { media, path } => {
             let asset = project.media_mut(*media).ok_or(EditError::MediaNotFound)?;
@@ -688,8 +709,54 @@ fn edit_sequence(seq: &mut Sequence, media: &[MediaAsset], cmd: &EditCommand, ou
             seq.out_point = out_point.map(|f| f.max(1));
             Ok(changed)
         }
+        C::SetSubtitles { cues, .. } => {
+            let cues = clean_cues(cues);
+            let changed = seq.subtitles.cues != cues;
+            seq.subtitles.cues = cues;
+            Ok(changed)
+        }
+        C::SetSubtitleStyle { style, margin, visible, .. } => {
+            let style = style.sanitized().ok_or_else(|| EditError::Invalid("subtitle style".into()))?;
+            if !margin.is_finite() {
+                return Err(EditError::Invalid("subtitle margin".into()));
+            }
+            let s = &mut seq.subtitles;
+            let margin = margin.clamp(0.0, 0.5);
+            let changed = s.style != style || s.margin != margin || s.visible != *visible;
+            (s.style, s.margin, s.visible) = (style, margin, *visible);
+            Ok(changed)
+        }
         _ => unreachable!("not a sequence-scoped command"),
     }
+}
+
+/// Adds `asset` to the project and places it on `track` for `duration` frames.
+#[allow(clippy::too_many_arguments)]
+fn add_still(project: &mut Project, sequence: Uuid, asset: &MediaAsset, track: Uuid, at: Frame, duration: Frame, mode: PlaceMode, out: &mut EditOutcome) -> Result<()> {
+    if project.media(asset.id).is_some() {
+        return Err(EditError::Invalid("duplicate media id".into()));
+    }
+    if duration <= 0 {
+        return Err(EditError::Invalid("duration".into()));
+    }
+    let mut seq = project.sequence(sequence).ok_or(EditError::SequenceNotFound)?.clone();
+    let args = PlaceArgs {
+        media: asset.id,
+        video_track: Some(track),
+        audio_track: None,
+        at,
+        mode,
+        source_in: Some(0),
+        source_out: Some(duration),
+        match_sequence: false,
+    };
+    out.created = place_media(&mut seq, std::slice::from_ref(asset), args, out)?;
+    project.media.push(asset.clone());
+    *project.sequence_mut(sequence).expect("sequence exists") = seq;
+    out.sequence = Some(sequence);
+    out.changed = true;
+    out.media_changed = true;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1733,6 +1800,7 @@ mod tests {
             imported_at: 0,
             derived: Derived::default(),
             marks: Default::default(),
+            title: None,
         }
     }
 
@@ -2242,5 +2310,58 @@ mod tests {
         assert!(matches!(e.kind, EffectKind::ColorWheels { .. }));
         let back: Effect = serde_json::from_value(serde_json::to_value(&e).unwrap()).unwrap();
         assert_eq!(back, e);
+    }
+    fn title_asset() -> MediaAsset {
+        let mut a = video_asset(0.04, false);
+        a.kind = MediaKind::Image;
+        a.path = "titles/a.png".into();
+        a.title = Some(TitleSpec { text: "Hallo".into(), style: TextStyle::default(), x: 0.5, y: 0.5, width: 1280, height: 720 });
+        a
+    }
+
+    #[test]
+    fn titles_overwrite_and_update_in_place() {
+        let mut fx = Fx::new(10.0, false);
+        fx.place(0, Some(0), Some(100), PlaceMode::Overwrite);
+        let v1 = fx.v1().id;
+        let asset = title_asset();
+        let id = asset.id;
+        let out = fx.run(EditCommand::AddTitle { sequence: fx.seq, asset: Box::new(asset.clone()), track: v1, at: 20, duration: 30 });
+        assert!(out.media_changed && out.created.len() == 1);
+        // Overwrite, not insert: the sequence keeps its length.
+        assert_eq!(Fx::spans(fx.v1()), vec![(0, 20, 0), (20, 30, 0), (50, 50, 50)]);
+
+        let mut spec = asset.title.clone().unwrap();
+        spec.text = "Neu\r\nZeile".into();
+        spec.width = 1920;
+        spec.height = 1080;
+        assert!(fx.run(EditCommand::UpdateTitle { media: id, title: spec.clone(), path: "titles/b.png".into() }).changed);
+        let a = fx.p.media(id).unwrap();
+        assert_eq!(a.title.as_ref().unwrap().text, "Neu\nZeile");
+        assert_eq!(a.info.as_ref().unwrap().video.as_ref().map(|v| (v.width, v.height)), Some((1920, 1080)));
+        // Same definition and file: nothing to undo.
+        spec.text = "Neu\nZeile".into();
+        assert!(!fx.run(EditCommand::UpdateTitle { media: id, title: spec, path: "titles/b.png".into() }).changed);
+        // Only titles can be edited as titles.
+        let other = fx.media;
+        let t = fx.p.media(id).unwrap().title.clone().unwrap();
+        assert!(apply(&mut fx.p, &EditCommand::UpdateTitle { media: other, title: t, path: "x.png".into() }).is_err());
+    }
+
+    #[test]
+    fn subtitles_are_cleaned_and_styled() {
+        let mut fx = Fx::new(4.0, false);
+        let cue = |start, end, text: &str| Cue { id: Uuid::new_v4(), start, end, text: text.into() };
+        let out = fx.run(EditCommand::SetSubtitles { sequence: fx.seq, cues: vec![cue(30, 60, "b"), cue(0, 40, "a"), cue(-5, -1, "gone")] });
+        assert!(out.changed);
+        let spans: Vec<_> = fx.s().subtitles.cues.iter().map(|c| (c.start, c.end)).collect();
+        assert_eq!(spans, vec![(0, 30), (30, 60)]);
+        let style = TextStyle { size: 2000.0, ..TextStyle::subtitles() };
+        fx.run(EditCommand::SetSubtitleStyle { sequence: fx.seq, style, margin: 0.9, visible: false });
+        let s = &fx.s().subtitles;
+        assert_eq!((s.style.size, s.margin, s.visible), (1000.0, 0.5, false));
+        // Survives a JSON round trip of the project.
+        let back: Project = serde_json::from_str(&serde_json::to_string(&fx.p).unwrap()).unwrap();
+        assert_eq!(back.sequence(fx.seq).unwrap().subtitles, *s);
     }
 }

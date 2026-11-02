@@ -3,7 +3,7 @@
 //! A sequence is compiled into a single FFmpeg filter graph:
 //!
 //! ```text
-//! color(black, WxH, fps) ── overlay(V1 clip) ── overlay(V2 clip) ── … ── scale/bt709 ── [vout]
+//! color(black, WxH, fps) ── overlay(V1 clip) ── overlay(V2 clip) ── … ── overlay(subtitles) ── scale/bt709 ── [vout]
 //! audio clip ─ tempo ─ gain ─ pan ─ fades ─ delay ┐
 //! audio clip ─ …                                  ├─ amix ─ pad/trim ── [aout]
 //! ```
@@ -13,6 +13,7 @@
 //! the same as the preview compositor's: crop -> fit -> scale/rotate about the
 //! anchor -> place anchor at frame centre + offset.
 
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
@@ -21,9 +22,11 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
-use kerf_core::model::{Clip, CurvePoint, Ease, EffectKind, Keyframe, MediaKind, MediaStatus, Param, Project, Sequence, TrackKind, VideoInfo};
+use kerf_core::model::{Clip, Cue, CurvePoint, Ease, EffectKind, Keyframe, MediaKind, MediaStatus, Param, Project, Sequence, TrackKind, VideoInfo};
+use kerf_core::text::{write_subtitles, SubtitleFormat};
 use kerf_core::time::{Frame, Rational};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::analysis::display_size;
 use crate::{MediaError, Tools};
@@ -74,6 +77,35 @@ pub struct ExportSettings {
     pub audio_channels: u8,
     /// Render only the sequence in/out range.
     pub use_in_out: bool,
+    #[serde(default)]
+    pub subtitles: SubtitleOutput,
+    /// Freshly drawn PNGs of titles (media id -> file), used instead of the
+    /// stored ones so the export always matches the preview's drawing code.
+    #[serde(default)]
+    pub title_files: HashMap<Uuid, PathBuf>,
+}
+
+/// What happens with the sequence's subtitles.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SubtitleOutput {
+    /// Cue images to burn in, drawn by the UI at the sequence size (empty = none).
+    pub burn: Vec<BurnCue>,
+    /// Transparent frame at the sequence size, shown between burned-in cues.
+    pub blank: Option<PathBuf>,
+    /// Write a subtitle file with the output's name next to it.
+    pub sidecar: Option<SubtitleFormat>,
+    /// Add a soft subtitle stream (mov_text).
+    pub embed: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BurnCue {
+    /// Sequence frames, end exclusive.
+    pub start: Frame,
+    pub end: Frame,
+    pub path: PathBuf,
 }
 
 fn stereo() -> u8 {
@@ -97,6 +129,10 @@ pub struct RenderPlan {
     pub height: u32,
     pub fps: Rational,
     pub channels: u8,
+    /// Helper files FFmpeg reads (concat lists, subtitle text), removed afterwards.
+    pub files: Vec<(PathBuf, String)>,
+    /// Subtitle file written next to the output after a successful render.
+    pub sidecar: Option<(PathBuf, String)>,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -484,7 +520,7 @@ pub fn plan(
                 args.extend(["-t".into(), num(seg_len * clip.speed + 2.0 * frame_s).into()]);
             }
             args.push("-i".into());
-            args.push(asset.path.clone().into_os_string());
+            args.push(s.title_files.get(&asset.id).unwrap_or(&asset.path).clone().into_os_string());
 
             let k = inputs;
             inputs += 1;
@@ -601,6 +637,49 @@ pub fn plan(
         }
     }
 
+    // --- subtitles ------------------------------------------------------------
+    let mut files: Vec<(PathBuf, String)> = Vec::new();
+    // Cues inside the rendered range, cut to it.
+    let cues: Vec<Cue> = seq
+        .subtitles
+        .cues
+        .iter()
+        .filter(|c| c.end > t0 && c.start < t1)
+        .map(|c| Cue { start: c.start.max(t0), end: c.end.min(t1), ..c.clone() })
+        .collect();
+    if !s.subtitles.burn.is_empty() {
+        // All cue images in one concat input: a frame per cue, blank frames in between.
+        let blank = s.subtitles.blank.as_deref().ok_or_else(|| MediaError::Unsupported("subtitles: blank frame missing".into()))?;
+        let list = work_dir.join(format!("subs-{}.ffconcat", uuid::Uuid::new_v4()));
+        files.push((list.clone(), burn_list(&s.subtitles.burn, blank, t0, t1, sf)));
+        args.extend(["-f", "concat", "-safe", "0", "-i"].map(OsString::from));
+        args.push(list.into_os_string());
+        let k = inputs;
+        inputs += 1;
+        chains.push(format!(
+            "[{k}:v:0]fps={},format=rgba,scale={}:{}[subs]",
+            rate_str(of),
+            seq.settings.width,
+            seq.settings.height
+        ));
+        chains.push(format!("[{last}][subs]overlay=0:0:eof_action=pass:format=rgb[subbed]"));
+        last = "subbed".into();
+    }
+    let embedded = if s.subtitles.embed && !cues.is_empty() {
+        let srt = work_dir.join(format!("subs-{}.srt", uuid::Uuid::new_v4()));
+        files.push((srt.clone(), write_subtitles(&cues, sf, t0, SubtitleFormat::Srt)));
+        args.extend(["-f", "srt", "-i"].map(OsString::from));
+        args.push(srt.into_os_string());
+        inputs += 1;
+        Some(inputs - 1)
+    } else {
+        None
+    };
+    let sidecar = s.subtitles.sidecar.filter(|_| !cues.is_empty()).map(|f| {
+        let ext = if f == SubtitleFormat::Srt { "srt" } else { "vtt" };
+        (s.output.with_extension(ext), write_subtitles(&cues, sf, t0, f))
+    });
+
     let pix_fmt = if prores { "yuv422p10le" } else { "yuv420p" };
     let (ow, oh) = (even(s.width as f64), even(s.height as f64));
     // A different output aspect (e.g. 9:16 from a 16:9 sequence) is letterboxed
@@ -689,6 +768,10 @@ pub fn plan(
     args.push("-/filter_complex".into());
     args.push(graph_path.clone().into_os_string());
     args.extend(["-map", "[vout]", "-map", "[aout]"].map(OsString::from));
+    if let Some(k) = embedded {
+        args.extend(["-map".into(), format!("{k}:s:0").into()]);
+        args.extend(["-c:s", "mov_text", "-metadata:s:s:0", "handler_name=Untertitel"].map(OsString::from));
+    }
 
     let has = |e: &str| hw_encoders.iter().any(|x| x == e);
     let rate = s.rate;
@@ -805,7 +888,35 @@ pub fn plan(
         height: oh,
         fps: of,
         channels,
+        files,
+        sidecar,
     })
+}
+
+/// Concat list (ffconcat) of burned-in cue images over `t0..t1`, with the blank
+/// frame in the gaps and once more at the end so the last cue keeps its length.
+fn burn_list(cues: &[BurnCue], blank: &Path, t0: Frame, t1: Frame, sf: Rational) -> String {
+    let quote = |p: &Path| format!("'{}'", p.to_string_lossy().replace('\\', "/").replace('\'', r"'\''"));
+    let mut sorted: Vec<&BurnCue> = cues.iter().filter(|c| c.end > t0 && c.start < t1 && c.end > c.start).collect();
+    sorted.sort_by_key(|c| c.start);
+    let mut out = String::from("ffconcat version 1.0\n");
+    let mut at = t0;
+    let mut entry = |path: &Path, from: Frame, to: Frame| {
+        out.push_str(&format!("file {}\nduration {}\n", quote(path), num(sf.frames_to_seconds(to - from))));
+    };
+    for c in sorted {
+        let (a, b) = (c.start.max(at), c.end.min(t1));
+        if b <= a {
+            continue;
+        }
+        if a > at {
+            entry(blank, at, a);
+        }
+        entry(&c.path, a, b);
+        at = b;
+    }
+    entry(blank, at, t1.max(at + 1));
+    out
 }
 
 fn cbr_args(kbps: u32) -> Vec<String> {
@@ -864,8 +975,14 @@ pub fn render_logged(
         fs::create_dir_all(dir)?;
     }
     fs::write(&plan.graph_path, &plan.graph)?;
+    for (path, text) in &plan.files {
+        fs::write(path, text)?;
+    }
     let cleanup = |partial: bool| {
         let _ = fs::remove_file(&plan.graph_path);
+        for (path, _) in &plan.files {
+            let _ = fs::remove_file(path);
+        }
         if partial {
             let _ = fs::remove_file(&plan.partial_path);
         }
@@ -927,6 +1044,9 @@ pub fn render_logged(
     }
     cleanup(false);
     fs::rename(&plan.partial_path, &plan.output)?;
+    if let Some((path, text)) = &plan.sidecar {
+        fs::write(path, text)?;
+    }
     state.fraction = 1.0;
     state.eta = Some(0.0);
     progress(&state);
@@ -974,6 +1094,7 @@ mod tests {
             imported_at: 0,
             derived: Derived::default(),
             marks: Default::default(),
+            title: None,
         });
         let seq = p.active_sequence;
         apply(
@@ -1008,6 +1129,8 @@ mod tests {
             sample_rate: 48_000,
             audio_channels: 2,
             use_in_out: false,
+            subtitles: Default::default(),
+            title_files: Default::default(),
         }
     }
 

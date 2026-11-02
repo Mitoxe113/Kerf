@@ -9,11 +9,12 @@
 import { fpsOf } from "../lib/time";
 import { animate } from "../lib/keys";
 import { previewSource } from "../lib/media";
-import type { Clip, ClipPatch, MediaAsset, Sequence, Track, Uuid } from "../lib/types";
+import type { Clip, ClipPatch, MediaAsset, Sequence, Subtitles, TitleSpec, Track, Uuid } from "../lib/types";
 import { AudioMixer } from "./audio";
 import { Compositor, type Layer, type LayerSource } from "./compositor";
 import { activeEffects } from "./effects";
-import { dbToGain, place, quadMatrix } from "./math";
+import { dbToGain, IDENTITY_COLOR, IDENTITY_TRANSFORM, place, quadMatrix } from "./math";
+import { cueAt, cueCanvas, setFontListener, titleCanvas } from "./text";
 
 const PREROLL_S = 1.2;
 const RELEASE_S = 6;
@@ -83,6 +84,9 @@ export class PlaybackEngine {
   private media = new Map<Uuid, MediaAsset>();
   private opts: EngineOptions = { useProxies: false, quality: 1 };
   private overrides = new Map<Uuid, Partial<Clip>>();
+  /** Live title and subtitle-style edits (inspector), keyed by media id. */
+  private titleOverrides = new Map<Uuid, TitleSpec>();
+  private subtitleOverride: Subtitles | null = null;
   private voices = new Map<string, Voice>();
   private compositor: Compositor | null = null;
   private listeners = new Set<Listener>();
@@ -104,6 +108,7 @@ export class PlaybackEngine {
   // --- wiring -----------------------------------------------------------------
 
   attach(canvas: HTMLCanvasElement) {
+    setFontListener(() => this.requestRender());
     this.compositor?.dispose();
     try {
       this.compositor = new Compositor(canvas, () => this.requestRender());
@@ -165,6 +170,19 @@ export class PlaybackEngine {
   setOverride(clip: Uuid, patch: Partial<Clip> | ClipPatch | null) {
     if (patch) this.overrides.set(clip, { ...this.overrides.get(clip), ...patch });
     else this.overrides.delete(clip);
+    this.requestRender();
+  }
+
+  /** Shows `spec` instead of the stored title of `media` (null = stored). */
+  setTitleOverride(media: Uuid, spec: TitleSpec | null) {
+    if (spec) this.titleOverrides.set(media, spec);
+    else this.titleOverrides.delete(media);
+    this.requestRender();
+  }
+
+  /** Shows `subs` instead of the sequence's subtitle look (null = stored). */
+  setSubtitleOverride(subs: Subtitles | null) {
+    this.subtitleOverride = subs;
     this.requestRender();
   }
 
@@ -331,7 +349,8 @@ export class PlaybackEngine {
 
   private voice(clip: Clip, kind: "video" | "audio"): Voice | null {
     const asset = this.media.get(clip.mediaId);
-    if (!asset || asset.status.state !== "ready") return null;
+    // Titles are drawn from their definition (layers()), not loaded.
+    if (!asset || asset.status.state !== "ready" || asset.title) return null;
     const src = previewSource(asset, this.opts.useProxies);
     if (!src) {
       this.pendingMedia.add(asset.id);
@@ -528,11 +547,12 @@ export class PlaybackEngine {
       if (!raw) continue;
       const c = this.effectiveClip(raw);
       if (!c.enabled) continue;
-      const v = this.voices.get(`video:${c.id}`);
-      if (!v) continue;
-      const src = v.el as LayerSource;
+      const title = this.media.get(c.mediaId)?.title;
+      const v = title ? undefined : this.voices.get(`video:${c.id}`);
+      const src: LayerSource | undefined = title ? titleCanvas(this.titleOverrides.get(c.mediaId) ?? title) : (v?.el as LayerSource | undefined);
+      if (!src) continue;
       const [sw, sh] =
-        src instanceof HTMLVideoElement ? [src.videoWidth, src.videoHeight] : [src.naturalWidth, src.naturalHeight];
+        src instanceof HTMLVideoElement ? [src.videoWidth, src.videoHeight] : src instanceof HTMLImageElement ? [src.naturalWidth, src.naturalHeight] : [src.width, src.height];
       if (!sw || !sh) continue;
       if (src instanceof HTMLVideoElement && src.readyState < 2) continue;
       const a = animate(c, frame);
@@ -543,7 +563,7 @@ export class PlaybackEngine {
       // Effects run at the fitted size (scale 1) in canvas pixels.
       const fxScale = this.compositor ? this.compositor.canvas.width / W : 1;
       out.push({
-        key: v.key,
+        key: v?.key ?? `title:${c.id}`,
         source: src,
         matrix: quadMatrix(p, W, H),
         crop: [t.cropLeft, t.cropTop, t.cropRight, t.cropBottom],
@@ -552,6 +572,19 @@ export class PlaybackEngine {
         effects,
         work: t.scale > 0 ? [(p.width / t.scale) * fxScale, (p.height / t.scale) * fxScale] : undefined,
         fxScale,
+      });
+    }
+    // Subtitles on top of everything, as the export burns them in.
+    const subs = this.subtitleOverride ?? seq.subtitles;
+    const cue = subs?.visible ? cueAt(subs, frame) : null;
+    if (cue && cue.text.trim()) {
+      out.push({
+        key: "subtitles",
+        source: cueCanvas(cue, subs, W, H),
+        matrix: quadMatrix(place(IDENTITY_TRANSFORM, W, H, W, H), W, H),
+        crop: [0, 0, 0, 0],
+        opacity: 1,
+        color: IDENTITY_COLOR,
       });
     }
     return out;
@@ -581,6 +614,11 @@ export class PlaybackEngine {
 
   /** Decoded pixel size of a clip's video source, if it is loaded. */
   sourceSize(clipId: Uuid): [number, number] | null {
+    for (const t of this.seq?.tracks ?? []) {
+      const c = t.clips.find((x) => x.id === clipId);
+      const title = c && this.media.get(c.mediaId)?.title;
+      if (title) return [title.width, title.height];
+    }
     const el = this.voices.get(`video:${clipId}`)?.el;
     if (el instanceof HTMLVideoElement) return el.videoWidth ? [el.videoWidth, el.videoHeight] : null;
     if (el instanceof HTMLImageElement) return el.naturalWidth ? [el.naturalWidth, el.naturalHeight] : null;

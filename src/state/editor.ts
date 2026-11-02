@@ -5,7 +5,7 @@ import { create } from "zustand";
 import type { KeyParam, PasteItem, Rgb, Uuid } from "../lib/types";
 
 export type ToolId = "select" | "razor" | "ripple" | "roll" | "slip" | "slide" | "hand" | "zoom";
-export type PanelId = "media" | "monitor" | "inspector" | "timeline" | "meters" | "scopes" | "export" | "mixer" | "history" | "source";
+export type PanelId = "media" | "monitor" | "inspector" | "timeline" | "meters" | "scopes" | "export" | "mixer" | "history" | "source" | "subtitles";
 export type WorkspaceId = "edit" | "media" | "color" | "audio" | "export";
 
 export interface LayoutNode {
@@ -48,7 +48,7 @@ const timelineRow = (size: number) => leaf(row(leaf("timeline", 1), leaf("meters
 
 export const DEFAULT_LAYOUTS: Record<WorkspaceId, WorkspaceLayout> = {
   edit: {
-    root: col(leaf(row(leaf(tabs("media", "source"), 0.25), leaf("monitor", 0.49), leaf(tabs("inspector", "history"), 0.26)), 0.57, "top"), timelineRow(0.43)),
+    root: col(leaf(row(leaf(tabs("media", "source", "subtitles"), 0.25), leaf("monitor", 0.49), leaf(tabs("inspector", "history"), 0.26)), 0.57, "top"), timelineRow(0.43)),
     hidden: [],
   },
   media: {
@@ -88,6 +88,7 @@ export const PANEL_LABELS: Record<PanelId, string> = {
   mixer: "Mixer",
   history: "Verlauf",
   source: "Quelle",
+  subtitles: "Untertitel",
 };
 
 export interface CustomWorkspace {
@@ -161,7 +162,9 @@ interface EditorStore {
   dialog: Dialog | null;
   /** Eyedropper waiting for a click in the program monitor (null = cancelled). */
   picker: ((rgb: Rgb | null) => void) | null;
-  inspectorTab: "clip" | "color" | "effects" | "audio";
+  inspectorTab: "clip" | "title" | "color" | "effects" | "audio";
+  /** Subtitle cue being edited in the subtitles panel. */
+  activeCue: Uuid | null;
   mediaView: "grid" | "list";
   mediaSort: "name" | "date" | "duration" | "kind";
   mediaFilter: "all" | "video" | "audio" | "image" | "favorites";
@@ -238,6 +241,7 @@ export const useEditor = create<EditorStore>((set, get) => ({
   dialog: null,
   picker: null,
   inspectorTab: "clip",
+  activeCue: null,
   mediaView: "grid",
   mediaSort: "name",
   mediaFilter: "all",

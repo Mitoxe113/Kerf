@@ -20,7 +20,7 @@ function statusOf(a: MediaAsset, proxyJob: number | undefined): { label: string;
   if (a.status.state === "missing") return { label: "Offline", tone: "error" };
   if (a.status.state === "error") return { label: "Nicht lesbar", tone: "error" };
   if (proxyJob !== undefined) return { label: `Proxy ${Math.round(proxyJob * 100)} %`, tone: "busy" };
-  if (!a.derived.previewNative && !a.derived.proxy) return { label: "Proxy ausstehend", tone: "warn" };
+  if (!a.title && !a.derived.previewNative && !a.derived.proxy) return { label: "Proxy ausstehend", tone: "warn" };
   return null;
 }
 
@@ -40,6 +40,8 @@ function Thumb({ a, scrub }: { a: MediaAsset; scrub: number | null }) {
     );
   }
   if (a.derived.poster) return <img src={fileUrl(a.derived.poster)} className="h-full w-full object-contain" draggable={false} alt="" />;
+  // Titles have no poster; their PNG is the picture.
+  if (a.title) return <img src={fileUrl(a.path)} className="h-full w-full bg-[#101012] object-contain" draggable={false} alt="" />;
   const Icon = KIND_ICON[a.kind];
   return (
     <div className="flex h-full w-full items-center justify-center text-fg-4">

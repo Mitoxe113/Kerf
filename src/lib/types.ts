@@ -90,6 +90,64 @@ export interface MediaAsset {
   importedAt: number;
   derived: Derived;
   marks?: SourceMarks;
+  /** Generated title; `path` is its rendered PNG. */
+  title?: TitleSpec;
+}
+
+// --- text ----------------------------------------------------------------------
+
+export type TextAlign = "left" | "center" | "right";
+
+/** Look of a text block; sizes are pixels at 1080 lines (kerf_core::text::TextStyle). */
+export interface TextStyle {
+  font: string;
+  size: number;
+  bold: boolean;
+  italic: boolean;
+  color: Rgb;
+  align: TextAlign;
+  lineHeight: number;
+  outline: number;
+  outlineColor: Rgb;
+  shadow: number;
+  boxOpacity: number;
+  boxColor: Rgb;
+  boxPadding: number;
+  /** Lines wrap at this fraction of the frame width. */
+  wrap: number;
+}
+
+export interface TitleSpec {
+  text: string;
+  style: TextStyle;
+  /** Anchor of the text block, 0..1 of the frame: x is its left edge, centre or right edge by the alignment. */
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface Cue {
+  id: Uuid;
+  start: Frame;
+  /** Exclusive. */
+  end: Frame;
+  text: string;
+}
+
+export interface Subtitles {
+  cues: Cue[];
+  style: TextStyle;
+  /** Bottom margin, 0..1 of the height. */
+  margin: number;
+  visible: boolean;
+}
+
+/** A cue in seconds as read from a subtitle file. */
+export interface TimedText {
+  start: number;
+  end: number;
+  text: string;
 }
 
 export interface Bin {
@@ -210,6 +268,7 @@ export interface Sequence {
   markers: Marker[];
   inPoint: Frame | null;
   outPoint: Frame | null;
+  subtitles: Subtitles;
 }
 
 export interface Project {
@@ -345,7 +404,11 @@ export type EditCommand =
   | { type: "setClipGain"; sequence: Uuid; gains: ClipGain[] }
   | { type: "removeRange"; sequence: Uuid; start: Frame; end: Frame; ripple: boolean; tracks?: Uuid[] | null }
   | { type: "replaceMedia"; sequence: Uuid; clip: Uuid; media: Uuid }
-  | { type: "setInOut"; sequence: Uuid; inPoint: Frame | null; outPoint: Frame | null };
+  | { type: "setInOut"; sequence: Uuid; inPoint: Frame | null; outPoint: Frame | null }
+  | { type: "addTitle"; sequence: Uuid; asset: MediaAsset; track: Uuid; at: Frame; duration: Frame }
+  | { type: "updateTitle"; media: Uuid; title: TitleSpec; path: string }
+  | { type: "setSubtitles"; sequence: Uuid; cues: Cue[] }
+  | { type: "setSubtitleStyle"; sequence: Uuid; style: TextStyle; margin: number; visible: boolean };
 
 // --- export ------------------------------------------------------------------
 
@@ -368,6 +431,17 @@ export interface ExportSettings {
   /** 1 = mono, 2 = stereo. */
   audioChannels: 1 | 2;
   useInOut: boolean;
+  subtitles?: SubtitleOutput;
+  /** Freshly drawn title PNGs by media id (see engine/text.ts titleFiles). */
+  titleFiles?: Record<Uuid, string>;
+}
+
+export interface SubtitleOutput {
+  /** Cue images (sequence size) to burn in. */
+  burn: { start: Frame; end: Frame; path: string }[];
+  blank: string | null;
+  sidecar: "srt" | "vtt" | null;
+  embed: boolean;
 }
 
 export interface RenderProgress {

@@ -3,6 +3,7 @@ import { IDENTITY_COLOR, IDENTITY_TRANSFORM } from "../engine/math";
 import { clipAt, fadeGain } from "../engine/playback";
 import type { Clip, Sequence, Track } from "../lib/types";
 import { clampRoll, clampSlide, clampSlip, clampTrim, editPoints, expandLinks, snap, snapTargets } from "./geometry";
+import { NO_SUBTITLES } from "../engine/text";
 
 let n = 0;
 function clip(start: number, duration: number, sourceIn = 0, extra: Partial<Clip> = {}): Clip {
@@ -38,6 +39,7 @@ function sequence(tracks: Track[]): Sequence {
     id: "s",
     name: "S",
     settings: { fps: { num: 25, den: 1 }, width: 1920, height: 1080, sampleRate: 48000 },
+    subtitles: NO_SUBTITLES,
     tracks,
     markers: [{ id: "mk", frame: 77, name: "", note: "", color: "signal" }],
     inPoint: 10,

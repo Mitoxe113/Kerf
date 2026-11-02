@@ -274,7 +274,7 @@ export function Monitor() {
     return sq.tracks.some((t) => {
       const c = clipAt(t, frame);
       const m = c && s.mediaById.get(c.mediaId);
-      return !!m && m.status.state === "ready" && !m.derived.previewNative && !m.derived.proxy && m.kind !== "audio";
+      return !!m && m.status.state === "ready" && !m.derived.previewNative && !m.derived.proxy && m.kind !== "audio" && !m.title;
     });
   });
   const proxyJobs = useProject((s) => s.proxyJobs);

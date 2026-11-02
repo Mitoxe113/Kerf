@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { IDENTITY_COLOR, IDENTITY_TRANSFORM } from "../engine/math";
 import type { Clip, Sequence, Track } from "../lib/types";
 import { applySequenceDelta } from "./delta";
+import { NO_SUBTITLES } from "../engine/text";
 
 const clip = (id: string, start: number): Clip => ({
   id,
@@ -42,6 +43,7 @@ const seq = (tracks: Track[]): Sequence => ({
   id: "s",
   name: "S",
   settings: { fps: { num: 25, den: 1 }, width: 1920, height: 1080, sampleRate: 48000 },
+    subtitles: NO_SUBTITLES,
   tracks,
   markers: [],
   inPoint: null,

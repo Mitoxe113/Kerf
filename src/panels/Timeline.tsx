@@ -24,13 +24,14 @@ import {
   mediaLength,
   RULER_H,
   rowAt,
+  subLane,
   snap,
   snapTargets,
   tracksOfKind,
   type TrackLayout,
   type TrackRow,
 } from "../timeline/geometry";
-import { COLORS, drawRuler, drawTracks, type View } from "../timeline/render";
+import { COLORS, drawRuler, drawSubtitleLane, drawTracks, type View } from "../timeline/render";
 import { mediaDragRange, registerDropTarget } from "../ui/dnd";
 import { cx, IconButton, openContextMenu, PanelHeader, Tooltip, type MenuItem } from "../ui/primitives";
 
@@ -260,6 +261,8 @@ export function Timeline() {
       scrollY: s.scrollY,
       select: s.select,
       selection: s.selection,
+      activeCue: s.activeCue,
+      focusPanel: s.focusPanel,
       set: s.set,
       setTool: s.setTool,
       snapping: s.snapping,
@@ -316,9 +319,10 @@ export function Timeline() {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, v.width, v.height);
     drawTracks(ctx, layout, v, { seq, media: mediaById, selection, redraw: () => requestBase() });
+    drawSubtitleLane(ctx, seq, v, ed.activeCue);
     drawRuler(ctx, seq, v);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [seq, layout, mediaById, selection]);
+  }, [seq, layout, mediaById, selection, ed.activeCue]);
 
   // The queued frame must draw the latest state, not the closure that queued it.
   const drawBaseRef = useRef(drawBase);
@@ -632,6 +636,15 @@ export function Timeline() {
     overRef.current!.setPointerCapture(e.pointerId);
     const tool = ed.tool;
 
+    if (y >= RULER_H && y < RULER_H + subLane(seq)) {
+      // Subtitle lane: a click picks the cue (double-click opens the panel), else seeks.
+      const f = Math.max(0, Math.round(frameAt(x)));
+      const cue = seq.subtitles.cues.find((c) => c.start <= f && f < c.end);
+      engine.seek(cue ? cue.start : f);
+      if (cue) ed.set({ activeCue: cue.id });
+      if (cue && e.detail === 2) ed.focusPanel("subtitles");
+      return;
+    }
     if (y < RULER_H) {
       const m = markerAt(x);
       if (m) {
@@ -1038,7 +1051,17 @@ export function Timeline() {
               <IconButton icon={<Music size={12} />} size={20} label="Audiospur hinzufügen" onClick={() => void addTrack("audio")} />
             </div>
           </div>
-          <div className="absolute inset-x-0" style={{ top: RULER_H - view.scrollY }}>
+          {subLane(seq) > 0 && (
+            <button
+              className="absolute inset-x-0 z-10 flex items-center border-b border-line bg-[#121215] px-2.5 text-left text-[11px] font-medium text-fg-3 hover:text-fg"
+              style={{ top: RULER_H, height: subLane(seq) }}
+              onClick={() => ed.focusPanel("subtitles")}
+              title="Untertitel-Panel öffnen"
+            >
+              Untertitel · {seq.subtitles.cues.length}
+            </button>
+          )}
+          <div className="absolute inset-x-0" style={{ top: RULER_H - view.scrollY + subLane(seq) }}>
             {layout.rows.map((r, i) => (
               <div key={r.track.id}>
                 {i > 0 && layout.rows[i - 1].track.kind !== r.track.kind && <div className="bg-[#0a0a0c]" style={{ height: 6 }} />}

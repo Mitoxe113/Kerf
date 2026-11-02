@@ -7,7 +7,7 @@ import { isAnimated, localOf, paramAt } from "../lib/keys";
 import { labelColor } from "../lib/labels";
 import type { Clip, MediaAsset, Sequence, Track, Uuid } from "../lib/types";
 import { dbToGain } from "../engine/math";
-import { DIVIDER_H, RULER_H, type TrackLayout } from "./geometry";
+import { DIVIDER_H, RULER_H, subLane, type TrackLayout } from "./geometry";
 
 export const COLORS = {
   bg: "#0f0f12",
@@ -113,6 +113,37 @@ export function drawRuler(ctx: CanvasRenderingContext2D, seq: Sequence, v: View)
   }
   ctx.fillStyle = COLORS.laneLine;
   ctx.fillRect(0, RULER_H - 1, v.width, 1);
+}
+
+/** Subtitle cues in a lane that stays under the ruler while the tracks scroll. */
+export function drawSubtitleLane(ctx: CanvasRenderingContext2D, seq: Sequence, v: View, active: Uuid | null) {
+  const h = subLane(seq);
+  if (!h) return;
+  ctx.fillStyle = COLORS.ruler;
+  ctx.fillRect(0, RULER_H, v.width, h);
+  ctx.font = "11px 'Inter Variable', sans-serif";
+  ctx.textBaseline = "middle";
+  for (const c of seq.subtitles.cues) {
+    const x = c.start * v.zoom - v.scrollX;
+    const w = (c.end - c.start) * v.zoom;
+    if (x + w < 0 || x > v.width) continue;
+    const on = c.id === active;
+    ctx.fillStyle = on ? "rgba(200,245,66,0.28)" : "rgba(255,255,255,0.09)";
+    ctx.fillRect(x + 0.5, RULER_H + 3, Math.max(1, w - 1), h - 6);
+    ctx.fillStyle = on ? COLORS.signal : "rgba(255,255,255,0.35)";
+    ctx.fillRect(x + 0.5, RULER_H + 3, 1.5, h - 6);
+    if (w > 24) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(x + 4, RULER_H, w - 8, h);
+      ctx.clip();
+      ctx.fillStyle = on ? "#f2f2f4" : "rgba(242,242,244,0.75)";
+      ctx.fillText(c.text.replace(/\s*\n\s*/g, " / ") || "…", Math.max(x + 6, 4), RULER_H + h / 2);
+      ctx.restore();
+    }
+  }
+  ctx.fillStyle = COLORS.laneLine;
+  ctx.fillRect(0, RULER_H + h - 1, v.width, 1);
 }
 
 interface DrawContext {

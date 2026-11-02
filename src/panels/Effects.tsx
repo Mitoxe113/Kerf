@@ -110,7 +110,7 @@ function EffectCard({ effect: e, stack, first, last, onMove, onRemove }: { effec
   );
 }
 
-function ParamRow({ label, value, min, max, step = 0.01, scale = 1, unit = "", precision = 2, onChange }: { label: string; value: number; min: number; max: number; step?: number; scale?: number; unit?: string; precision?: number; onChange: (v: number, live: boolean) => void }) {
+export function ParamRow({ label, value, min, max, step = 0.01, scale = 1, unit = "", precision = 2, onChange }: { label: string; value: number; min: number; max: number; step?: number; scale?: number; unit?: string; precision?: number; onChange: (v: number, live: boolean) => void }) {
   return (
     <Field label={label}>
       <Slider label={label} value={value} min={min} max={max} onPreview={(v) => onChange(v, true)} onCommit={(v) => onChange(v, false)} />
@@ -162,8 +162,8 @@ function EffectParams({ effect: e, stack }: { effect: Effect; stack: ReturnType<
   }
 }
 
-const toHex = (c: Rgb) => "#" + c.map((v) => Math.round(v * 255).toString(16).padStart(2, "0")).join("");
-const fromHex = (h: string): Rgb => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255) as Rgb;
+export const toHex = (c: Rgb) => "#" + c.map((v) => Math.round(v * 255).toString(16).padStart(2, "0")).join("");
+export const fromHex = (h: string): Rgb => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255) as Rgb;
 
 function ChromaParams({ effect: e, stack }: { effect: Effect & Kind<"chromaKey">; stack: ReturnType<typeof useStack> }) {
   const set = (p: Partial<Kind<"chromaKey">>, live: boolean) => stack.patch(e.id, p as Partial<Effect>, live);

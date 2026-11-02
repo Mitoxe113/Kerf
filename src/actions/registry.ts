@@ -9,6 +9,7 @@ import { LABEL_NAMES, LABELS } from "../lib/labels";
 import * as E from "./editing";
 import { matchFrame, source, sourceDuration, useSource } from "../state/source";
 import * as P from "./project";
+import * as T from "./text";
 
 export interface Action {
   id: string;
@@ -93,6 +94,9 @@ const base: Action[] = [
   { id: "seq.prevMarker", group: "Sequenz", label: "Vorheriger Marker", keys: ["Ctrl+Shift+M"], run: () => E.gotoMarker(-1) },
   { id: "seq.addVideo", group: "Sequenz", label: "Videospur hinzufügen", keys: [], run: () => E.addTrack("video") },
   { id: "seq.addAudio", group: "Sequenz", label: "Audiospur hinzufügen", keys: [], run: () => E.addTrack("audio") },
+  { id: "seq.addCue", group: "Sequenz", label: "Untertitel am Playhead hinzufügen", keys: ["Ctrl+Shift+T"], run: T.addCue },
+  { id: "seq.importSubs", group: "Sequenz", label: "Untertitel importieren (SRT/VTT) …", keys: [], run: T.importSubtitles },
+  { id: "seq.exportSubs", group: "Sequenz", label: "Untertitel exportieren (SRT/VTT) …", keys: [], run: T.exportSubtitles, enabled: () => !!E.seq()?.subtitles.cues.length },
   { id: "seq.snap", group: "Sequenz", label: "Magnetisches Einrasten", keys: ["S"], run: () => ed().set({ snapping: !ed().snapping }), checked: () => ed().snapping },
   { id: "seq.linked", group: "Sequenz", label: "Verknüpfte Auswahl", keys: ["Ctrl+Shift+L"], run: () => ed().set({ linkedSelection: !ed().linkedSelection }), checked: () => ed().linkedSelection },
 
@@ -104,6 +108,7 @@ const base: Action[] = [
   { id: "clip.nudgeRight", group: "Clip", label: "1 Frame nach rechts", keys: ["Alt+ArrowRight"], run: () => E.nudgeSelection(1), enabled: hasSelection },
   { id: "clip.matchFrame", group: "Clip", label: "Match Frame (Quelle am Playhead öffnen)", keys: ["F"], run: matchFrame },
   { id: "clip.freeze", group: "Clip", label: "Standbild einfügen (2 s)", keys: ["Shift+N"], run: () => E.freezeFrame(2) },
+  { id: "clip.title", group: "Clip", label: "Titel einfügen", keys: ["Ctrl+T"], run: T.addTitle },
   { id: "clip.normalize", group: "Clip", label: "Audio normalisieren …", keys: [], run: E.openNormalize, enabled: hasSelection },
   {
     id: "clip.rename", group: "Clip", label: "Umbenennen …", keys: ["F2"],

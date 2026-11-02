@@ -14,6 +14,7 @@ pub mod history;
 pub mod io;
 pub mod model;
 pub mod ops;
+pub mod text;
 pub mod time;
 
 pub use error::{EditError, Result};

@@ -15,6 +15,7 @@ import type {
   MediaAsset,
   ProjectState,
   RecoveryInfo,
+  TimedText,
   Uuid,
   VersionInfo,
 } from "./types";
@@ -77,6 +78,11 @@ export const api = {
   exportRetry: (id: Uuid) => invoke<ExportJob>("export_retry", { id }),
   exportLog: (id: Uuid) => invoke<string | null>("export_log", { id }),
   textRead: (path: string) => invoke<string>("text_read", { path }),
+  subtitlesParse: (path: string) => invoke<TimedText[]>("subtitles_parse", { path }),
+  /** Read-only on the project, but waits for queued edits of the cues. */
+  subtitlesWrite: (path: string, sequence: Uuid) => serial(() => invoke<void>("subtitles_write", { path, sequence })),
+  /** Stores a PNG (raw body) in the cache by content; returns its path. */
+  titlePng: (png: Uint8Array) => invoke<string>("title_png", png),
   /** Free bytes on the drive holding `path`, null when unknown. */
   diskFree: (path: string) => invoke<number | null>("disk_free", { path }),
   openPath: (path: string) => invoke<void>("open_path", { path }),

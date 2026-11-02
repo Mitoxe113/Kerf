@@ -105,7 +105,8 @@ fn activate_media(app: &AppHandle, state: &AppState, assets: &[MediaAsset]) {
             MediaStatus::Ready => a.info.is_none() || derived_missing(&a.derived),
             MediaStatus::Missing | MediaStatus::Error(_) => false,
         };
-        if needs {
+        // Titles are drawn by the UI and need no probing, posters or proxies.
+        if needs && a.title.is_none() {
             state.media.submit(Job::Analyze(a.id));
         }
     }
@@ -313,6 +314,7 @@ pub fn media_import(app: AppHandle, state: State<'_, AppState>, paths: Vec<Strin
                 imported_at: now,
                 derived: Derived::default(),
                 marks: Default::default(),
+                title: None,
             }
         })
         .collect();
@@ -447,8 +449,71 @@ pub fn text_read(path: String) -> CmdResult<String> {
         return Err(CommandError::new("ioFailed", "file too large"));
     }
     let bytes = std::fs::read(&p).map_err(|e| CommandError::new("ioFailed", e))?;
-    // Subtitle files are often Windows-1252; keep what decodes and replace the rest.
-    Ok(String::from_utf8_lossy(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes)).into_owned())
+    Ok(decode_text(bytes))
+}
+
+/// UTF-8 (without BOM), or Windows-1252 when the bytes are not valid UTF-8
+/// (common for subtitle files).
+fn decode_text(mut bytes: Vec<u8>) -> String {
+    if bytes.starts_with(b"\xEF\xBB\xBF") {
+        bytes.drain(..3);
+    }
+    String::from_utf8(bytes).unwrap_or_else(|e| {
+        // 0x80..0x9F differ from Latin-1; the rest maps 1:1.
+        const HIGH: [char; 32] = [
+            '€', '\u{81}', '‚', 'ƒ', '„', '…', '†', '‡', 'ˆ', '‰', 'Š', '‹', 'Œ', '\u{8d}', 'Ž', '\u{8f}', '\u{90}', '‘', '’', '“', '”', '•', '–', '—',
+            '˜', '™', 'š', '›', 'œ', '\u{9d}', 'ž', 'Ÿ',
+        ];
+        e.into_bytes().iter().map(|&b| if (0x80..0xA0).contains(&b) { HIGH[(b - 0x80) as usize] } else { b as char }).collect()
+    })
+}
+
+/// Reads an SRT or WebVTT file into cues (seconds).
+#[tauri::command(async)]
+pub fn subtitles_parse(path: String) -> CmdResult<Vec<kerf_core::text::TimedText>> {
+    let cues = kerf_core::text::parse_subtitles(&text_read(path)?);
+    if cues.is_empty() {
+        return Err(CommandError::new("subtitlesEmpty", "no readable subtitles"));
+    }
+    Ok(cues)
+}
+
+/// Writes the sequence's subtitles as SRT or WebVTT (by the file extension).
+#[tauri::command(async)]
+pub fn subtitles_write(state: State<'_, AppState>, path: String, sequence: Uuid) -> CmdResult<()> {
+    let p = PathBuf::from(&path);
+    let format = match p.extension().map(|e| e.to_string_lossy().to_lowercase()).as_deref() {
+        Some("srt") => kerf_core::text::SubtitleFormat::Srt,
+        Some("vtt") => kerf_core::text::SubtitleFormat::Vtt,
+        _ => return Err(CommandError::new("ioFailed", "subtitle files end in .srt or .vtt")),
+    };
+    let text = {
+        let s = lock(&state.session);
+        let seq = s.project.sequence(sequence).ok_or(EditError::SequenceNotFound)?;
+        kerf_core::text::write_subtitles(&seq.subtitles.cues, seq.settings.fps, 0, format)
+    };
+    kerf_core::io::write_atomic(&p, text.as_bytes(), false).map_err(|e| CommandError::new("ioFailed", e))
+}
+
+/// Stores a PNG drawn by the UI (titles, burned-in subtitles) in the cache,
+/// named by its content, and returns the path. The body is the raw file.
+#[tauri::command(async)]
+pub fn title_png(state: State<'_, AppState>, request: tauri::ipc::Request<'_>) -> CmdResult<String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err(CommandError::new("ioFailed", "expected PNG bytes"));
+    };
+    if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") || bytes.len() > 256 << 20 {
+        return Err(CommandError::new("ioFailed", "not a PNG"));
+    }
+    // FNV-1a over the bytes: equal pictures share a file, so re-rendering is free.
+    let hash = bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ *b as u64).wrapping_mul(0x100_0000_01b3));
+    let dir = state.paths.cache.join("titles");
+    let path = dir.join(format!("{hash:016x}-{}.png", bytes.len()));
+    if !path.is_file() {
+        std::fs::create_dir_all(&dir).map_err(|e| CommandError::new("ioFailed", e))?;
+        kerf_core::io::write_atomic(&path, bytes, false).map_err(|e| CommandError::new("ioFailed", e))?;
+    }
+    Ok(path.to_string_lossy().into_owned())
 }
 
 #[tauri::command(async)]
@@ -615,6 +680,7 @@ pub fn freeze_frame(app: AppHandle, state: State<'_, AppState>, sequence: Uuid, 
         imported_at: now_ms(),
         derived: Derived::default(),
         marks: Default::default(),
+        title: None,
     };
     let id = asset.id;
     let mut s = lock(&state.session);
@@ -673,4 +739,15 @@ pub fn measure_clips(state: State<'_, AppState>, sequence: Uuid, clips: Vec<Uuid
         });
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode_text;
+
+    #[test]
+    fn subtitle_text_decodes_utf8_and_windows_1252() {
+        assert_eq!(decode_text(b"\xEF\xBB\xBFGr\xC3\xBC\xC3\x9Fe".to_vec()), "Grüße");
+        assert_eq!(decode_text(b"Gr\xFC\xDFe \x84quoted\x93 \x80".to_vec()), "Grüße „quoted“ €");
+    }
 }

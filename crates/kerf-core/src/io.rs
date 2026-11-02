@@ -102,8 +102,9 @@ pub fn load_with_fallback(path: &Path) -> Result<(Project, bool), ProjectIoError
 }
 
 /// Marks media whose file disappeared as missing and re-queues reappeared files.
+/// Titles stay ready: the UI renders their PNG again from the definition.
 pub fn refresh_media_status(project: &mut Project) {
-    for m in &mut project.media {
+    for m in project.media.iter_mut().filter(|m| m.title.is_none()) {
         let exists = m.path.is_file();
         match (&m.status, exists) {
             (_, false) => m.status = MediaStatus::Missing,
@@ -171,6 +172,7 @@ mod tests {
             imported_at: 0,
             derived: Derived::default(),
             marks: Default::default(),
+            title: None,
         });
         let mid = p.media[0].id;
         let seq = &mut p.sequences[0];

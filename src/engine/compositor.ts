@@ -10,7 +10,7 @@ import type { ColorAdjust, EffectKind } from "../lib/types";
 import { EffectPipeline } from "./effects";
 import { colorMatrix, contrastSlope, IDENTITY_COLOR, type Mat3 } from "./math";
 
-export type LayerSource = HTMLVideoElement | HTMLImageElement;
+export type LayerSource = HTMLVideoElement | HTMLImageElement | HTMLCanvasElement;
 
 export interface Layer {
   key: string;

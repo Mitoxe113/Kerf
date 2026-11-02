@@ -342,6 +342,7 @@ mod tests {
             imported_at: 0,
             derived: Derived::default(),
             marks: Default::default(),
+            title: None,
         }
     }
 

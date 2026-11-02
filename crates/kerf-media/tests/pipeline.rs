@@ -68,6 +68,7 @@ fn import(tools: &Tools, path: &Path, cache: &Path) -> MediaAsset {
         imported_at: 0,
         derived,
         marks: Default::default(),
+        title: None,
     }
 }
 
@@ -210,6 +211,8 @@ fn edit_and_render_real_media() {
         sample_rate: 48_000,
         audio_channels: 2,
         use_in_out: false,
+        subtitles: Default::default(),
+        title_files: Default::default(),
     };
     let plan = render::plan(&p, sequence, &settings, d, &[]).unwrap();
     assert_eq!(plan.inputs, 6, "2 video halves + still + 2 audio halves + tone\n{}", plan.graph);
@@ -283,6 +286,8 @@ fn cancelled_render_leaves_no_file() {
         sample_rate: 48_000,
         audio_channels: 2,
         use_in_out: false,
+        subtitles: Default::default(),
+        title_files: Default::default(),
     };
     let plan = render::plan(&p, p.sequence(seq).unwrap(), &settings, dir.path(), &[]).unwrap();
     let cancel = AtomicBool::new(false);
@@ -370,6 +375,8 @@ fn keyframed_position_opacity_and_volume_render() {
         sample_rate: 48_000,
         audio_channels: 2,
         use_in_out: false,
+        subtitles: Default::default(),
+        title_files: Default::default(),
     };
     let plan = render::plan(&p, p.sequence(seq).unwrap(), &export, dir.path(), &[]).unwrap();
     render::render(&tools, &plan, &AtomicBool::new(false), |_| {}).expect("render with keyframes");
@@ -426,6 +433,8 @@ fn animated_colour_renders() {
         sample_rate: 48_000,
         audio_channels: 2,
         use_in_out: false,
+        subtitles: Default::default(),
+        title_files: Default::default(),
     };
     let plan = render::plan(&p, p.sequence(seq).unwrap(), &export, dir.path(), &[]).unwrap();
     render::render(&tools, &plan, &AtomicBool::new(false), |_| {}).expect("render with colour keys");
@@ -484,6 +493,8 @@ fn effect_stack_renders() {
         sample_rate: 48_000,
         audio_channels: 2,
         use_in_out: false,
+        subtitles: Default::default(),
+        title_files: Default::default(),
     };
     let plan = render::plan(&p, p.sequence(seq).unwrap(), &export, dir.path(), &[]).unwrap();
     let mut log = String::new();
@@ -510,4 +521,77 @@ fn loudness_measures_peaks_over_a_range() {
     assert!(near(tail.sample_peak, -26.0), "{tail:?}");
     assert!(all.integrated.unwrap() > tail.integrated.unwrap() + 10.0, "{all:?} {tail:?}");
     assert!(all.true_peak.unwrap() >= all.sample_peak.unwrap() - 0.01);
+}
+
+#[test]
+fn subtitles_burn_embed_and_sidecar() {
+    let Some(tools) = tools() else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("black.mp4");
+    ffmpeg(&tools, &["-f", "lavfi", "-i", "color=c=black:s=320x180:r=25:d=2", "-c:v", "libx264", "-preset", "ultrafast", "-y", &src.to_string_lossy()]);
+    // Cue images as the UI draws them: full-size RGBA, here a white frame and a transparent one.
+    let cue = dir.path().join("cue's.png");
+    let blank = dir.path().join("blank.png");
+    ffmpeg(&tools, &["-f", "lavfi", "-i", "color=c=white:s=320x180", "-frames:v", "1", "-pix_fmt", "rgba", "-y", &cue.to_string_lossy()]);
+    ffmpeg(&tools, &["-f", "lavfi", "-i", "color=c=black@0.0:s=320x180,format=rgba", "-frames:v", "1", "-y", &blank.to_string_lossy()]);
+    let asset = import(&tools, &src, &dir.path().join("cache"));
+    let mut p = Project::new("subs", 0);
+    let id = asset.id;
+    p.media.push(asset);
+    let seq = p.active_sequence;
+    let settings = SequenceSettings { width: 320, height: 180, fps: Rational::new(25, 1), sample_rate: 48_000 };
+    kerf_core::ops::apply(&mut p, &EditCommand::UpdateSequenceSettings { sequence: seq, settings }).unwrap();
+    kerf_core::ops::apply(&mut p, &EditCommand::PlaceMedia {
+        sequence: seq, media: id, video_track: None, audio_track: None, at: 0,
+        mode: PlaceMode::Overwrite, source_in: None, source_out: None, match_sequence: false,
+    })
+    .unwrap();
+    let cues = vec![
+        Cue { id: Uuid::new_v4(), start: 10, end: 20, text: "Eins".into() },
+        Cue { id: Uuid::new_v4(), start: 30, end: 40, text: "Zwei".into() },
+    ];
+    kerf_core::ops::apply(&mut p, &EditCommand::SetSubtitles { sequence: seq, cues: cues.clone() }).unwrap();
+    let file = dir.path().join("subs.mp4");
+    let export = ExportSettings {
+        output: file.clone(),
+        video_codec: VideoCodec::H264,
+        hardware: false,
+        width: 320,
+        height: 180,
+        fps: Rational::new(25, 1),
+        rate: RateControl::Quality { crf: 18 },
+        audio_codec: AudioCodec::Aac,
+        audio_bitrate_kbps: 128,
+        sample_rate: 48_000,
+        audio_channels: 2,
+        use_in_out: false,
+        subtitles: render::SubtitleOutput {
+            burn: cues.iter().map(|c| render::BurnCue { start: c.start, end: c.end, path: cue.clone() }).collect(),
+            blank: Some(blank.clone()),
+            sidecar: Some(kerf_core::text::SubtitleFormat::Srt),
+            embed: true,
+        },
+        title_files: Default::default(),
+    };
+    let plan = render::plan(&p, p.sequence(seq).unwrap(), &export, dir.path(), &[]).unwrap();
+    let mut log = String::new();
+    let res = render::render_logged(&tools, &plan, &AtomicBool::new(false), |_| {}, &mut log);
+    assert!(res.is_ok(), "{res:?}\n{log}");
+    // Burned in exactly while a cue is on (frames 10..20 and 30..40).
+    // (`-ss t` returns the first frame at or after t.)
+    for (t, white) in [(0.2, false), (0.4, true), (0.74, true), (0.8, false), (1.0, false), (1.3, true), (1.6, false), (1.9, false)] {
+        let luma = mean_luma(&tools, &file, t);
+        assert_eq!(luma > 128.0, white, "t={t}: {luma}\n{log}");
+    }
+    // Soft subtitle stream and the SRT next to the file.
+    let probe = std::process::Command::new(&tools.ffprobe)
+        .args(["-v", "error", "-select_streams", "s", "-show_entries", "stream=codec_name", "-of", "csv=p=0"])
+        .arg(&file)
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&probe.stdout).trim(), "mov_text");
+    let srt = std::fs::read_to_string(file.with_extension("srt")).unwrap();
+    assert!(srt.starts_with("1\n00:00:00,400 --> 00:00:00,800\nEins\n\n2\n00:00:01,200 --> 00:00:01,600\nZwei"), "{srt}");
+    // Helper files are gone.
+    assert!(plan.files.iter().all(|(p, _)| !p.exists()));
 }

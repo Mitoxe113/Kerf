@@ -11,6 +11,7 @@ import { useEditor } from "../state/editor";
 import { edit, useActiveSequence, useProject } from "../state/project";
 import { Button, cx, Field, IconButton, NumberField, openContextMenu, PanelHeader, Section, Segmented, Slider, Toggle } from "../ui/primitives";
 import { EffectsSection, GradeSections } from "./Effects";
+import { TitleSection } from "./Text";
 
 
 function useTargets(seq: Sequence | null) {
@@ -81,7 +82,9 @@ export function Inspector() {
     await edit({ type: "updateClips", sequence: seq.id, clips: targets.map((c) => c.id), patch });
     targets.forEach((c) => engine.setOverride(c.id, null));
   };
+  const title = clips.length === 1 && asset?.title ? { ...asset, title: asset.title } : null;
   const tabs = [
+    ...(title ? [{ value: "title" as const, label: "Titel" }] : []),
     ...(video.length ? [{ value: "clip" as const, label: "Video" }] : []),
     ...(video.length ? [{ value: "color" as const, label: "Farbe" }] : []),
     ...(video.length ? [{ value: "effects" as const, label: "Effekte" }] : []),
@@ -97,12 +100,13 @@ export function Inspector() {
           <div className="truncate text-sm font-semibold">{clips.length > 1 ? `${clips.length} Clips` : ref.name}</div>
           {asset && (
             <div className="truncate text-xs text-fg-3" title={asset.path}>
-              {[asset.info?.video && `${asset.info.video.width}×${asset.info.video.height}`, asset.info?.video && asset.kind === "video" && `${formatRate(asset.info.video.fps)} fps`, codecLabel(asset.info?.video?.codec ?? asset.info?.audio?.codec), asset.info && formatBytes(asset.info.sizeBytes)]
+              {[asset.info?.video && `${asset.info.video.width}×${asset.info.video.height}`, asset.info?.video && asset.kind === "video" && `${formatRate(asset.info.video.fps)} fps`, codecLabel(asset.info?.video?.codec ?? asset.info?.audio?.codec), asset.info?.sizeBytes ? formatBytes(asset.info.sizeBytes) : null]
                 .filter(Boolean)
                 .join(" · ")}
             </div>
           )}
         </div>
+        {active === "title" && title && <TitleSection key={title.id} asset={title} />}
         {active === "clip" && <VideoSection seq={seq} clips={video} commit={commit} />}
         {active === "color" && <ColorSection seq={seq} clips={video} commit={commit} />}
         {active === "color" && <GradeSections seq={seq} clips={video} />}

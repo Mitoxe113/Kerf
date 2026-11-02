@@ -5,9 +5,10 @@ import { confirm, prompt } from "../actions/project";
 import { api } from "../lib/ipc";
 import { formatBytes } from "../lib/media";
 import { formatDuration, formatRate, fpsOf, framesToSeconds, STANDARD_RATES } from "../lib/time";
-import type { AudioCodec, ExportJob, ExportSettings, Rational, RateControl, Sequence, VideoCodec } from "../lib/types";
+import type { AudioCodec, ExportJob, ExportSettings, Rational, RateControl, Sequence, SubtitleOutput, VideoCodec } from "../lib/types";
 import { useEditor } from "../state/editor";
 import { reportError, useActiveSequence, useProject } from "../state/project";
+import { burnInFiles, titleFiles } from "../engine/text";
 import { toast } from "../state/toasts";
 import { engine } from "../engine/playback";
 import { Button, cx, Field, IconButton, PanelHeader, Progress, Section, Segmented, Select, Toggle, NumberField } from "../ui/primitives";
@@ -148,6 +149,7 @@ export function ExportPanel() {
   const preset = presets.find((p) => p.id === presetId) ?? PRESETS[0];
   const [s, setS] = useState<ExportSettings | null>(null);
   const [free, setFree] = useState<number | null>(null);
+  const [subs, setSubs] = useState<{ burn: boolean; sidecar: "srt" | "vtt" | null; embed: boolean }>({ burn: true, sidecar: null, embed: false });
 
   useEffect(() => {
     if (!seq) return;
@@ -221,7 +223,14 @@ export function ExportPanel() {
       if (go !== true) return;
     }
     try {
-      const job = await api.exportStart(seq.id, { ...s, output, hardware: s.hardware && hw.length > 0 });
+      // Titles and burned-in subtitles are drawn here and overlaid as PNGs.
+      const titles = await titleFiles(seq, useProject.getState().mediaById);
+      let subtitles: SubtitleOutput | undefined;
+      if (seq.subtitles.cues.length && (subs.burn || subs.sidecar || subs.embed)) {
+        const files = subs.burn ? await burnInFiles(seq, [range[0], range[1]]) : { burn: [], blank: null };
+        subtitles = { ...files, sidecar: subs.sidecar, embed: subs.embed };
+      }
+      const job = await api.exportStart(seq.id, { ...s, output, hardware: s.hardware && hw.length > 0, subtitles, titleFiles: titles });
       useProject.getState().upsertExport(job);
       toast.info("Export gestartet", output.split(/[\\/]/).pop());
     } catch (e) {
@@ -387,6 +396,28 @@ export function ExportPanel() {
             <Select width={110} value={s.sampleRate} onChange={(v) => upd({ sampleRate: v })} options={[44100, 48000].map((r) => ({ value: r, label: `${r / 1000} kHz` }))} />
           </Field>
         </Section>
+        {seq.subtitles.cues.length > 0 && (
+          <Section title="Untertitel">
+            <Field label="Einbrennen">
+              <Toggle checked={subs.burn} onChange={(burn) => setSubs({ ...subs, burn })} label="Untertitel ins Bild einbrennen" />
+            </Field>
+            <Field label="Eingebettet">
+              <Toggle checked={subs.embed} onChange={(embed) => setSubs({ ...subs, embed })} label="Abschaltbare Untertitelspur in der Datei" />
+            </Field>
+            <Field label="Als Datei">
+              <Segmented
+                size="sm"
+                value={subs.sidecar ?? "none"}
+                onChange={(v) => setSubs({ ...subs, sidecar: v === "none" ? null : v })}
+                options={[
+                  { value: "none", label: "Keine" },
+                  { value: "srt", label: "SRT", title: "Gleicher Name wie das Video, daneben" },
+                  { value: "vtt", label: "VTT", title: "Gleicher Name wie das Video, daneben" },
+                ]}
+              />
+            </Field>
+          </Section>
+        )}
         <div className="space-y-2 border-b border-line p-3">
           <div className="flex justify-between gap-2 text-xs text-fg-3">
             <span>Dauer {formatDuration(seconds)}</span>

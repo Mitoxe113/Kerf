@@ -42,6 +42,10 @@ const EDIT_LABELS: Record<string, string> = {
   extractRange: "Extrahieren",
   replaceMedia: "Clip ersetzen",
   insertStill: "Standbild einfügen",
+  addTitle: "Titel einfügen",
+  editTitle: "Titel bearbeiten",
+  editSubtitles: "Untertitel bearbeiten",
+  subtitleStyle: "Untertitel-Darstellung",
   setKeyframes: "Keyframes",
   normalizeAudio: "Audio normalisieren",
 };

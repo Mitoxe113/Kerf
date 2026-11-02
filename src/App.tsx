@@ -13,6 +13,7 @@ import { Meters, Mixer } from "./panels/Audio";
 import { Monitor } from "./panels/Monitor";
 import { Scopes } from "./panels/Scopes";
 import { SourceMonitor } from "./panels/SourceMonitor";
+import { SubtitlesPanel } from "./panels/Text";
 import { Timeline } from "./panels/Timeline";
 import { Dialogs } from "./shell/Dialogs";
 import { StartScreen } from "./shell/StartScreen";
@@ -34,6 +35,7 @@ const PANELS: Record<PanelId, React.ReactNode> = {
   mixer: <Mixer />,
   history: <HistoryPanel />,
   source: <SourceMonitor />,
+  subtitles: <SubtitlesPanel />,
 };
 
 /** Keeps the playback engine in sync with the document and view settings. */

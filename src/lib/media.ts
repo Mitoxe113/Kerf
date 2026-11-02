@@ -8,6 +8,8 @@ export const fileUrl = (path: string) => convertFileSrc(path);
 
 /** Source the preview engine should decode, or null while a proxy is pending. */
 export function previewSource(asset: MediaAsset, useProxies: boolean): string | null {
+  // Titles are generated PNGs; the browser decodes them directly.
+  if (asset.title) return fileUrl(asset.path);
   const { proxy, previewNative } = asset.derived;
   if (proxy && (useProxies || !previewNative)) return fileUrl(proxy);
   if (previewNative) return fileUrl(asset.path);

@@ -7,6 +7,9 @@ import { fpsOf } from "../lib/time";
 import { TRACK_HEIGHTS, type TrackSize } from "../state/editor";
 
 export const RULER_H = 30;
+/** Subtitle lane under the ruler (only while the sequence has cues). */
+export const SUB_LANE_H = 24;
+export const subLane = (seq: Sequence) => (seq.subtitles?.cues.length ? SUB_LANE_H : 0);
 export const DIVIDER_H = 6;
 export const HEADER_W = 184;
 export const EDGE_PX = 7;
@@ -30,7 +33,7 @@ export function layoutTracks(seq: Sequence, size: TrackSize, resize?: { track: U
   const hs = TRACK_HEIGHTS[size];
   const height = (t: Track) => (resize?.track === t.id ? resize.h : t.height || hs[t.kind]);
   const rows: TrackRow[] = [];
-  let y = 0;
+  let y = subLane(seq);
   const video = seq.tracks.map((t, i) => ({ t, i })).filter((x) => x.t.kind === "video").reverse();
   for (const { t, i } of video) {
     const h = height(t);
