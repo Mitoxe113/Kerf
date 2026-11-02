@@ -438,6 +438,62 @@ fn animated_colour_renders() {
 }
 
 #[test]
+fn effect_stack_renders() {
+    let Some(tools) = tools() else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("bars.mp4");
+    ffmpeg(&tools, &["-f", "lavfi", "-i", "testsrc2=s=320x180:r=25:d=1", "-c:v", "libx264", "-preset", "ultrafast", "-y", &src.to_string_lossy()]);
+    let cube = dir.path().join("look.cube");
+    std::fs::write(&cube, "LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n").unwrap();
+    let asset = import(&tools, &src, &dir.path().join("cache"));
+    let mut p = Project::new("fx", 0);
+    let id = asset.id;
+    p.media.push(asset);
+    let seq = p.active_sequence;
+    let settings = SequenceSettings { width: 320, height: 180, fps: Rational::new(25, 1), sample_rate: 48_000 };
+    kerf_core::ops::apply(&mut p, &EditCommand::UpdateSequenceSettings { sequence: seq, settings }).unwrap();
+    let out = kerf_core::ops::apply(&mut p, &EditCommand::PlaceMedia {
+        sequence: seq, media: id, video_track: None, audio_track: None, at: 0,
+        mode: PlaceMode::Overwrite, source_in: None, source_out: None, match_sequence: false,
+    })
+    .unwrap();
+    let v = out.created[0];
+    let fx = |kind| Effect { id: Uuid::new_v4(), enabled: true, kind };
+    let effects = vec![
+        fx(EffectKind::ChromaKey { color: [0.0, 1.0, 0.0], similarity: 0.12, blend: 0.05, spill: 0.5 }),
+        fx(EffectKind::Lut { path: cube, intensity: 0.5 }),
+        fx(EffectKind::ColorWheels { lift: [0.02, 0.0, -0.02], gamma: [1.1, 1.0, 0.9], gain: [1.05, 1.0, 0.95] }),
+        fx(EffectKind::Curves { master: vec![[0.0, 0.0], [0.5, 0.6], [1.0, 1.0]], red: vec![], green: vec![], blue: vec![[0.0, 0.1], [1.0, 0.9]] }),
+        fx(EffectKind::Blur { radius: 2.0 }),
+        fx(EffectKind::Sharpen { amount: 0.8, radius: 1.5 }),
+        fx(EffectKind::Vignette { amount: 0.5 }),
+    ];
+    kerf_core::ops::apply(&mut p, &EditCommand::SetEffects { sequence: seq, clips: vec![v], effects }).unwrap();
+    kerf_core::ops::apply(&mut p, &EditCommand::UpdateClips { sequence: seq, clips: vec![v], patch: ClipPatch { opacity: Some(0.8), ..Default::default() } }).unwrap();
+    let file = dir.path().join("fx.mp4");
+    let export = ExportSettings {
+        output: file.clone(),
+        video_codec: VideoCodec::H264,
+        hardware: false,
+        width: 320,
+        height: 180,
+        fps: Rational::new(25, 1),
+        rate: RateControl::Quality { crf: 18 },
+        audio_codec: AudioCodec::Aac,
+        audio_bitrate_kbps: 128,
+        sample_rate: 48_000,
+        audio_channels: 2,
+        use_in_out: false,
+    };
+    let plan = render::plan(&p, p.sequence(seq).unwrap(), &export, dir.path(), &[]).unwrap();
+    let mut log = String::new();
+    let res = render::render_logged(&tools, &plan, &AtomicBool::new(false), |_| {}, &mut log);
+    assert!(res.is_ok(), "{res:?}\n{log}");
+    let luma = mean_luma(&tools, &file, 0.5);
+    assert!(luma > 10.0 && luma < 240.0, "a picture came out: {luma}");
+}
+
+#[test]
 fn loudness_measures_peaks_over_a_range() {
     let Some(tools) = tools() else { return };
     let dir = tempfile::tempdir().unwrap();

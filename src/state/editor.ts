@@ -2,7 +2,7 @@
 // workspaces. View preferences persist per user in localStorage.
 
 import { create } from "zustand";
-import type { KeyParam, PasteItem, Uuid } from "../lib/types";
+import type { KeyParam, PasteItem, Rgb, Uuid } from "../lib/types";
 
 export type ToolId = "select" | "razor" | "ripple" | "roll" | "slip" | "slide" | "hand" | "zoom";
 export type PanelId = "media" | "monitor" | "inspector" | "timeline" | "meters" | "scopes" | "export" | "mixer" | "history" | "source";
@@ -159,7 +159,9 @@ interface EditorStore {
   customWorkspaces: CustomWorkspace[];
   clipboard: PasteItem[];
   dialog: Dialog | null;
-  inspectorTab: "clip" | "color" | "audio";
+  /** Eyedropper waiting for a click in the program monitor (null = cancelled). */
+  picker: ((rgb: Rgb | null) => void) | null;
+  inspectorTab: "clip" | "color" | "effects" | "audio";
   mediaView: "grid" | "list";
   mediaSort: "name" | "date" | "duration" | "kind";
   mediaFilter: "all" | "video" | "audio" | "image" | "favorites";
@@ -234,6 +236,7 @@ export const useEditor = create<EditorStore>((set, get) => ({
   customWorkspaces: [],
   clipboard: [],
   dialog: null,
+  picker: null,
   inspectorTab: "clip",
   mediaView: "grid",
   mediaSort: "name",
@@ -317,4 +320,12 @@ export function mapLeaf(n: LayoutNode, pred: (tabs: PanelId[]) => boolean, fn: (
     if (next) return { ...n, children: n.children.map((x, k) => (k === i ? { ...x, node: next } : x)) };
   }
   return null;
+}
+
+/** Ends a running eyedropper without a colour. */
+export function cancelPick() {
+  const pick = useEditor.getState().picker;
+  if (!pick) return;
+  useEditor.getState().set({ picker: null });
+  pick(null);
 }

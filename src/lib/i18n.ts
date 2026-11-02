@@ -37,6 +37,7 @@ const EDIT_LABELS: Record<string, string> = {
   setInOut: "In/Out",
   updateMedia: "Medien-Metadaten",
   setSourceMarks: "Quell-In/Out",
+  setEffects: "Effekte",
   liftRange: "Herausheben",
   extractRange: "Extrahieren",
   replaceMedia: "Clip ersetzen",

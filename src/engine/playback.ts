@@ -12,6 +12,7 @@ import { previewSource } from "../lib/media";
 import type { Clip, ClipPatch, MediaAsset, Sequence, Track, Uuid } from "../lib/types";
 import { AudioMixer } from "./audio";
 import { Compositor, type Layer, type LayerSource } from "./compositor";
+import { activeEffects } from "./effects";
 import { dbToGain, place, quadMatrix } from "./math";
 
 const PREROLL_S = 1.2;
@@ -105,7 +106,7 @@ export class PlaybackEngine {
   attach(canvas: HTMLCanvasElement) {
     this.compositor?.dispose();
     try {
-      this.compositor = new Compositor(canvas);
+      this.compositor = new Compositor(canvas, () => this.requestRender());
     } catch (e) {
       console.error(e);
       this.compositor = null;
@@ -538,6 +539,9 @@ export class PlaybackEngine {
       const t = a.transform;
       if (t.scale <= 0 || a.opacity <= 0) continue;
       const p = place(t, sw, sh, W, H);
+      const effects = activeEffects(c.effects);
+      // Effects run at the fitted size (scale 1) in canvas pixels.
+      const fxScale = this.compositor ? this.compositor.canvas.width / W : 1;
       out.push({
         key: v.key,
         source: src,
@@ -545,6 +549,9 @@ export class PlaybackEngine {
         crop: [t.cropLeft, t.cropTop, t.cropRight, t.cropBottom],
         opacity: a.opacity * fadeGain(c, frame),
         color: a.color,
+        effects,
+        work: t.scale > 0 ? [(p.width / t.scale) * fxScale, (p.height / t.scale) * fxScale] : undefined,
+        fxScale,
       });
     }
     return out;
@@ -563,6 +570,13 @@ export class PlaybackEngine {
         this.scopesListener(comp.readScopes(layers));
       }
     }
+  }
+
+  /** Colour of the composited frame at x, y (0..1 from the top left). */
+  pickColor(x: number, y: number): [number, number, number] | null {
+    if (!this.compositor) return null;
+    this.syncAll(false);
+    return this.compositor.pick(this.layers(), x, y);
   }
 
   /** Decoded pixel size of a clip's video source, if it is loaded. */

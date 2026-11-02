@@ -76,6 +76,7 @@ export const api = {
   exportClear: () => invoke<void>("export_clear"),
   exportRetry: (id: Uuid) => invoke<ExportJob>("export_retry", { id }),
   exportLog: (id: Uuid) => invoke<string | null>("export_log", { id }),
+  textRead: (path: string) => invoke<string>("text_read", { path }),
   /** Free bytes on the drive holding `path`, null when unknown. */
   diskFree: (path: string) => invoke<number | null>("disk_free", { path }),
   openPath: (path: string) => invoke<void>("open_path", { path }),

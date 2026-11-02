@@ -486,6 +486,10 @@ pub struct Clip {
     /// Animated properties; a property with keys ignores its static value.
     #[serde(default)]
     pub keys: BTreeMap<Param, Vec<Keyframe>>,
+    /// Video effects, applied in order after the colour correction and
+    /// before opacity and the transform.
+    #[serde(default)]
+    pub effects: Vec<Effect>,
 }
 
 impl Clip {
@@ -509,7 +513,13 @@ impl Clip {
             color: ColorAdjust::default(),
             label: LabelColor::None,
             keys: BTreeMap::new(),
+            effects: Vec::new(),
         }
+    }
+
+    /// Enabled effects, in processing order.
+    pub fn active_effects(&self) -> impl Iterator<Item = &Effect> {
+        self.effects.iter().filter(|e| e.enabled && !e.kind.is_identity())
     }
 
     pub fn end(&self) -> Frame {
@@ -685,6 +695,113 @@ impl ColorAdjust {
     pub fn contrast_slope(&self) -> f32 {
         (1.0 + self.contrast).max(0.0)
     }
+}
+
+/// One entry of a clip's effect stack. Every effect exists twice with the
+/// same maths: as a WebGL pass in the preview (`src/engine/effects.ts`) and
+/// as FFmpeg filters in the export (`kerf_media::render`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Effect {
+    pub id: Uuid,
+    #[serde(default = "yes")]
+    pub enabled: bool,
+    #[serde(flatten)]
+    pub kind: EffectKind,
+}
+
+/// A point of a tone curve, input and output in 0..1.
+pub type CurvePoint = [f32; 2];
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "type")]
+pub enum EffectKind {
+    /// Gaussian blur; `radius` is the standard deviation in sequence pixels.
+    Blur { radius: f32 },
+    /// Unsharp mask: out = in + amount * (in - blur(in, radius)).
+    Sharpen { amount: f32, radius: f32 },
+    /// Natural (cos⁴) vignette; `amount` 0..1 is the lens angle 0..π/2.
+    Vignette { amount: f32 },
+    /// 3D LUT from a `.cube` file (trilinear), mixed with the input by `intensity`.
+    Lut { path: PathBuf, intensity: f32 },
+    /// Key on the U/V distance to `color` (RGB 0..1, BT.601), with spill suppression.
+    ChromaKey { color: [f32; 3], similarity: f32, blend: f32, spill: f32 },
+    /// Per channel (R, G, B): out = (in·(gain − lift) + lift)^(1/gamma).
+    ColorWheels { lift: [f32; 3], gamma: [f32; 3], gain: [f32; 3] },
+    /// Monotone cubic (PCHIP) tone curves: each channel's curve, then the
+    /// master curve. An empty list is the identity.
+    Curves { master: Vec<CurvePoint>, red: Vec<CurvePoint>, green: Vec<CurvePoint>, blue: Vec<CurvePoint> },
+}
+
+impl EffectKind {
+    /// True when the effect leaves every pixel unchanged.
+    pub fn is_identity(&self) -> bool {
+        match self {
+            EffectKind::Blur { radius } => *radius <= 0.0,
+            EffectKind::Sharpen { amount, radius } => *amount <= 0.0 || *radius <= 0.0,
+            EffectKind::Vignette { amount } => *amount <= 0.0,
+            EffectKind::Lut { intensity, .. } => *intensity <= 0.0,
+            EffectKind::ChromaKey { .. } => false,
+            EffectKind::ColorWheels { lift, gamma, gain } => lift.iter().all(|v| *v == 0.0) && gamma.iter().chain(gain).all(|v| *v == 1.0),
+            EffectKind::Curves { master, red, green, blue } => [master, red, green, blue].iter().all(|c| curve_is_identity(c)),
+        }
+    }
+
+    /// Clamps parameters to their valid ranges; `None` for unusable input
+    /// (non-finite numbers, empty LUT path).
+    pub fn sanitized(&self) -> Option<Self> {
+        let ok = |v: f32| v.is_finite().then_some(v);
+        let rgb = |c: [f32; 3], lo: f32, hi: f32| -> Option<[f32; 3]> { Some([ok(c[0])?.clamp(lo, hi), ok(c[1])?.clamp(lo, hi), ok(c[2])?.clamp(lo, hi)]) };
+        Some(match self {
+            EffectKind::Blur { radius } => EffectKind::Blur { radius: ok(*radius)?.clamp(0.0, 250.0) },
+            EffectKind::Sharpen { amount, radius } => EffectKind::Sharpen { amount: ok(*amount)?.clamp(0.0, 5.0), radius: ok(*radius)?.clamp(0.1, 50.0) },
+            EffectKind::Vignette { amount } => EffectKind::Vignette { amount: ok(*amount)?.clamp(0.0, 1.0) },
+            EffectKind::Lut { path, intensity } => {
+                if path.as_os_str().is_empty() {
+                    return None;
+                }
+                EffectKind::Lut { path: path.clone(), intensity: ok(*intensity)?.clamp(0.0, 1.0) }
+            }
+            EffectKind::ChromaKey { color, similarity, blend, spill } => EffectKind::ChromaKey {
+                color: rgb(*color, 0.0, 1.0)?,
+                similarity: ok(*similarity)?.clamp(0.001, 1.0),
+                blend: ok(*blend)?.clamp(0.0, 1.0),
+                spill: ok(*spill)?.clamp(0.0, 1.0),
+            },
+            EffectKind::ColorWheels { lift, gamma, gain } => {
+                EffectKind::ColorWheels { lift: rgb(*lift, -1.0, 1.0)?, gamma: rgb(*gamma, 0.1, 10.0)?, gain: rgb(*gain, 0.0, 8.0)? }
+            }
+            EffectKind::Curves { master, red, green, blue } => EffectKind::Curves {
+                master: clean_curve(master)?,
+                red: clean_curve(red)?,
+                green: clean_curve(green)?,
+                blue: clean_curve(blue)?,
+            },
+        })
+    }
+}
+
+/// Most points a tone curve may have.
+pub const CURVE_POINTS: usize = 16;
+
+/// Points clamped to 0..1, sorted by input, one per input value.
+fn clean_curve(points: &[CurvePoint]) -> Option<Vec<CurvePoint>> {
+    let mut out: Vec<CurvePoint> = Vec::with_capacity(points.len());
+    for p in points {
+        if !p[0].is_finite() || !p[1].is_finite() {
+            return None;
+        }
+        out.push([p[0].clamp(0.0, 1.0), p[1].clamp(0.0, 1.0)]);
+    }
+    out.sort_by(|a, b| a[0].total_cmp(&b[0]));
+    out.dedup_by(|b, a| (a[0] - b[0]).abs() < 1e-4);
+    out.truncate(CURVE_POINTS);
+    Some(if curve_is_identity(&out) { Vec::new() } else { out })
+}
+
+/// A curve with fewer than two points, or only the diagonal, changes nothing.
+pub fn curve_is_identity(points: &[CurvePoint]) -> bool {
+    points.len() < 2 || points.iter().all(|p| (p[0] - p[1]).abs() < 1e-6)
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

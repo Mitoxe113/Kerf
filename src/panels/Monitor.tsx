@@ -22,7 +22,7 @@ import { animate, isAnimated, keysOf, playheadKeyPos, upsertKey } from "../lib/k
 import { displaySize } from "../lib/media";
 import { formatTimecode, parseTimecode } from "../lib/time";
 import type { Clip, Sequence, Transform } from "../lib/types";
-import { NO_GUIDES, useEditor, type Guides } from "../state/editor";
+import { cancelPick, NO_GUIDES, useEditor, type Guides } from "../state/editor";
 import { edit, useActiveSequence, useProject } from "../state/project";
 import { cx, IconButton, openContextMenu, PanelHeader, Select, type MenuItem } from "../ui/primitives";
 
@@ -249,13 +249,25 @@ export function Monitor() {
   const playing = usePlaying();
   const rate = useRate();
   const ed = useEditor(
-    useShallow((s) => ({ fullscreen: s.fullscreen, monitorZoom: s.monitorZoom, quality: s.quality, guides: s.guides, select: s.select, set: s.set })),
+    useShallow((s) => ({ fullscreen: s.fullscreen, monitorZoom: s.monitorZoom, quality: s.quality, guides: s.guides, select: s.select, set: s.set, picking: s.picker !== null })),
   );
   const hostRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [view, setView] = useState({ x: 0, y: 0, w: 0, h: 0, s: 1, W: 800 });
   const [loop, setLoop] = useState(engine.loop);
   const active = useActiveVisual(seq, frame);
+  useEffect(() => {
+    if (!ed.picking) return;
+    // Escape cancels the eyedropper before any other shortcut sees the key.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      e.preventDefault();
+      cancelPick();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [ed.picking]);
   const pending = useProject((s) => {
     const sq = seq;
     if (!sq) return false;
@@ -359,8 +371,17 @@ export function Monitor() {
       <div
         ref={hostRef}
         data-monitor
-        className="relative min-h-0 flex-1 overflow-hidden bg-[#08080a]"
+        className={cx("relative min-h-0 flex-1 overflow-hidden bg-[#08080a]", ed.picking && "cursor-crosshair")}
         onPointerDown={(e) => {
+          const pick = useEditor.getState().picker;
+          if (pick) {
+            // Eyedropper: sample the composited picture under the pointer.
+            const c = canvasRef.current!.getBoundingClientRect();
+            const rgb = e.button === 0 ? engine.pickColor((e.clientX - c.left) / c.width, (e.clientY - c.top) / c.height) : null;
+            useEditor.getState().set({ picker: null });
+            pick(rgb);
+            return;
+          }
           // Click on the picture selects the topmost clip there.
           if (!seq || e.button !== 0) return;
           const r = e.currentTarget.getBoundingClientRect();
@@ -402,7 +423,7 @@ export function Monitor() {
             </div>
           </div>
         )}
-        {active && !playing && (
+        {active && !playing && !ed.picking && (
           <div className="absolute inset-0">
             <Gizmo clip={active} seq={seq} view={view} frame={frame} />
           </div>

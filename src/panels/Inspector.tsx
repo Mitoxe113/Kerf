@@ -10,6 +10,7 @@ import { findClip, locate } from "../timeline/geometry";
 import { useEditor } from "../state/editor";
 import { edit, useActiveSequence, useProject } from "../state/project";
 import { Button, cx, Field, IconButton, NumberField, openContextMenu, PanelHeader, Section, Segmented, Slider, Toggle } from "../ui/primitives";
+import { EffectsSection, GradeSections } from "./Effects";
 
 
 function useTargets(seq: Sequence | null) {
@@ -83,6 +84,7 @@ export function Inspector() {
   const tabs = [
     ...(video.length ? [{ value: "clip" as const, label: "Video" }] : []),
     ...(video.length ? [{ value: "color" as const, label: "Farbe" }] : []),
+    ...(video.length ? [{ value: "effects" as const, label: "Effekte" }] : []),
     ...(audio.length ? [{ value: "audio" as const, label: "Audio" }] : []),
   ];
   const active = tabs.some((t) => t.value === tab) ? tab : tabs[0]?.value;
@@ -103,6 +105,8 @@ export function Inspector() {
         </div>
         {active === "clip" && <VideoSection seq={seq} clips={video} commit={commit} />}
         {active === "color" && <ColorSection seq={seq} clips={video} commit={commit} />}
+        {active === "color" && <GradeSections seq={seq} clips={video} />}
+        {active === "effects" && <EffectsSection seq={seq} clips={video} />}
         {active === "audio" && <AudioSection seq={seq} clips={audio} preview={preview} commit={commit} />}
         <TimingSection seq={seq} clips={clips} commit={commit} />
       </div>

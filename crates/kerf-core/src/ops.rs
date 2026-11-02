@@ -180,6 +180,8 @@ pub enum EditCommand {
     UpdateClips { sequence: Uuid, clips: Vec<Uuid>, patch: ClipPatch },
     /// Replaces the keys of one animated property (empty = not animated).
     SetKeyframes { sequence: Uuid, clip: Uuid, param: Param, keys: Vec<Keyframe> },
+    /// Replaces the effect stack of video clips (each gets its own copy).
+    SetEffects { sequence: Uuid, clips: Vec<Uuid>, effects: Vec<Effect> },
     /// Sets the gain of several audio clips in one step (normalizing); volume
     /// keyframes move by the same amount.
     SetClipGain { sequence: Uuid, gains: Vec<ClipGain> },
@@ -233,6 +235,7 @@ impl EditCommand {
             C::DuplicateClips { .. } => "duplicateClips",
             C::UpdateClips { .. } => "updateClips",
             C::SetKeyframes { .. } => "setKeyframes",
+            C::SetEffects { .. } => "setEffects",
             C::SetClipGain { .. } => "normalizeAudio",
             C::LinkClips { .. } => "linkClips",
             C::UnlinkClips { .. } => "unlinkClips",
@@ -265,6 +268,7 @@ impl EditCommand {
             | C::DuplicateClips { sequence, .. }
             | C::UpdateClips { sequence, .. }
             | C::SetKeyframes { sequence, .. }
+            | C::SetEffects { sequence, .. }
             | C::SetClipGain { sequence, .. }
             | C::LinkClips { sequence, .. }
             | C::UnlinkClips { sequence, .. }
@@ -586,6 +590,7 @@ fn edit_sequence(seq: &mut Sequence, media: &[MediaAsset], cmd: &EditCommand, ou
         }
         C::DeleteClips { clips, ripple, .. } => delete_clips(seq, clips, *ripple),
         C::SetKeyframes { clip, param, keys, .. } => set_keyframes(seq, *clip, *param, keys),
+        C::SetEffects { clips, effects, .. } => set_effects(seq, clips, effects),
         C::SetClipGain { gains, .. } => set_clip_gain(seq, gains),
         C::RemoveRange { start, end, ripple, tracks, .. } => remove_range(seq, *start, *end, *ripple, tracks.as_deref()),
         C::ReplaceMedia { clip, media: id, .. } => replace_media(seq, media, *clip, *id),
@@ -1421,6 +1426,35 @@ fn set_keyframes(seq: &mut Sequence, clip: Uuid, param: Param, keys: &[Keyframe]
     Ok(true)
 }
 
+fn set_effects(seq: &mut Sequence, clips: &[Uuid], effects: &[Effect]) -> Result<bool> {
+    let mut clean = Vec::with_capacity(effects.len());
+    for e in effects {
+        let kind = e.kind.sanitized().ok_or_else(|| EditError::Invalid("effect parameter".into()))?;
+        clean.push(Effect { id: e.id, enabled: e.enabled, kind });
+    }
+    let mut at = Vec::with_capacity(clips.len());
+    for id in clips {
+        let (ti, ci) = seq.locate(*id).ok_or(EditError::ClipNotFound)?;
+        let t = &seq.tracks[ti];
+        if t.locked {
+            return Err(EditError::TrackLocked);
+        }
+        if t.kind != TrackKind::Video {
+            return Err(EditError::Invalid("effects apply to video clips".into()));
+        }
+        at.push((ti, ci));
+    }
+    let mut changed = false;
+    for (ti, ci) in at {
+        let c = &mut seq.tracks[ti].clips[ci];
+        if c.effects != clean {
+            c.effects = clean.clone();
+            changed = true;
+        }
+    }
+    Ok(changed)
+}
+
 fn set_clip_gain(seq: &mut Sequence, gains: &[ClipGain]) -> Result<bool> {
     // Validate everything first so a bad entry leaves the sequence untouched.
     let mut at = Vec::with_capacity(gains.len());
@@ -2176,5 +2210,37 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(cmd, EditCommand::TrimClip { delta: -3, ripple: true, linked: true, .. }));
+    }
+    #[test]
+    fn effects_are_sanitised_and_video_only() {
+        let mut fx = Fx::new(4.0, true);
+        let ids = fx.place(0, None, None, PlaceMode::Overwrite);
+        let (v, a) = (ids[0], ids[1]);
+        let effect = |kind| Effect { id: Uuid::new_v4(), enabled: true, kind };
+        let stack = vec![
+            effect(EffectKind::Blur { radius: 900.0 }),
+            effect(EffectKind::Curves { master: vec![[0.7, 0.9], [0.2, 0.1], [0.2, 0.15], [1.0, 1.0]], red: vec![[0.0, 0.0], [1.0, 1.0]], green: vec![], blue: vec![] }),
+        ];
+        assert!(fx.run(EditCommand::SetEffects { sequence: fx.seq, clips: vec![v], effects: stack }).changed);
+        let got = &fx.v1().clips[0].effects;
+        assert_eq!(got[0].kind, EffectKind::Blur { radius: 250.0 });
+        // Sorted, one point per input, and the diagonal red curve collapses to identity.
+        assert_eq!(got[1].kind, EffectKind::Curves { master: vec![[0.2, 0.1], [0.7, 0.9], [1.0, 1.0]], red: vec![], green: vec![], blue: vec![] });
+        assert_eq!(
+            apply(&mut fx.p, &EditCommand::SetEffects { sequence: fx.seq, clips: vec![a], effects: vec![] }),
+            Err(EditError::Invalid("effects apply to video clips".into()))
+        );
+        let nan = vec![effect(EffectKind::Vignette { amount: f32::NAN })];
+        assert!(apply(&mut fx.p, &EditCommand::SetEffects { sequence: fx.seq, clips: vec![v], effects: nan }).is_err());
+    }
+
+    #[test]
+    fn effects_roundtrip_through_json() {
+        let json = r#"{"id":"00000000-0000-0000-0000-000000000003","type":"colorWheels","lift":[0.1,0,0],"gamma":[1,1,1],"gain":[1,1,1.2]}"#;
+        let e: Effect = serde_json::from_str(json).unwrap();
+        assert!(e.enabled);
+        assert!(matches!(e.kind, EffectKind::ColorWheels { .. }));
+        let back: Effect = serde_json::from_value(serde_json::to_value(&e).unwrap()).unwrap();
+        assert_eq!(back, e);
     }
 }

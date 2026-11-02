@@ -21,7 +21,7 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
-use kerf_core::model::{Clip, Ease, Keyframe, MediaKind, MediaStatus, Param, Project, Sequence, TrackKind, VideoInfo};
+use kerf_core::model::{Clip, CurvePoint, Ease, EffectKind, Keyframe, MediaKind, MediaStatus, Param, Project, Sequence, TrackKind, VideoInfo};
 use kerf_core::time::{Frame, Rational};
 use serde::{Deserialize, Serialize};
 
@@ -177,10 +177,10 @@ fn param_expr(clip: &Clip, param: Param, head: Frame, var: &str, unit: f64) -> S
 
 const BEZIER_STEPS: usize = 32;
 
-/// `sendcmd` script updating the clip's `colorchannelmixer` (colour matrix
-/// and alpha) on every output frame where animated colour or opacity changes;
-/// the mixer has no expressions.
-fn mixer_commands(clip: &Clip, seg: &Segment, frame_s: f64, target: &str) -> String {
+/// `sendcmd` script updating the clip's `colorchannelmixer`s on every
+/// output frame where animated colour (`color`) or opacity (`alpha`)
+/// changes; the mixer has no expressions. Both may name the same filter.
+fn mixer_commands(clip: &Clip, seg: &Segment, frame_s: f64, color: &str, alpha: &str) -> String {
     const NAMES: [&str; 9] = ["rr", "rg", "rb", "gr", "gg", "gb", "br", "bg", "bb"];
     let mut out = Vec::new();
     let mut last: Option<[f32; 10]> = None;
@@ -195,9 +195,9 @@ fn mixer_commands(clip: &Clip, seg: &Segment, frame_s: f64, target: &str) -> Str
         if last != Some(v) {
             let changed = |j: usize| last.is_none_or(|l| l[j] != v[j]);
             let mut cmds: Vec<String> =
-                NAMES.iter().enumerate().filter(|(j, _)| changed(*j)).map(|(j, n)| format!("{target} {n} {}", num(v[j] as f64))).collect();
+                NAMES.iter().enumerate().filter(|(j, _)| changed(*j)).map(|(j, n)| format!("{color} {n} {}", num(v[j] as f64))).collect();
             if changed(9) {
-                cmds.push(format!("{target} aa {}", num(v[9] as f64)));
+                cmds.push(format!("{alpha} aa {}", num(v[9] as f64)));
             }
             out.push(format!("{} {}", num(i as f64 * frame_s), cmds.join(",")));
             last = Some(v);
@@ -255,6 +255,97 @@ fn perspective(clip: &Clip, head: Frame, cw: f64, ch: f64, fit: f64, w: f64, h: 
         opts.push(format!("y{i}='{}+{y}+({s})*(({du})*sin({r})+({dv})*cos({r}))'", num(h / 2.0)));
     }
     format!("perspective={}:interpolation=cubic:sense=destination:eval=frame", opts.join(":"))
+}
+
+/// Steps of FFmpeg's IIR Gaussian (`gblur`); more steps approach a true
+/// Gaussian like the preview's.
+const GBLUR_STEPS: u32 = 4;
+
+/// FFmpeg filters for one effect on an RGBA stream. Branches (split/blend)
+/// use labels unique per clip `k` and effect `j`; a `;` inside a chain is
+/// valid filtergraph syntax.
+fn effect_filters(e: &EffectKind, k: usize, j: usize) -> Vec<String> {
+    let l = |s: &str| format!("fx{k}e{j}{s}");
+    let (a, b, c) = (l("a"), l("b"), l("c"));
+    match e {
+        EffectKind::Blur { radius } => vec![format!("gblur=sigma={}:steps={GBLUR_STEPS}", num(*radius as f64))],
+        EffectKind::Sharpen { amount, radius } => {
+            // `blend` stores expression results without clamping, so clip to 8 bits.
+            let x = format!("clip(A+(A-B)*{},0,255)", num(*amount as f64));
+            vec![format!(
+                "split[{a}][{b}];[{b}]gblur=sigma={}:steps={GBLUR_STEPS}[{c}];[{a}][{c}]blend=c0_expr='{x}':c1_expr='{x}':c2_expr='{x}':c3_expr='A'",
+                num(*radius as f64)
+            )]
+        }
+        EffectKind::Vignette { amount } => vec![format!(
+            // `vignette` drops alpha, so it shades a white copy that multiplies the clip.
+            "split[{a}][{b}];[{b}]drawbox=c=white:t=fill,format=rgb24,vignette=angle={}:dither=0,format=rgba[{c}];[{a}][{c}]blend=c0_mode=multiply:c1_mode=multiply:c2_mode=multiply:c3_mode=normal",
+            num(*amount as f64 * std::f64::consts::FRAC_PI_2)
+        )],
+        EffectKind::Lut { path, intensity } => {
+            let lut = format!("lut3d=file='{}':interp=trilinear", filter_path(path));
+            if *intensity >= 1.0 {
+                vec![lut]
+            } else {
+                vec![format!("split[{a}][{b}];[{b}]{lut}[{c}];[{c}][{a}]blend=all_mode=normal:all_opacity={}", num(*intensity as f64))]
+            }
+        }
+        EffectKind::ChromaKey { color, similarity, blend, spill } => {
+            let (_, u, v) = bt601_limited(*color);
+            let mut f = vec![
+                "format=yuva444p".to_string(),
+                format!("chromakey=color=0x80{u:02x}{v:02x}:yuv=1:similarity={}:blend={}", num(*similarity as f64), num(*blend as f64)),
+                "format=rgba".to_string(),
+            ];
+            if *spill > 0.0 {
+                let s = num(-*spill as f64);
+                f.push(if color[2] > color[1] {
+                    format!("despill=type=blue:mix=0.5:expand=0:red=0:green=0:blue={s}")
+                } else {
+                    format!("despill=type=green:mix=0.5:expand=0:red=0:green={s}:blue=0")
+                });
+            }
+            f
+        }
+        EffectKind::ColorWheels { lift, gamma, gain } => {
+            let ch = |i: usize| {
+                format!(
+                    "clip(pow(clip(val/maxval*{}+{},0,1),{}),0,1)*maxval",
+                    num((gain[i] - lift[i]) as f64),
+                    num(lift[i] as f64),
+                    num(1.0 / gamma[i] as f64)
+                )
+            };
+            vec![format!("lutrgb=r='{}':g='{}':b='{}'", ch(0), ch(1), ch(2))]
+        }
+        EffectKind::Curves { master, red, green, blue } => {
+            let pts = |c: &[CurvePoint]| c.iter().map(|p| format!("{}/{}", num(p[0] as f64), num(p[1] as f64))).collect::<Vec<_>>().join(" ");
+            let parts: Vec<String> = [("master", master), ("red", red), ("green", green), ("blue", blue)]
+                .iter()
+                .filter(|(_, c)| !kerf_core::model::curve_is_identity(c))
+                .map(|(n, c)| format!("{n}='{}'", pts(c)))
+                .collect();
+            vec![format!("curves=interp=pchip:{}", parts.join(":"))]
+        }
+    }
+}
+
+/// BT.601 limited-range Y'CbCr (0..255) of an RGB colour in 0..1, as the
+/// RGB to YUV conversion before `chromakey` produces it.
+fn bt601_limited(c: [f32; 3]) -> (u8, u8, u8) {
+    let [r, g, b] = c.map(|v| v as f64);
+    let q = |v: f64| v.round().clamp(0.0, 255.0) as u8;
+    (
+        q(16.0 + 65.481 * r + 128.553 * g + 24.966 * b),
+        q(128.0 - 37.797 * r - 74.203 * g + 112.0 * b),
+        q(128.0 + 112.0 * r - 93.786 * g - 18.214 * b),
+    )
+}
+
+/// A file path as a quoted filter option value: forward slashes, `:` and
+/// `'` escaped.
+fn filter_path(p: &Path) -> String {
+    p.to_string_lossy().replace('\\', "/").replace(':', "\\:").replace('\'', r"'\''")
 }
 
 /// The preview (Chromium) decodes video without a colour matrix tag as
@@ -403,10 +494,14 @@ pub fn plan(
             }
             f.push(format!("setpts=(PTS-STARTPTS)/{}", num(clip.speed)));
             f.push(format!("fps={}", rate_str(of)));
+            // Colour first, then the effect stack, then opacity: with effects the
+            // alpha multiplier is a second mixer so a key cannot discard it.
+            let effects: Vec<&EffectKind> = clip.active_effects().map(|e| &e.kind).collect();
             let dynamic = fading || clip.color_animated();
             let mixer = if dynamic { format!("colorchannelmixer@op{k}") } else { "colorchannelmixer".into() };
+            let alpha_mixer = if effects.is_empty() { mixer.clone() } else { format!("colorchannelmixer@al{k}") };
             if dynamic {
-                f.push(format!("sendcmd=c='{}'", mixer_commands(clip, &seg, frame_s, &mixer)));
+                f.push(format!("sendcmd=c='{}'", mixer_commands(clip, &seg, frame_s, &mixer, &alpha_mixer)));
             }
             let contrast_keys = !clip.keys_of(Param::Contrast).is_empty();
             let lv = format!("colorlevels@cl{k}");
@@ -422,19 +517,19 @@ pub fn plan(
                     num(t.crop_top as f64)
                 ));
             }
-            if animated {
-                // Transparent border: `perspective` repeats edge pixels outside the source.
-                f.push("format=rgba".into());
-                f.push(format!("pad=iw+{p2}:ih+{p2}:{PAD}:{PAD}:color=black@0", p2 = 2 * PAD));
-                f.push(format!("scale={}:{}:flags=bicubic", seq.settings.width, seq.settings.height));
-            } else {
+            // Effects work at the fitted size (sequence pixels at scale 1), so
+            // pixel radii mean the same in preview and export.
+            let (fw, fh) = (even(cw * fit), even(ch * fit));
+            if !effects.is_empty() {
+                f.push(format!("scale={fw}:{fh}:flags=bicubic"));
+            } else if !animated {
                 f.push(format!("scale={sw}:{sh}:flags=bicubic"));
-                f.push("format=rgba".into());
             }
+            f.push("format=rgba".into());
             let col = clip.color_at(seg.head as f64);
-            let needs_mixer = !col.is_identity() || clip.opacity < 1.0 || dynamic;
             let alpha = clip.param_at(Param::Opacity, seg.head as f64);
-            if needs_mixer {
+            let alpha_here = effects.is_empty() && (clip.opacity < 1.0 || dynamic);
+            if !col.is_identity() || dynamic || alpha_here {
                 let m = col.matrix();
                 f.push(format!(
                     "{mixer}=rr={}:rg={}:rb={}:gr={}:gg={}:gb={}:br={}:bg={}:bb={}:aa={}",
@@ -447,7 +542,7 @@ pub fn plan(
                     num(m[2][0] as f64),
                     num(m[2][1] as f64),
                     num(m[2][2] as f64),
-                    num(alpha as f64)
+                    num(if effects.is_empty() { alpha as f64 } else { 1.0 })
                 ));
             }
             if col.contrast != 0.0 || contrast_keys {
@@ -455,6 +550,17 @@ pub fn plan(
                     levels(col.contrast_slope() as f64).iter().flat_map(|(n, v)| ["r", "g", "b"].map(|c| format!("{c}{n}={}", num(*v)))).collect();
                 let name = if contrast_keys { lv.as_str() } else { "colorlevels" };
                 f.push(format!("{name}={}", opts.join(":")));
+            }
+            for (j, e) in effects.iter().enumerate() {
+                f.extend(effect_filters(e, k, j));
+            }
+            if !effects.is_empty() {
+                if clip.opacity < 1.0 || dynamic {
+                    f.push(format!("{alpha_mixer}=aa={}", num(alpha as f64)));
+                }
+                if !animated && (sw, sh) != (fw, fh) {
+                    f.push(format!("scale={sw}:{sh}:flags=bicubic"));
+                }
             }
             if clip.fade_in > seg.head {
                 f.push(format!("fade=t=in:st=0:d={}:alpha=1", num(sf.frames_to_seconds(clip.fade_in - seg.head))));
@@ -467,6 +573,9 @@ pub fn plan(
             }
             let theta = (t.rotation as f64).to_radians();
             if animated {
+                // Transparent border: `perspective` repeats edge pixels outside the source.
+                f.push(format!("pad=iw+{p2}:ih+{p2}:{PAD}:{PAD}:color=black@0", p2 = 2 * PAD));
+                f.push(format!("scale={}:{}:flags=bicubic", seq.settings.width, seq.settings.height));
                 f.push(perspective(clip, seg.head, cw, ch, fit, w, h));
             } else if theta.abs() > 1e-9 {
                 let a = num(theta);

@@ -432,6 +432,25 @@ pub fn json_read(path: String) -> CmdResult<String> {
     std::fs::read_to_string(&p).map_err(|e| CommandError::new("ioFailed", e))
 }
 
+/// Text files the frontend parses itself (LUTs, subtitles).
+const TEXT_EXTENSIONS: [&str; 3] = ["cube", "srt", "vtt"];
+
+#[tauri::command(async)]
+pub fn text_read(path: String) -> CmdResult<String> {
+    let p = PathBuf::from(&path);
+    let ext = p.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    if !TEXT_EXTENSIONS.contains(&ext.as_str()) {
+        return Err(CommandError::new("ioFailed", format!("unsupported file type: .{ext}")));
+    }
+    let len = std::fs::metadata(&p).map_err(|e| CommandError::new("ioFailed", e))?.len();
+    if len > 64 << 20 {
+        return Err(CommandError::new("ioFailed", "file too large"));
+    }
+    let bytes = std::fs::read(&p).map_err(|e| CommandError::new("ioFailed", e))?;
+    // Subtitle files are often Windows-1252; keep what decodes and replace the rest.
+    Ok(String::from_utf8_lossy(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes)).into_owned())
+}
+
 #[tauri::command(async)]
 pub fn json_write(path: String, text: String) -> CmdResult<()> {
     let p = json_path(&path)?;

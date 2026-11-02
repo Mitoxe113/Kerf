@@ -148,7 +148,20 @@ export interface Clip {
   label: LabelColor;
   /** Animated properties; a property with keys ignores its static value. */
   keys: Partial<Record<KeyParam, Keyframe[]>>;
+  effects?: Effect[];
 }
+
+export type CurvePoint = [number, number];
+export type Rgb = [number, number, number];
+export type EffectKind =
+  | { type: "blur"; radius: number }
+  | { type: "sharpen"; amount: number; radius: number }
+  | { type: "vignette"; amount: number }
+  | { type: "lut"; path: string; intensity: number }
+  | { type: "chromaKey"; color: Rgb; similarity: number; blend: number; spill: number }
+  | { type: "colorWheels"; lift: Rgb; gamma: Rgb; gain: Rgb }
+  | { type: "curves"; master: CurvePoint[]; red: CurvePoint[]; green: CurvePoint[]; blue: CurvePoint[] };
+export type Effect = { id: Uuid; enabled: boolean } & EffectKind;
 
 export type ColorParam = "exposure" | "contrast" | "saturation" | "temperature" | "tint";
 export type KeyParam = "x" | "y" | "scale" | "rotation" | "opacity" | "volume" | ColorParam;
@@ -287,6 +300,7 @@ export type EditCommand =
   | { type: "setMediaFavorite"; media: Uuid[]; favorite: boolean }
   | { type: "updateMedia"; media: Uuid[]; patch: MediaPatch }
   | { type: "setSourceMarks"; media: Uuid; marks: SourceMarks }
+  | { type: "setEffects"; sequence: Uuid; clips: Uuid[]; effects: Effect[] }
   | { type: "moveMediaToBin"; media: Uuid[]; bin: Uuid | null }
   | { type: "relinkMedia"; media: Uuid; path: string }
   | { type: "createBin"; name: string; parent: Uuid | null }

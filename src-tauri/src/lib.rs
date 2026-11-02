@@ -107,6 +107,7 @@ pub fn run() {
             commands::open_path,
             commands::json_read,
             commands::json_write,
+            commands::text_read,
             commands::export_clear,
             commands::recovery_list,
             commands::recovery_restore,
