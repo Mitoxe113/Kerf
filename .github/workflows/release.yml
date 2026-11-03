@@ -6,8 +6,10 @@ name: Release
 # every installed Kerf finds; a manual run leaves a draft unless "publish" is
 # set, then publishing creates the tag v<version> on the built commit.
 #
-# Needs the secrets TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD
-# (the updater key); without them the build fails and nothing is published.
+# The secrets TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+# (the updater key) sign the update package. Without them the release gets
+# the installer only, no latest.json; the run warns and the release notes say
+# so. Installed copies then find no update until a later release carries one.
 # Optional, for code signing: WINDOWS_CERTIFICATE (base64 .pfx),
 # WINDOWS_CERTIFICATE_PASSWORD. Without them the installer is unsigned
 # (SmartScreen warns). macOS and Linux are not released.
@@ -37,6 +39,7 @@ jobs:
       - id: draft
         env:
           GH_TOKEN: ${{ github.token }}
+          HAS_UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
         run: |
           version=$(node -p "require('./src-tauri/tauri.conf.json').version")
           if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
@@ -45,12 +48,18 @@ jobs:
           fi
           # Release notes: this version's section of CHANGELOG.md.
           notes=$(awk -v v="$version" 'index($0, "## [" v "]") == 1 { on = 1; next } /^## \[/ { on = 0 } on' CHANGELOG.md)
-          body=$(printf 'Installer für Windows (64 Bit). Kerf braucht ein installiertes FFmpeg 7 oder neuer, z. B. `winget install Gyan.FFmpeg` (siehe README).\n%s' "$notes")
-          # A rerun uploads into the existing draft.
+          head='Installer für Windows (64 Bit). Kerf braucht ein installiertes FFmpeg 7 oder neuer, z. B. `winget install Gyan.FFmpeg` (siehe README).'
+          if [ "$HAS_UPDATER_KEY" != true ]; then
+            head="$head"$'\n\n''Dieses Release enthält keine Update-Daten (`latest.json`), weil beim Build kein Updater-Schlüssel hinterlegt war. Die automatische Update-Prüfung findet es deshalb nicht; spätere Versionen mit Update-Daten findet sie.'
+          fi
+          body=$(printf '%s\n%s' "$head" "$notes")
+          # A rerun uploads into the existing draft and refreshes its notes.
           id=$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate --jq "map(select(.draft and .tag_name == \"v$version\"))[0].id // empty" | head -1)
           if [ -z "$id" ]; then
             id=$(gh api "repos/$GITHUB_REPOSITORY/releases" -f tag_name="v$version" -f target_commitish="$GITHUB_SHA" \
               -f name="Kerf $version" -F draft=true -f body="$body" --jq .id)
+          else
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$id" -f target_commitish="$GITHUB_SHA" -f body="$body" --jq .id > /dev/null
           fi
           echo "id=$id" >> "$GITHUB_OUTPUT"
 
@@ -78,6 +87,18 @@ jobs:
             echo "SIGNING_ARGS=--config $RUNNER_TEMP/signing.json" >> "$GITHUB_ENV"
           fi
           exit 0
+      - name: Updater key
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "UPDATER=true" >> "$GITHUB_ENV"
+          else
+            echo "::warning::TAURI_SIGNING_PRIVATE_KEY ist nicht hinterlegt: Das Release bekommt nur den Installer, kein Update-Paket und kein latest.json."
+            echo "UPDATER=false" >> "$GITHUB_ENV"
+            echo "SIGNING_ARGS=${SIGNING_ARGS:+$SIGNING_ARGS }--config src-tauri/tauri.unsigned.conf.json" >> "$GITHUB_ENV"
+          fi
       - run: npm ci
       - uses: tauri-apps/tauri-action@v1
         env:
@@ -86,6 +107,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           releaseId: ${{ needs.draft.outputs.id }}
+          uploadUpdaterJson: ${{ env.UPDATER }}
+          uploadUpdaterSignatures: ${{ env.UPDATER }}
           args: ${{ env.SIGNING_ARGS }}
 
   publish:

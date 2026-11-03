@@ -40,5 +40,5 @@ Erste Veröffentlichung, nur für Windows (64 Bit). Kerf braucht ein installiert
 - Vorschau-Medien, die nicht laden, landen im Protokoll statt nur einen schwarzen Monitor zu hinterlassen
 
 ### Bekannte Einschränkungen
-- Code-Signing des Installers greift nur mit einem als Secret hinterlegten Zertifikat; ohne Zertifikat warnt Windows SmartScreen beim ersten Start (*Weitere Informationen › Trotzdem ausführen*). Update-Pakete sind unabhängig davon mit dem Updater-Schlüssel signiert und werden vor der Installation geprüft
+- Code-Signing des Installers greift nur mit einem als Secret hinterlegten Zertifikat; ohne Zertifikat warnt Windows SmartScreen beim ersten Start (*Weitere Informationen › Trotzdem ausführen*). Unabhängig davon installiert die Update-Funktion nur Pakete, deren Signatur zum Updater-Schlüssel in der App passt
 - Keine Builds für macOS und Linux

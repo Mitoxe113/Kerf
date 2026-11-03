@@ -1,4 +1,4 @@
-﻿[workspace]
+[workspace]
 resolver = "2"
 members = ["crates/kerf-core", "crates/kerf-media", "crates/kerf-library", "crates/kerf-assets", "src-tauri"]
 
