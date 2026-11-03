@@ -1,0 +1,54 @@
+name: Release
+
+# A tag v1.2.3 (or a manual run) builds signed installers for all platforms
+# and puts them, with latest.json for the in-app updater, into a draft
+# release. Publishing the draft makes it the update every Kerf finds.
+# Needs the secrets TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Windows, os: windows-latest, args: "", targets: "" }
+          - { name: macOS (Universal), os: macos-latest, args: "--target universal-apple-darwin", targets: "aarch64-apple-darwin,x86_64-apple-darwin" }
+          - { name: Linux, os: ubuntu-22.04, args: "", targets: "" }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.targets }}
+      - uses: Swatinem/rust-cache@v2
+      - name: System libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev patchelf
+      - run: npm ci
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: v__VERSION__
+          releaseName: Kerf __VERSION__
+          releaseBody: Installer für Windows, macOS und Linux. Kerf braucht ein installiertes FFmpeg (siehe README).
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}

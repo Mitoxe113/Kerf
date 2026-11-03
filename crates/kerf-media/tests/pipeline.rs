@@ -15,6 +15,8 @@ use uuid::Uuid;
 fn tools() -> Option<Tools> {
     match Tools::discover() {
         Ok(t) => Some(t),
+        // CI sets KERF_REQUIRE_FFMPEG so a missing FFmpeg fails instead of passing silently.
+        Err(e) if std::env::var_os("KERF_REQUIRE_FFMPEG").is_some() => panic!("ffmpeg required: {e}"),
         Err(_) => {
             eprintln!("ffmpeg not found - skipping media pipeline test");
             None
