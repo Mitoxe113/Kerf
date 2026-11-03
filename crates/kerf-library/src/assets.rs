@@ -223,6 +223,14 @@ impl Library {
             .optional()?)
     }
 
+    /// The asset whose file is `path` (exact match).
+    pub fn asset_by_path(&self, path: &str) -> Result<Option<AssetRecord>> {
+        if path.is_empty() {
+            return Ok(None);
+        }
+        Ok(self.conn().query_row(&format!("SELECT {COLS} FROM assets WHERE file_path = ?1 LIMIT 1"), params![path], row_asset).optional()?)
+    }
+
     pub fn assets(&self, q: &AssetQuery) -> Result<Vec<AssetRecord>> {
         let text = q.text.as_deref().map(|t| format!("%{}%", t.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")));
         let mut st = self.conn().prepare(&format!(

@@ -3,6 +3,7 @@
 mod commands;
 mod export_jobs;
 mod library;
+mod media_library;
 mod media_jobs;
 mod recovery;
 mod versions;
@@ -122,6 +123,7 @@ pub fn run() {
                 }),
             };
             app.manage(state);
+            app.manage(media_library::MediaHub::new());
             let handle = app.handle();
             let state = handle.state::<AppState>();
             state.media.start(handle);
@@ -198,6 +200,25 @@ pub fn run() {
             library::favorite_set,
             library::recent_list,
             library::recent_touch,
+            media_library::media_providers,
+            media_library::media_set_key,
+            media_library::media_clear_key,
+            media_library::media_search,
+            media_library::media_thumb,
+            media_library::media_download,
+            media_library::media_download_cancel,
+            media_library::media_downloads,
+            media_library::media_downloads_clear,
+            media_library::media_open_link,
+            media_library::asset_list,
+            media_library::asset_favorite,
+            media_library::asset_delete,
+            media_library::collection_list,
+            media_library::collection_create,
+            media_library::collection_delete,
+            media_library::collection_set,
+            media_library::license_entries,
+            media_library::license_report,
             library::font_list,
             library::font_import,
             library::font_remove,
