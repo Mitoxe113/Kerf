@@ -19,6 +19,8 @@ tauri-build = { version = "2", features = [] }
 kerf-core.workspace = true
 kerf-media.workspace = true
 kerf-library.workspace = true
+kerf-assets.workspace = true
+url = "2"
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
@@ -29,3 +31,12 @@ tauri-plugin-log = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+
+# OS credential stores for provider API keys (Keychain, Windows Credential
+# Manager, Secret Service on Linux).
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3.6", features = ["apple-native"] }
+[target.'cfg(windows)'.dependencies]
+keyring = { version = "3.6", features = ["windows-native"] }
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+keyring = { version = "3.6", features = ["sync-secret-service", "crypto-rust"] }
