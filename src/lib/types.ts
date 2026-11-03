@@ -115,6 +115,35 @@ export interface TextStyle {
   boxPadding: number;
   /** Lines wrap at this fraction of the frame width. */
   wrap: number;
+  /** Extra space between characters, px at 1080 lines (older projects: absent = 0). */
+  tracking?: number;
+  /** 100..900; 0 or absent = from `bold`. */
+  weight?: number;
+  case?: TextCase;
+  /** Second fill colour of a linear gradient. */
+  gradient?: Rgb | null;
+  gradientAngle?: number;
+  shadowColor?: Rgb;
+  shadowOpacity?: number;
+  /** Offset in px at 1080 lines; absent = straight down by 0.4 × blur. */
+  shadowOffset?: [number, number] | null;
+  glow?: number;
+  glowColor?: Rgb;
+}
+
+export type TextCase = "asTyped" | "upper" | "lower";
+export type AnimUnit = "char" | "word" | "line";
+export type AnimKind = "none" | "fade" | "slideUp" | "slideDown" | "slideLeft" | "slideRight" | "scale" | "typewriter" | "spread";
+export interface AnimPhase {
+  kind: AnimKind;
+  frames: number;
+  stagger: number;
+  ease: Ease;
+}
+export interface TextAnimation {
+  unit: AnimUnit;
+  intro: AnimPhase;
+  outro: AnimPhase;
 }
 
 export interface TitleSpec {
@@ -125,6 +154,8 @@ export interface TitleSpec {
   y: number;
   width: number;
   height: number;
+  /** Per character/word/line animation (absent = static). */
+  animation?: TextAnimation;
 }
 
 export interface Cue {
@@ -518,6 +549,8 @@ export interface ExportSettings {
   subtitles?: SubtitleOutput;
   /** Freshly drawn title PNGs by media id (see engine/text.ts titleFiles). */
   titleFiles?: Record<Uuid, string>;
+  /** Animated titles: one PNG per source frame, by clip id (see engine/text.ts titleSequences). */
+  titleSequences?: Record<Uuid, string[]>;
   /** Normalise the mix to this loudness (two passes). */
   loudness?: LoudnessTarget | null;
   /** Encode the picture in parts side by side, joined without re-encoding. */
@@ -637,7 +670,7 @@ export interface CommandError {
 
 // --- local library (kerf-library) ---------------------------------------------------
 
-export type PresetKind = "effects" | "transition" | "textStyle";
+export type PresetKind = "effects" | "transition" | "textStyle" | "titleTemplate";
 export type ItemKind = "effect" | "preset" | "transition" | "font" | "template" | "asset";
 
 export interface Preset {
@@ -647,9 +680,29 @@ export interface Preset {
   name: string;
   category: string;
   favorite: boolean;
-  /** "effects": Effect[]; "transition": Transition; "textStyle": object. */
+  /** "effects": Effect[]; "transition": Transition; "textStyle": TextStyle; "titleTemplate": TitleSpec. */
   data: unknown;
   version: number;
   createdAt: number;
   updatedAt: number;
+}
+
+/** A font face found on the system or imported into Kerf (kerf_library::fonts::FontFace). */
+export interface FontFaceInfo {
+  family: string;
+  style: string;
+  fullName: string;
+  weight: number;
+  italic: boolean;
+  variable: boolean;
+  axes: { tag: string; min: number; default: number; max: number }[];
+  path: string;
+  index: number;
+  source: "system" | "imported" | "bundled";
+  /** OS/2 embedding permission as stated in the file ("" = not stated). */
+  embedding: "" | "installable" | "restricted" | "previewAndPrint" | "editable";
+  license: string;
+  licenseUrl: string;
+  designer: string;
+  vendorUrl: string;
 }

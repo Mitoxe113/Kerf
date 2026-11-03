@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 pub mod assets;
+pub mod fonts;
 
 #[derive(Debug, thiserror::Error)]
 pub enum LibraryError {
@@ -71,8 +72,10 @@ pub const PRESET_KINDS: &[&str] = &[
     "effects",
     // A transition with its settings: JSON `Transition`.
     "transition",
-    // A text style: JSON object (validated by the frontend's text model).
+    // A text style: JSON `TextStyle`.
     "textStyle",
+    // A title layout (text, style, position, animation): JSON `TitleSpec`.
+    "titleTemplate",
 ];
 
 /// Item kinds that can be favourites or recents.
@@ -153,10 +156,14 @@ pub fn validate_data(kind: &str, data: &serde_json::Value) -> Result<serde_json:
             Ok(serde_json::to_value(t).expect("transition serializes"))
         }
         "textStyle" => {
-            if !data.is_object() {
-                return Err(invalid("text style must be an object"));
-            }
-            Ok(data.clone())
+            let t: kerf_core::text::TextStyle = serde_json::from_value(data.clone()).map_err(|e| invalid(format!("text style: {e}")))?;
+            let t = t.sanitized().ok_or_else(|| invalid("text style"))?;
+            Ok(serde_json::to_value(t).expect("text style serializes"))
+        }
+        "titleTemplate" => {
+            let t: kerf_core::text::TitleSpec = serde_json::from_value(data.clone()).map_err(|e| invalid(format!("title template: {e}")))?;
+            let t = t.sanitized().ok_or_else(|| invalid("title template"))?;
+            Ok(serde_json::to_value(t).expect("title serializes"))
         }
         _ => Err(invalid(format!("unknown preset kind {kind}"))),
     }
@@ -461,6 +468,22 @@ mod tests {
         p.data = json!([]);
         assert!(lib.save_preset(&p, 0).is_err());
         p.kind = "script".into();
+        assert!(lib.save_preset(&p, 0).is_err());
+    }
+
+    #[test]
+    fn title_templates_are_validated() {
+        let lib = Library::open_in_memory().unwrap();
+        let mut p = fx_preset("Bauchbinde");
+        p.kind = "titleTemplate".into();
+        p.data = json!({ "text": "Name\u{7}", "style": { "size": 9999, "font": "Inter Variable" }, "x": 0.1, "y": 0.8, "width": 1920, "height": 1080 });
+        let s = lib.save_preset(&p, 0).unwrap();
+        assert_eq!(s.data["text"], json!("Name"));
+        assert!(s.data["style"]["size"].as_f64().unwrap() <= 1000.0);
+        p.data = json!({ "text": "x", "width": 0, "height": 1080 });
+        assert!(lib.save_preset(&p, 0).is_err(), "invalid frame size");
+        p.kind = "textStyle".into();
+        p.data = json!("not a style");
         assert!(lib.save_preset(&p, 0).is_err());
     }
 

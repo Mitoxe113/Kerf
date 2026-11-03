@@ -89,6 +89,10 @@ pub struct ExportSettings {
     /// stored ones so the export always matches the preview's drawing code.
     #[serde(default)]
     pub title_files: HashMap<Uuid, PathBuf>,
+    /// Animated titles: one PNG per source frame (clip id -> frames from
+    /// source frame 0), drawn by the UI with the preview's code.
+    #[serde(default)]
+    pub title_sequences: HashMap<Uuid, Vec<PathBuf>>,
     /// Normalise the mix's loudness (EBU R128, two passes).
     #[serde(default)]
     pub loudness: Option<LoudnessTarget>,
@@ -1407,6 +1411,7 @@ fn plan_one(
     let mut args: Vec<OsString> = ["-hide_banner", "-nostdin", "-loglevel", "warning", "-y"].iter().map(OsString::from).collect();
     let mut chains: Vec<String> = Vec::new();
     let mut inputs = 0usize;
+    let mut files: Vec<(PathBuf, String)> = Vec::new();
 
     chains.push(format!(
         "color=c={}:s={}x{}:r={}:d={},format=rgba[base]",
@@ -1486,7 +1491,16 @@ fn plan_one(
                 let last_used = sf.frames_to_seconds(clip.source_in) + sf.frames_to_seconds(clip.duration - 1) * clip.speed;
                 let read_at = src_start.clamp(0.0, last_used.max(0.0));
                 let skip = (src_start - read_at).max(0.0) / clip.speed;
-                if image {
+                let title_seq = if image { s.title_sequences.get(&clip.id).filter(|v| !v.is_empty()) } else { None };
+                if let Some(frames) = title_seq {
+                    // Animated title: its frames for this segment, one per sequence frame.
+                    let list = work_dir.join(format!("title-{}.ffconcat", uuid::Uuid::new_v4()));
+                    files.push((list.clone(), title_list(frames, clip.source_in + seg.head, seg.len + 2, sf)));
+                    args.extend(["-f", "concat", "-safe", "0"].map(OsString::from));
+                    args.extend(["-t".into(), num(seg_len + 2.0 * frame_s).into()]);
+                    args.push("-i".into());
+                    args.push(list.into_os_string());
+                } else if image {
                     args.extend(["-loop", "1", "-framerate"].map(OsString::from));
                     args.push(rate_str(of).into());
                     args.extend(["-t".into(), num(seg_len + 2.0 * frame_s).into()]);
@@ -1494,8 +1508,10 @@ fn plan_one(
                     args.extend(["-ss".into(), num(read_at).into()]);
                     args.extend(["-t".into(), num((seg_len + skip) * clip.speed + 2.0 * frame_s).into()]);
                 }
-                args.push("-i".into());
-                args.push(s.title_files.get(&asset.id).unwrap_or(&asset.path).clone().into_os_string());
+                if title_seq.is_none() {
+                    args.push("-i".into());
+                    args.push(s.title_files.get(&asset.id).unwrap_or(&asset.path).clone().into_os_string());
+                }
                 inputs += 1;
                 if let Some(p) = info.video.as_ref().filter(|_| !image).and_then(assumed_color) {
                     f.push(p);
@@ -1671,7 +1687,6 @@ fn plan_one(
     }
 
     // --- subtitles ------------------------------------------------------------
-    let mut files: Vec<(PathBuf, String)> = Vec::new();
     let cues = cues_in(seq, t0, t1);
     if !s.subtitles.burn.is_empty() {
         // All cue images in one concat input: a frame per cue, blank frames in between.
@@ -1890,6 +1905,31 @@ fn plan_one(
 
 /// Concat list (ffconcat) of burned-in cue images over `t0..t1`, with the blank
 /// frame in the gaps and once more at the end so the last cue keeps its length.
+/// ffconcat list of `count` frames of an animated title from source frame
+/// `first` (frames before 0 or past the end hold the nearest one); runs of the
+/// same file become one entry. The last entry is repeated, as the concat
+/// demuxer ignores the duration of the final file.
+fn title_list(frames: &[PathBuf], first: Frame, count: Frame, sf: Rational) -> String {
+    let mut out = String::from("ffconcat version 1.0\n");
+    let at = |i: Frame| &frames[(first + i).clamp(0, frames.len() as Frame - 1) as usize];
+    let mut i = 0;
+    let mut last = None;
+    while i < count.max(1) {
+        let p = at(i);
+        let mut n = 1;
+        while i + n < count && at(i + n) == p {
+            n += 1;
+        }
+        out.push_str(&format!("file {}\nduration {}\n", concat_path(p), num(sf.frames_to_seconds(n))));
+        last = Some(p);
+        i += n;
+    }
+    if let Some(p) = last {
+        out.push_str(&format!("file {}\n", concat_path(p)));
+    }
+    out
+}
+
 fn burn_list(cues: &[BurnCue], blank: &Path, t0: Frame, t1: Frame, sf: Rational) -> String {
     let quote = concat_path;
     let mut sorted: Vec<&BurnCue> = cues.iter().filter(|c| c.end > t0 && c.start < t1 && c.end > c.start).collect();
@@ -2311,6 +2351,18 @@ mod tests {
         (p, seq)
     }
 
+    #[test]
+    fn title_list_holds_ends_and_merges_runs() {
+        let f: Vec<PathBuf> = ["a.png", "b.png", "b.png", "c.png"].iter().map(PathBuf::from).collect();
+        let sf = Rational::new(25, 1);
+        let l = title_list(&f, -1, 6, sf);
+        let entries: Vec<&str> = l.lines().filter(|x| x.starts_with("file")).collect();
+        // -1 and 0 hold a, then b b, then c (3 and past the end), last repeated.
+        assert_eq!(entries.len(), 4, "{l}");
+        assert!(entries[0].contains("a.png") && entries[1].contains("b.png") && entries[2].contains("c.png") && entries[3].contains("c.png"));
+        assert!(l.contains("duration 0.08\n"), "two frames of a: {l}");
+    }
+
     fn settings() -> ExportSettings {
         ExportSettings {
             output: "C:/out/film.mp4".into(),
@@ -2327,6 +2379,7 @@ mod tests {
             use_in_out: false,
             subtitles: Default::default(),
             title_files: Default::default(),
+            title_sequences: Default::default(),
             loudness: None,
             segmented: false,
         }

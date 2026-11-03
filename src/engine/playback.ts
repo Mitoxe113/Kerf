@@ -848,7 +848,9 @@ export class PlaybackEngine {
     } else {
       const title = this.media.get(c.mediaId)?.title;
       const v = title ? undefined : this.voices.get(`video:${s.path}${c.id}`);
-      src = title ? titleCanvas(this.titleOverrides.get(c.mediaId) ?? title) : (v?.el as LayerSource | undefined);
+      src = title
+        ? titleCanvas(this.titleOverrides.get(c.mediaId) ?? title, { frame: c.sourceIn + (frame - c.start), duration: c.sourceIn + c.duration }, `${s.path}${c.id}`)
+        : (v?.el as LayerSource | undefined);
       if (!src) return null;
       [sw, sh] =
         src instanceof HTMLVideoElement ? [src.videoWidth, src.videoHeight] : src instanceof HTMLImageElement ? [src.naturalWidth, src.naturalHeight] : [src.width, src.height];

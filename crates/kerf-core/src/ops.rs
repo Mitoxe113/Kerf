@@ -2935,7 +2935,7 @@ mod tests {
         let mut a = video_asset(0.04, false);
         a.kind = MediaKind::Image;
         a.path = "titles/a.png".into();
-        a.title = Some(TitleSpec { text: "Hallo".into(), style: TextStyle::default(), x: 0.5, y: 0.5, width: 1280, height: 720 });
+        a.title = Some(TitleSpec { text: "Hallo".into(), style: TextStyle::default(), x: 0.5, y: 0.5, width: 1280, height: 720, animation: Default::default() });
         a
     }
 

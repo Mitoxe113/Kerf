@@ -11,6 +11,7 @@ import type {
   EditCommand,
   ExportJob,
   ExportSettings,
+  FontFaceInfo,
   HistoryList,
   ItemKind,
   MediaAsset,
@@ -114,6 +115,9 @@ export const api = {
   favoriteSet: (kind: ItemKind, key: string, on: boolean) => invoke<void>("favorite_set", { kind, key, on }),
   recentList: (kind: ItemKind) => invoke<string[]>("recent_list", { kind }),
   recentTouch: (kind: ItemKind, key: string) => invoke<void>("recent_touch", { kind, key }),
+  fontList: (refresh = false) => invoke<FontFaceInfo[]>("font_list", { refresh }),
+  fontImport: (paths: string[]) => invoke<FontFaceInfo[]>("font_import", { paths }),
+  fontRemove: (path: string) => invoke<void>("font_remove", { path }),
 };
 
 export interface MediaJobEvent {

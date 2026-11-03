@@ -215,6 +215,7 @@ fn edit_and_render_real_media() {
         use_in_out: false,
         subtitles: Default::default(),
         title_files: Default::default(),
+        title_sequences: Default::default(),
         loudness: None,
         segmented: false,
     };
@@ -292,6 +293,7 @@ fn cancelled_render_leaves_no_file() {
         use_in_out: false,
         subtitles: Default::default(),
         title_files: Default::default(),
+        title_sequences: Default::default(),
         loudness: None,
         segmented: false,
     };
@@ -383,6 +385,7 @@ fn keyframed_position_opacity_and_volume_render() {
         use_in_out: false,
         subtitles: Default::default(),
         title_files: Default::default(),
+        title_sequences: Default::default(),
         loudness: None,
         segmented: false,
     };
@@ -443,6 +446,7 @@ fn animated_colour_renders() {
         use_in_out: false,
         subtitles: Default::default(),
         title_files: Default::default(),
+        title_sequences: Default::default(),
         loudness: None,
         segmented: false,
     };
@@ -505,6 +509,7 @@ fn effect_stack_renders() {
         use_in_out: false,
         subtitles: Default::default(),
         title_files: Default::default(),
+        title_sequences: Default::default(),
         loudness: None,
         segmented: false,
     };
@@ -561,6 +566,7 @@ fn catalog_effects_render() {
         use_in_out: false,
         subtitles: Default::default(),
         title_files: Default::default(),
+        title_sequences: Default::default(),
         loudness: None,
         segmented: false,
     };
@@ -641,6 +647,7 @@ fn subtitles_burn_embed_and_sidecar() {
             embed: true,
         },
         title_files: Default::default(),
+        title_sequences: Default::default(),
         loudness: None,
         segmented: false,
     };
@@ -720,6 +727,7 @@ fn transitions_render() {
             use_in_out: range.is_some(),
             subtitles: Default::default(),
             title_files: Default::default(),
+            title_sequences: Default::default(),
             loudness: None,
             segmented: false,
         };
@@ -844,6 +852,7 @@ fn audio_effects_and_loudness_render() {
             use_in_out: false,
             subtitles: Default::default(),
             title_files: Default::default(),
+            title_sequences: Default::default(),
             loudness,
             segmented: false,
         };
@@ -966,6 +975,7 @@ fn reverse_and_speed_ramps_render() {
             use_in_out: false,
             subtitles: Default::default(),
             title_files: Default::default(),
+            title_sequences: Default::default(),
             loudness: None,
             segmented: false,
         };
@@ -1099,6 +1109,7 @@ fn nested_sequences_render() {
         use_in_out: false,
         subtitles: Default::default(),
         title_files: Default::default(),
+        title_sequences: Default::default(),
         loudness: None,
         segmented: false,
     };
@@ -1211,6 +1222,7 @@ fn segmented_export_matches_one_piece() {
             use_in_out: false,
             subtitles: render::SubtitleOutput { embed: true, ..Default::default() },
             title_files: Default::default(),
+            title_sequences: Default::default(),
             loudness: Some(LoudnessTarget { integrated: -20.0, true_peak: -1.0 }),
             segmented,
         };
@@ -1295,7 +1307,7 @@ fn blend_modes_render() {
             output: file.clone(), video_codec: VideoCodec::H264, hardware: false, width: 320, height: 180,
             fps: Rational::new(25, 1), rate: RateControl::Quality { crf: 10 }, audio_codec: AudioCodec::Aac,
             audio_bitrate_kbps: 192, sample_rate: 48_000, audio_channels: 2, use_in_out: false,
-            subtitles: Default::default(), title_files: Default::default(), loudness: None, segmented: false,
+            subtitles: Default::default(), title_files: Default::default(), title_sequences: Default::default(), loudness: None, segmented: false,
         };
         let plan = render::plan(p, p.sequence(seq).unwrap(), &export, d, &[]).unwrap();
         let mut log = String::new();
@@ -1319,4 +1331,46 @@ fn blend_modes_render() {
         let secs: f64 = dur.parse().unwrap_or(0.0);
         assert!((secs - 2.0).abs() < 0.05, "{mode:?}: length {dur}");
     }
+}
+
+#[test]
+fn animated_title_frames_render() {
+    let Some(tools) = tools() else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    let (dark, light) = (d.join("dark.png"), d.join("light.png"));
+    ffmpeg(&tools, &["-f", "lavfi", "-i", "color=c=0x202020:s=320x180", "-frames:v", "1", "-y", &dark.to_string_lossy()]);
+    ffmpeg(&tools, &["-f", "lavfi", "-i", "color=c=0xe0e0e0:s=320x180", "-frames:v", "1", "-y", &light.to_string_lossy()]);
+    let still = import(&tools, &dark, &d.join("cache"));
+    let still_id = still.id;
+    let mut p = Project::new("t", 0);
+    p.media.push(still);
+    let seq = p.active_sequence;
+    let settings = SequenceSettings { width: 320, height: 180, fps: Rational::new(25, 1), sample_rate: 48_000 };
+    kerf_core::ops::apply(&mut p, &EditCommand::UpdateSequenceSettings { sequence: seq, settings }).unwrap();
+    let clip = kerf_core::ops::apply(&mut p, &EditCommand::PlaceMedia {
+        sequence: seq, media: still_id, video_track: None, audio_track: None, at: 0,
+        mode: PlaceMode::Overwrite, source_in: Some(0), source_out: Some(50), match_sequence: false,
+    })
+    .unwrap()
+    .created[0];
+    // Source frames 0..24 dark, 25..49 light.
+    let frames: Vec<std::path::PathBuf> = (0..50).map(|i| if i < 25 { dark.clone() } else { light.clone() }).collect();
+    let file = d.join("anim.mp4");
+    let export = ExportSettings {
+        output: file.clone(), video_codec: VideoCodec::H264, hardware: false, width: 320, height: 180,
+        fps: Rational::new(25, 1), rate: RateControl::Quality { crf: 10 }, audio_codec: AudioCodec::Aac,
+        audio_bitrate_kbps: 192, sample_rate: 48_000, audio_channels: 2, use_in_out: false,
+        subtitles: Default::default(), title_files: Default::default(),
+        title_sequences: [(clip, frames)].into_iter().collect(), loudness: None, segmented: false,
+    };
+    let plan = render::plan(&p, p.sequence(seq).unwrap(), &export, d, &[]).unwrap();
+    let mut log = String::new();
+    let res = render::render_logged(&tools, &plan, &AtomicBool::new(false), |_| {}, &mut log);
+    assert!(res.is_ok(), "{res:?}\n{log}");
+    let (a, b) = (mean_luma(&tools, &file, 0.5), mean_luma(&tools, &file, 1.5));
+    eprintln!("first half {a:.1}, second half {b:.1}");
+    assert!(a < 50.0 && b > 200.0, "frames follow the sequence: {a:.1} {b:.1}");
+    let secs: f64 = probe_entries(&tools, &file, &["-show_entries", "format=duration"]).parse().unwrap_or(0.0);
+    assert!((secs - 2.0).abs() < 0.05, "length {secs}");
 }

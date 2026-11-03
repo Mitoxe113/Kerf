@@ -84,12 +84,17 @@ pub fn run() {
                 versions: data_root.join("versions"),
                 stills: data_root.join("stills"),
                 work: cache_root.join("work"),
+                fonts: data_root.join("fonts"),
+                assets: data_root.join("assets"),
             };
-            for dir in [&paths.cache, &paths.recovery, &paths.versions, &paths.stills, &paths.work] {
+            for dir in [&paths.cache, &paths.recovery, &paths.versions, &paths.stills, &paths.work, &paths.fonts, &paths.assets] {
                 std::fs::create_dir_all(dir)?;
             }
-            // Thumbnails, waveforms and proxies are read by the webview.
+            // Thumbnails, waveforms and proxies are read by the webview, and so
+            // are imported fonts and downloaded assets (previews, @font-face).
             app.asset_protocol_scope().allow_directory(&paths.cache, true)?;
+            app.asset_protocol_scope().allow_directory(&paths.fonts, false)?;
+            app.asset_protocol_scope().allow_directory(&paths.assets, true)?;
 
             let tools = match kerf_media::Tools::discover() {
                 Ok(t) => {
@@ -193,6 +198,9 @@ pub fn run() {
             library::favorite_set,
             library::recent_list,
             library::recent_touch,
+            library::font_list,
+            library::font_import,
+            library::font_remove,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Kerf")

@@ -8,7 +8,8 @@ import { formatDuration, formatRate, fpsOf, framesToSeconds, STANDARD_RATES } fr
 import type { AudioCodec, ExportJob, ExportSettings, Rational, RateControl, Sequence, SubtitleOutput, VideoCodec } from "../lib/types";
 import { useEditor } from "../state/editor";
 import { reportError, useActiveSequence, useProject } from "../state/project";
-import { burnInFiles, titleFiles } from "../engine/text";
+import { burnInFiles, titleFiles, titleSequences } from "../engine/text";
+import { fontAvailable, loadFonts, useFonts } from "../state/fonts";
 import { toast } from "../state/toasts";
 import { engine } from "../engine/playback";
 import { Button, cx, Field, IconButton, PanelHeader, Progress, Section, Segmented, Select, Toggle, NumberField } from "../ui/primitives";
@@ -230,15 +231,32 @@ export function ExportPanel() {
       });
       if (go !== true) return;
     }
+    // Never substitute fonts silently: list titles whose font is not available.
+    await loadFonts();
+    const fontState = useFonts.getState();
+    const missing = new Set<string>();
+    for (const a of useProject.getState().mediaById.values()) if (a.title && fontAvailable(a.title.style.font, fontState) === false) missing.add(a.title.style.font);
+    if (seq.subtitles.cues.length && subs.burn && fontAvailable(seq.subtitles.style.font, fontState) === false) missing.add(seq.subtitles.style.font);
+    if (missing.size) {
+      const go = await confirm({
+        title: "Schriften fehlen",
+        body: `Nicht vorhanden: ${[...missing].join(", ")}. Betroffene Titel und Untertitel werden mit der Ersatzschrift Inter Variable gerendert. Die Schrift kann im Titel-Inspektor importiert werden.`,
+        confirm: "Mit Ersatzschrift exportieren",
+      });
+      if (go !== true) return;
+    }
     try {
       // Titles and burned-in subtitles are drawn here and overlaid as PNGs.
       const titles = await titleFiles(seq, useProject.getState().mediaById);
+      // Animated titles frame by frame (also inside nested sequences; clip ids are unique).
+      const titleSeqs: Record<string, string[]> = {};
+      for (const q of useProject.getState().project?.sequences ?? [seq]) Object.assign(titleSeqs, await titleSequences(q, useProject.getState().mediaById));
       let subtitles: SubtitleOutput | undefined;
       if (seq.subtitles.cues.length && (subs.burn || subs.sidecar || subs.embed)) {
         const files = subs.burn ? await burnInFiles(seq, [range[0], range[1]]) : { burn: [], blank: null };
         subtitles = { ...files, sidecar: subs.sidecar, embed: subs.embed };
       }
-      const job = await api.exportStart(seq.id, { ...s, output, hardware: s.hardware && hw.length > 0, subtitles, titleFiles: titles });
+      const job = await api.exportStart(seq.id, { ...s, output, hardware: s.hardware && hw.length > 0, subtitles, titleFiles: titles, titleSequences: titleSeqs });
       useProject.getState().upsertExport(job);
       toast.info("Export gestartet", output.split(/[\\/]/).pop());
     } catch (e) {

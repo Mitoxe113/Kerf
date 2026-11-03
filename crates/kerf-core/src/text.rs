@@ -45,6 +45,108 @@ pub struct TextStyle {
     pub box_padding: f32,
     /// Lines wrap at this fraction of the frame width.
     pub wrap: f32,
+    /// Extra space between characters, pixels at 1080 lines (may be negative).
+    pub tracking: f32,
+    /// Font weight 100..900; 0 = from `bold` (700 or 400).
+    pub weight: u16,
+    pub case: TextCase,
+    /// Second fill colour: a linear gradient from `color` to it.
+    pub gradient: Option<[f32; 3]>,
+    /// Direction of the gradient in degrees (0 = left to right, 90 = top to bottom).
+    pub gradient_angle: f32,
+    pub shadow_color: [f32; 3],
+    pub shadow_opacity: f32,
+    /// Shadow offset in pixels at 1080 lines; `None` = straight down by 0.4 × blur.
+    pub shadow_offset: Option<[f32; 2]>,
+    /// Soft glow around the glyphs (blur radius); 0 = none.
+    pub glow: f32,
+    pub glow_color: [f32; 3],
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TextCase {
+    #[default]
+    AsTyped,
+    Upper,
+    Lower,
+}
+
+/// What a text animation moves as one piece.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AnimUnit {
+    #[default]
+    Char,
+    Word,
+    Line,
+}
+
+/// How a piece enters (or, played backwards, leaves).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AnimKind {
+    #[default]
+    None,
+    Fade,
+    SlideUp,
+    SlideDown,
+    SlideLeft,
+    SlideRight,
+    Scale,
+    /// Pieces appear at once, one after another.
+    Typewriter,
+    /// Pieces drift together from wider spacing while fading in.
+    Spread,
+}
+
+/// One phase of a text animation, in frames of the clip.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AnimPhase {
+    pub kind: AnimKind,
+    /// Frames each piece takes.
+    pub frames: u32,
+    /// Frames between the starts of neighbouring pieces.
+    pub stagger: f32,
+    pub ease: crate::model::Ease,
+}
+
+impl Default for AnimPhase {
+    fn default() -> Self {
+        Self { kind: AnimKind::None, frames: 12, stagger: 2.0, ease: crate::model::Ease::EaseOut }
+    }
+}
+
+/// Per character, word or line animation of a title: `intro` from the clip's
+/// start, `outro` ending at the clip's end. Drawn by the UI for the preview
+/// and, frame by frame, for the export.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct TextAnimation {
+    pub unit: AnimUnit,
+    pub intro: AnimPhase,
+    pub outro: AnimPhase,
+}
+
+impl TextAnimation {
+    pub fn is_none(&self) -> bool {
+        self.intro.kind == AnimKind::None && self.outro.kind == AnimKind::None
+    }
+
+    pub fn sanitized(&self) -> Option<Self> {
+        let phase = |p: &AnimPhase| -> Option<AnimPhase> {
+            if !p.stagger.is_finite() {
+                return None;
+            }
+            let ease = match p.ease {
+                crate::model::Ease::Bezier { x1, y1, x2, y2 } if ![x1, y1, x2, y2].iter().all(|v| v.is_finite()) => return None,
+                e => e,
+            };
+            Some(AnimPhase { kind: p.kind, frames: p.frames.clamp(1, 600), stagger: p.stagger.clamp(0.0, 120.0), ease })
+        };
+        Some(Self { unit: self.unit, intro: phase(&self.intro)?, outro: phase(&self.outro)? })
+    }
 }
 
 impl Default for TextStyle {
@@ -64,6 +166,16 @@ impl Default for TextStyle {
             box_color: [0.0, 0.0, 0.0],
             box_padding: 16.0,
             wrap: 0.9,
+            tracking: 0.0,
+            weight: 0,
+            case: TextCase::AsTyped,
+            gradient: None,
+            gradient_angle: 90.0,
+            shadow_color: [0.0, 0.0, 0.0],
+            shadow_opacity: 0.75,
+            shadow_offset: None,
+            glow: 0.0,
+            glow_color: [1.0, 1.0, 1.0],
         }
     }
 }
@@ -94,6 +206,22 @@ impl TextStyle {
             box_color: rgb(self.box_color)?,
             box_padding: ok(self.box_padding, 0.0, 400.0)?,
             wrap: ok(self.wrap, 0.1, 1.0)?,
+            tracking: ok(self.tracking, -50.0, 400.0)?,
+            weight: if self.weight == 0 { 0 } else { self.weight.clamp(100, 900) },
+            case: self.case,
+            gradient: match self.gradient {
+                Some(c) => Some(rgb(c)?),
+                None => None,
+            },
+            gradient_angle: ok(self.gradient_angle, -360.0, 360.0)?,
+            shadow_color: rgb(self.shadow_color)?,
+            shadow_opacity: ok(self.shadow_opacity, 0.0, 1.0)?,
+            shadow_offset: match self.shadow_offset {
+                Some([x, y]) => Some([ok(x, -500.0, 500.0)?, ok(y, -500.0, 500.0)?]),
+                None => None,
+            },
+            glow: ok(self.glow, 0.0, 100.0)?,
+            glow_color: rgb(self.glow_color)?,
         })
     }
 }
@@ -115,6 +243,8 @@ pub struct TitleSpec {
     pub y: f32,
     pub width: u32,
     pub height: u32,
+    #[serde(default, skip_serializing_if = "TextAnimation::is_none")]
+    pub animation: TextAnimation,
 }
 
 fn half() -> f32 {
@@ -136,6 +266,7 @@ impl TitleSpec {
             y: self.y.clamp(-1.0, 2.0),
             width: self.width,
             height: self.height,
+            animation: self.animation.sanitized()?,
         })
     }
 }
@@ -347,5 +478,36 @@ mod tests {
         let s = TextStyle { size: 1e6, font: "  ".into(), color: [2.0, -1.0, 0.5], ..TextStyle::default() }.sanitized().unwrap();
         assert_eq!((s.size, s.font.as_str(), s.color), (1000.0, "Inter Variable", [1.0, 0.0, 0.5]));
         assert!(TextStyle { outline: f32::NAN, ..TextStyle::default() }.sanitized().is_none());
+    }
+}
+
+#[cfg(test)]
+mod typography_tests {
+    use super::*;
+
+    #[test]
+    fn old_titles_keep_their_look() {
+        let old = r#"{"text":"Hi","style":{"font":"Arial","size":80,"bold":true},"x":0.5,"y":0.5,"width":1920,"height":1080}"#;
+        let t: TitleSpec = serde_json::from_str(old).unwrap();
+        assert_eq!(t.style.tracking, 0.0);
+        assert_eq!(t.style.weight, 0);
+        assert_eq!(t.style.shadow_offset, None);
+        assert!(t.animation.is_none());
+        // An unanimated title writes no animation field.
+        assert!(!serde_json::to_string(&t).unwrap().contains("animation"));
+    }
+
+    #[test]
+    fn animation_and_style_are_clamped() {
+        let mut t: TitleSpec = serde_json::from_str(r#"{"text":"Hi","x":0.5,"y":0.5,"width":1920,"height":1080}"#).unwrap();
+        t.style.weight = 1200;
+        t.style.tracking = 9999.0;
+        t.animation.intro = AnimPhase { kind: AnimKind::Fade, frames: 0, stagger: 500.0, ..Default::default() };
+        let s = t.sanitized().unwrap();
+        assert_eq!(s.style.weight, 900);
+        assert_eq!(s.style.tracking, 400.0);
+        assert_eq!((s.animation.intro.frames, s.animation.intro.stagger), (1, 120.0));
+        t.animation.outro.stagger = f32::NAN;
+        assert!(t.sanitized().is_none());
     }
 }
