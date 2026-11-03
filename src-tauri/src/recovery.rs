@@ -100,3 +100,37 @@ pub fn start(app: &AppHandle) {
         })
         .expect("spawn autosave");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A session that ends without `discard` (a crash) leaves a snapshot that is
+    /// listed and restored at the next start; a damaged one is skipped, not fatal.
+    #[test]
+    fn crashed_session_is_listed_and_restored() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut p = Project::new("Absturz", 7);
+        p.name = "Geändert".into();
+        let saved_at = Path::new("/projekte/film.kerf");
+        write(dir.path(), &p, Some(saved_at)).unwrap();
+        // A second write (next autosave) replaces the first.
+        p.name = "Später".into();
+        write(dir.path(), &p, Some(saved_at)).unwrap();
+
+        // Damaged leftovers: metadata without document, and garbage metadata.
+        std::fs::write(dir.path().join(format!("{}.json", Uuid::new_v4())), b"{}").unwrap();
+        std::fs::write(dir.path().join("kaputt.json"), b"\0\0").unwrap();
+
+        let list = list(dir.path());
+        assert_eq!(list.len(), 1);
+        assert_eq!((list[0].project_id, list[0].name.as_str()), (p.id, "Später"));
+        let (restored, path) = load(dir.path(), p.id).unwrap();
+        assert_eq!(restored.name, "Später");
+        assert_eq!(path.as_deref(), Some(saved_at));
+
+        discard(dir.path(), p.id);
+        assert!(super::list(dir.path()).is_empty());
+        assert!(load(dir.path(), p.id).is_err());
+    }
+}

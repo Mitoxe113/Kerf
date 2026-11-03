@@ -31,16 +31,14 @@ Beide stehen unter der SIL Open Font License 1.1 (<https://openfontlicense.org>)
 | React, React DOM, scheduler | MIT, Copyright (c) Meta Platforms, Inc. and affiliates |
 | Zustand | MIT, Copyright (c) 2019 Paul Henschel |
 | Lucide (lucide-react) | ISC, Copyright (c) Cole Bemis 2013-2022 (Feather, MIT) und Lucide Contributors 2022 |
-| @tauri-apps/api, @tauri-apps/plugin-dialog | Apache-2.0 oder MIT, Copyright (c) 2017 - Present Tauri Apps Contributors; 2019-2022 The Tauri Programme in the Commons Conservancy |
+| @tauri-apps/api, @tauri-apps/plugin-dialog, @tauri-apps/plugin-process, @tauri-apps/plugin-updater | Apache-2.0 oder MIT, Copyright (c) 2017 - Present Tauri Apps Contributors; 2019-2022 The Tauri Programme in the Commons Conservancy |
 
 ## Rust-Crates (in der App enthalten)
 
 Direkt eingebunden für das Kreativ-Ökosystem: `rusqlite` 0.32 (MIT) mit gebündeltem **SQLite** (gemeinfrei) über `libsqlite3-sys` (MIT), `ttf-parser` 0.25 (MIT oder Apache-2.0), `sha2` 0.10 (MIT oder Apache-2.0), `reqwest` 0.13 (MIT oder Apache-2.0), `rustls` 0.23 (Apache-2.0, ISC oder MIT) mit `ring` 0.17 (Apache-2.0 und ISC), `url` 2 (MIT oder Apache-2.0), `keyring` 3.6 (MIT oder Apache-2.0; unter Linux mit `dbus-secret-service`, MIT oder Apache-2.0, und `dbus`, Apache-2.0/MIT).
 
-Kerf baut auf Tauri 2 und rund 450 weiteren Crates auf (je nach Zielplattform). Sie stehen fast alle unter MIT und/oder Apache-2.0, einige unter BSD-3-Clause, ISC, Zlib, Unicode-3.0, CC0/Unlicense oder MPL-2.0 (Dateiebene, unverändert genutzt). Alle sind mit der GPL-3.0 vereinbar. Die genaue Liste mit Versionen und Lizenzen erzeugt:
+Kerf baut auf Tauri 2 und insgesamt 534 Crates auf (Summe über alle Zielplattformen; ein einzelner Build nutzt weniger). Die vollständige Liste mit Versionen und erklärten Lizenzen steht in [docs/LICENSES.md](docs/LICENSES.md) und wird mit `node scripts/licenses.mjs` aus `Cargo.lock` neu erzeugt. Fast alle stehen unter MIT und/oder Apache-2.0; daneben kommen Unicode-3.0, Zlib, ISC, BSD-2/3-Clause, 0BSD, CC0/MIT-0/Unlicense, MPL-2.0 (`cssparser`, `selectors`, `dtoa-short`, `option-ext`; dateiweise, unverändert genutzt) und CDLA-Permissive-2.0 (`webpki-root-certs`, die Liste der Stammzertifikate) vor.
 
-```bash
-cargo metadata --format-version 1
-```
+Nach unserem Verständnis sind diese Lizenzen mit der GPL-3.0 vereinbar und erlauben auch eine kommerzielle Weitergabe. Das ist **keine Rechtsberatung**: geprüft wurden die in den Manifesten erklärten Lizenzen, nicht jede einzelne Lizenzdatei. Vor einer kommerziellen Veröffentlichung sollte das eine fachkundige Person bestätigen, insbesondere für CDLA-Permissive-2.0 und die Patentfragen der Codecs (siehe FFmpeg).
 
 Die Lizenztexte liegen den Crates im Cargo-Register bei.

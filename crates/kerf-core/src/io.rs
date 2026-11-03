@@ -294,4 +294,20 @@ mod tests {
         let found = unknown_fields(&serde_json::to_vec(&v).unwrap());
         assert_eq!(found, vec!["futureFeature".to_string(), "sequences[0].laterFlag".to_string()]);
     }
+
+    /// A save cut off before the rename leaves only the temp file: the project
+    /// file is untouched, and the next save goes through.
+    #[test]
+    fn interrupted_save_keeps_the_previous_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("p.kerf");
+        let mut p = Project::new("Vorher", 3);
+        save(&p, &path).unwrap();
+        fs::write(dir.path().join("p.kerf.tmp"), b"{\"schemaVers").unwrap();
+        assert_eq!(load(&path).unwrap().name, "Vorher");
+        p.name = "Nachher".into();
+        save(&p, &path).unwrap();
+        assert_eq!(load(&path).unwrap().name, "Nachher");
+        assert_eq!(load(&backup_path(&path)).unwrap().name, "Vorher");
+    }
 }
