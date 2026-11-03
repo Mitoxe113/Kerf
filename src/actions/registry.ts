@@ -14,6 +14,7 @@ import { matchFrame, source, sourceDuration, useSource } from "../state/source";
 import * as P from "./project";
 import * as T from "./text";
 import * as Tr from "./transitions";
+import * as Fx from "./effects";
 
 export interface Action {
   id: string;
@@ -109,6 +110,10 @@ const base: Action[] = [
   { id: "clip.link", group: "Clip", label: "Verknüpfen", keys: ["Ctrl+L"], run: () => E.linkSelection(true), enabled: hasSelection },
   { id: "clip.unlink", group: "Clip", label: "Verknüpfung lösen", keys: ["Ctrl+Alt+L"], run: () => E.linkSelection(false), enabled: hasSelection },
   { id: "clip.nest", group: "Clip", label: "Verschachteln …", keys: [], run: E.nestSelection, enabled: hasSelection },
+  { id: "clip.copyEffects", group: "Clip", label: "Effekte kopieren", keys: ["Ctrl+Alt+C"], run: () => Fx.copyEffects(), enabled: Fx.firstSelectedHasEffects },
+  { id: "clip.pasteEffects", group: "Clip", label: "Effekte einfügen", keys: ["Ctrl+Alt+V"], run: () => Fx.pasteEffects(), enabled: () => Fx.hasEffectClipboard() && Fx.selectedVideoClips().length > 0 },
+  { id: "clip.bypassEffects", group: "Clip", label: "Alle Effekte umgehen", keys: [], run: () => Fx.toggleBypass(), enabled: () => Fx.selectedVideoClips().length > 0 },
+  { id: "view.compareEffects", group: "Ansicht", label: "Vorher/Nachher (ohne Effekte)", keys: ["Ctrl+Alt+B"], run: () => Fx.setCompare(!Fx.useFxCompare.getState().on), checked: () => Fx.useFxCompare.getState().on },
   ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => ({ id: `multicam.angle${n}`, group: "Multicam", label: `Kamera ${n}`, keys: [String(n)], run: () => switchAngle(n - 1) })),
   { id: "clip.nudgeLeft", group: "Clip", label: "1 Frame nach links", keys: ["Alt+ArrowLeft"], run: () => E.nudgeSelection(-1), enabled: hasSelection },
   { id: "clip.nudgeRight", group: "Clip", label: "1 Frame nach rechts", keys: ["Alt+ArrowRight"], run: () => E.nudgeSelection(1), enabled: hasSelection },

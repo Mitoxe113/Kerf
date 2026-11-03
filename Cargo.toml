@@ -1,6 +1,6 @@
 ﻿[workspace]
 resolver = "2"
-members = ["crates/kerf-core", "crates/kerf-media", "src-tauri"]
+members = ["crates/kerf-core", "crates/kerf-media", "crates/kerf-library", "src-tauri"]
 
 [workspace.package]
 version = "0.1.0"
@@ -13,6 +13,7 @@ repository = "https://github.com/Mitoxe113/Kerf"
 [workspace.dependencies]
 kerf-core = { path = "crates/kerf-core" }
 kerf-media = { path = "crates/kerf-media" }
+kerf-library = { path = "crates/kerf-library" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4", "serde"] }

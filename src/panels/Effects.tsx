@@ -2,36 +2,38 @@
 // colour wheels and curves editors that the "Farbe" tab reuses. Edits preview
 // live through engine overrides and are committed as one setEffects step.
 
-import { open } from "@tauri-apps/plugin-dialog";
-import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, FolderOpen, Pipette, Plus, RotateCcw, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Eye, FolderOpen, MoreHorizontal, Pipette, Plus, Power, RotateCcw, Trash2 } from "lucide-react";
 import { useRef, useState } from "react";
+import {
+  CATEGORY_LABELS,
+  EFFECT_ENTRIES,
+  applyEntry,
+  copyEffects,
+  effectLabel,
+  entryEffect,
+  pasteEffects,
+  pickLut,
+  resetEffect,
+  saveStackAsPreset,
+  setCompare,
+  toggleBypass,
+  useFxCompare,
+  type BrowserCategory,
+} from "../actions/effects";
+import { prompt } from "../actions/project";
 import { curveIsIdentity, curveTable } from "../engine/effects";
+import { fxDef, fxKeys, type FxParamDef } from "../engine/fx";
 import { engine } from "../engine/playback";
 import type { Clip, CurvePoint, Effect, EffectKind, Rgb, Sequence } from "../lib/types";
 import { cancelPick, useEditor } from "../state/editor";
+import { useLibrary } from "../state/library";
 import { edit } from "../state/project";
-import { Button, cx, Field, IconButton, NumberField, openContextMenu, Section, Segmented, Slider, Toggle } from "../ui/primitives";
+import { Button, cx, Field, IconButton, NumberField, openContextMenu, Section, Segmented, Select, Slider, Toggle, type MenuItem } from "../ui/primitives";
 
 type Kind<T extends EffectKind["type"]> = Extract<EffectKind, { type: T }>;
 
-export const EFFECT_TYPES: { type: EffectKind["type"]; label: string; make?: () => EffectKind }[] = [
-  { type: "blur", label: "Weichzeichner", make: () => ({ type: "blur", radius: 4 }) },
-  { type: "sharpen", label: "Schärfen", make: () => ({ type: "sharpen", amount: 0.6, radius: 1.5 }) },
-  { type: "vignette", label: "Vignette", make: () => ({ type: "vignette", amount: 0.4 }) },
-  { type: "lut", label: "LUT (.cube) …" },
-  { type: "chromaKey", label: "Chroma-Key", make: () => ({ type: "chromaKey", color: [0, 1, 0], similarity: 0.12, blend: 0.08, spill: 0.5 }) },
-  { type: "colorWheels", label: "Farbräder", make: () => NEUTRAL_WHEELS },
-  { type: "curves", label: "Kurven", make: () => ({ type: "curves", master: [], red: [], green: [], blue: [] }) },
-];
-
 const NEUTRAL_WHEELS: Kind<"colorWheels"> = { type: "colorWheels", lift: [0, 0, 0], gamma: [1, 1, 1], gain: [1, 1, 1] };
-const labelOf = (t: EffectKind["type"]) => EFFECT_TYPES.find((x) => x.type === t)!.label.replace(" …", "").replace(" (.cube)", "");
 const newId = () => crypto.randomUUID();
-
-async function pickLut(): Promise<string | null> {
-  const sel = await open({ multiple: false, directory: false, filters: [{ name: "3D-LUT", extensions: ["cube"] }] });
-  return typeof sel === "string" ? sel : null;
-}
 
 /** Stack of the first clip, edited for all `clips` together. */
 export function useStack(seq: Sequence, clips: Clip[]) {
@@ -49,54 +51,96 @@ export function useStack(seq: Sequence, clips: Clip[]) {
   return { effects, preview, commit, patch };
 }
 
+const CATEGORY_ORDER: BrowserCategory[] = ["color", "blur", "light", "distort", "stylize", "keying", "transform"];
+
+/** The "+" menu: every browser entry, grouped by category. */
+export function effectMenu(onPick: (key: string) => void): MenuItem[] {
+  return CATEGORY_ORDER.map((c) => ({
+    label: CATEGORY_LABELS[c],
+    submenu: EFFECT_ENTRIES.filter((e) => e.category === c).map((e) => ({ label: e.needsFile ? `${e.label} …` : e.label, onSelect: () => onPick(e.key) })),
+  }));
+}
+
 export function EffectsSection({ seq, clips }: { seq: Sequence; clips: Clip[] }) {
   const stack = useStack(seq, clips);
   const { effects, commit } = stack;
-  const add = async (t: (typeof EFFECT_TYPES)[number]) => {
-    let kind = t.make?.();
-    if (t.type === "lut") {
-      const path = await pickLut();
-      if (!path) return;
-      kind = { type: "lut", path, intensity: 1 };
-    }
-    if (kind) await commit([...effects, { id: newId(), enabled: true, ...kind } as Effect]);
+  const clipboard = useLibrary((s) => s.effectClipboard);
+  const compare = useFxCompare((s) => s.on);
+  const bypass = clips.length > 0 && clips.every((c) => c.fxBypass);
+  const add = async (key: string) => {
+    const entry = EFFECT_ENTRIES.find((e) => e.key === key);
+    if (!entry) return;
+    // One clip: through the stack (keeps the shared-stack semantics of the
+    // Inspector); several: append to each clip's own stack.
+    if (clips.length === 1) {
+      const e = await entryEffect(entry);
+      if (e) await commit([...effects, e]);
+    } else await applyEntry(entry, clips.map((c) => c.id));
   };
   const move = (i: number, d: -1 | 1) => {
     const next = [...effects];
     [next[i], next[i + d]] = [next[i + d], next[i]];
     void commit(next);
   };
+  const more: MenuItem[] = [
+    { label: "Effekte kopieren", shortcut: "Strg+Alt+C", disabled: !effects.length, onSelect: () => copyEffects(effects) },
+    { label: "Effekte einfügen (anhängen)", shortcut: "Strg+Alt+V", disabled: !clipboard?.length, onSelect: () => void pasteEffects(clips.map((c) => c.id)) },
+    { label: "Effekte durch Kopie ersetzen", disabled: !clipboard?.length, onSelect: () => void commit(clipboard!.map((e) => ({ ...e, id: crypto.randomUUID() }))) },
+    { separator: true },
+    { label: "Als Preset speichern …", disabled: !effects.length, onSelect: () => void saveStackAsPreset(effects) },
+    { separator: true },
+    { label: "Alle zurücksetzen", disabled: !effects.length, onSelect: () => void commit(effects.map(resetEffect)) },
+    { label: "Alle entfernen", danger: true, disabled: !effects.length, onSelect: () => void commit([]) },
+  ];
   return (
     <Section
       title="Effekte"
       right={
-        <IconButton
-          icon={<Plus size={13} />}
-          size={22}
-          label="Effekt hinzufügen"
-          onClick={(e) => openContextMenu({ clientX: e.clientX, clientY: e.clientY }, EFFECT_TYPES.map((t) => ({ label: t.label, onSelect: () => void add(t) })))}
-        />
+        <div className="flex items-center gap-0.5">
+          <IconButton icon={<Power size={12} />} size={22} label={bypass ? "Effekte wieder einschalten" : "Alle Effekte umgehen (Bypass)"} active={bypass} disabled={!effects.length} onClick={() => void toggleBypass(clips)} />
+          <IconButton icon={<Eye size={12} />} size={22} label="Vorher/Nachher: Vorschau ohne Effekte" shortcut="Strg+Alt+B" active={compare} onClick={() => setCompare(!compare)} />
+          <IconButton icon={<MoreHorizontal size={13} />} size={22} label="Weitere Aktionen" onClick={(e) => openContextMenu({ clientX: e.clientX, clientY: e.clientY }, more)} />
+          <IconButton icon={<Plus size={13} />} size={22} label="Effekt hinzufügen" onClick={(e) => openContextMenu({ clientX: e.clientX, clientY: e.clientY }, effectMenu((k) => void add(k)))} />
+        </div>
       }
     >
-      {!effects.length && <p className="py-1 text-xs text-fg-4">Keine Effekte. Mit + hinzufügen; sie wirken nach der Farbkorrektur in der Reihenfolge der Liste.</p>}
+      {bypass && <p className="mb-1 rounded-xs bg-warn/15 px-1.5 py-1 text-[10.5px] text-warn">Effekte werden umgangen (Vorschau und Export).</p>}
+      {compare && <p className="mb-1 rounded-xs bg-signal/15 px-1.5 py-1 text-[10.5px] text-signal">Vorher-Ansicht: der Monitor zeigt alle Clips ohne Effekte. Der Export ist davon nicht betroffen.</p>}
+      {!effects.length && <p className="py-1 text-xs text-fg-4">Keine Effekte. Mit + hinzufügen oder aus dem Effekt-Browser auf einen Clip ziehen; sie wirken nach der Farbkorrektur in der Reihenfolge der Liste.</p>}
       {effects.map((e, i) => (
         <EffectCard key={e.id} effect={e} stack={stack} first={i === 0} last={i === effects.length - 1} onMove={(d) => move(i, d)} onRemove={() => void commit(effects.filter((x) => x.id !== e.id))} />
       ))}
-      {clips.length > 1 && <p className="pt-1 text-[10.5px] text-fg-4">Änderungen gelten für alle {clips.length} ausgewählten Clips.</p>}
+      {clips.length > 1 && <p className="pt-1 text-[10.5px] text-fg-4">Änderungen gelten für alle {clips.length} ausgewählten Clips (Liste des ersten Clips).</p>}
     </Section>
   );
 }
 
 function EffectCard({ effect: e, stack, first, last, onMove, onRemove }: { effect: Effect; stack: ReturnType<typeof useStack>; first: boolean; last: boolean; onMove: (d: -1 | 1) => void; onRemove: () => void }) {
   const [open, setOpen] = useState(true);
+  const label = effectLabel(e);
+  const def = e.type === "fx" ? fxDef(e.fx) : undefined;
+  const rename = async () => {
+    const name = await prompt({ title: "Effekt umbenennen", label: "Name (leer = Standardname)", value: e.name ?? "", confirm: "Umbenennen" });
+    if (name !== null) stack.patch(e.id, { name: name.trim() });
+  };
+  const menu: MenuItem[] = [
+    { label: "Umbenennen …", onSelect: () => void rename() },
+    { label: "Zurücksetzen", onSelect: () => void stack.commit(stack.effects.map((x) => (x.id === e.id ? resetEffect(x) : x))) },
+    { label: "Duplizieren", onSelect: () => void stack.commit(stack.effects.flatMap((x) => (x.id === e.id ? [x, { ...x, id: crypto.randomUUID() }] : [x]))) },
+    { label: "Effekt kopieren", onSelect: () => copyEffects([e]) },
+    { label: "Als Preset speichern …", onSelect: () => void saveStackAsPreset([e]) },
+  ];
   return (
-    <div className="mb-1.5 rounded-sm border border-line bg-raised">
+    <div className="mb-1.5 rounded-sm border border-line bg-raised" onContextMenu={(ev) => openContextMenu(ev, menu)}>
       <div className="flex h-7 items-center gap-1 pl-1 pr-0.5">
         <button className="flex h-5 w-5 items-center justify-center text-fg-3" aria-label={open ? "Zuklappen" : "Aufklappen"} onClick={() => setOpen(!open)}>
           {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
         </button>
-        <Toggle checked={e.enabled} onChange={(v) => stack.patch(e.id, { enabled: v })} label={`${labelOf(e.type)} aktiv`} />
-        <span className={cx("ml-1 min-w-0 flex-1 truncate text-xs font-medium", !e.enabled && "text-fg-4")}>{labelOf(e.type)}</span>
+        <Toggle checked={e.enabled} onChange={(v) => stack.patch(e.id, { enabled: v })} label={`${label} aktiv`} />
+        <span className={cx("ml-1 min-w-0 flex-1 truncate text-xs font-medium", !e.enabled && "text-fg-4")} title={def ? `${def.label}: ${def.description}${def.heavy ? " (Export rechenintensiv)" : ""}` : label} onDoubleClick={() => void rename()}>
+          {label}
+        </span>
+        <IconButton icon={<RotateCcw size={11} />} size={20} label="Zurücksetzen" onClick={() => void stack.commit(stack.effects.map((x) => (x.id === e.id ? resetEffect(x) : x)))} />
         <IconButton icon={<ArrowUp size={12} />} size={20} label="Nach oben" disabled={first} onClick={() => onMove(-1)} />
         <IconButton icon={<ArrowDown size={12} />} size={20} label="Nach unten" disabled={last} onClick={() => onMove(1)} />
         <IconButton icon={<Trash2 size={12} />} size={20} label="Entfernen" onClick={onRemove} />
@@ -124,6 +168,8 @@ export function ParamRow({ label, value, min, max, step = 0.01, scale = 1, unit 
 function EffectParams({ effect: e, stack }: { effect: Effect; stack: ReturnType<typeof useStack> }) {
   const set = (p: Partial<EffectKind>, live: boolean) => stack.patch(e.id, p as Partial<Effect>, live);
   switch (e.type) {
+    case "fx":
+      return <FxParamsEditor effect={e} stack={stack} />;
     case "blur":
       return <ParamRow label="Radius" value={e.radius} min={0} max={60} step={0.5} precision={1} unit=" px" onChange={(v, l) => set({ radius: v }, l)} />;
     case "sharpen":
@@ -162,6 +208,81 @@ function EffectParams({ effect: e, stack }: { effect: Effect; stack: ReturnType<
     case "curves":
       return <CurvesEditor value={e} onChange={(v, live) => set(v, live)} />;
   }
+}
+
+/** Parameters of a catalogue effect, generated from its definition. */
+function FxParamsEditor({ effect: e, stack }: { effect: Effect & Kind<"fx">; stack: ReturnType<typeof useStack> }) {
+  const def = fxDef(e.fx);
+  const picking = useEditor((s) => s.picker !== null);
+  if (!def) return <p className="text-xs text-danger">Unbekannter Effekt „{e.fx}“. Er wird beim Export ignoriert.</p>;
+  const get = (k: string, p: FxParamDef) => e.params[k] ?? p.default;
+  const set = (values: Record<string, number>, live: boolean) => stack.patch(e.id, { params: { ...e.params, ...values } } as Partial<Effect>, live);
+  const pickColor = (p: FxParamDef) => {
+    const [r, g, b] = fxKeys(p);
+    stack.preview(stack.effects.map((x) => (x.id === e.id ? { ...x, enabled: false } : x)));
+    useEditor.getState().set({
+      picker: (rgb) => {
+        if (rgb) set({ [r]: rgb[0], [g]: rgb[1], [b]: rgb[2] }, false);
+        else stack.preview(stack.effects);
+      },
+    });
+  };
+  return (
+    <>
+      {def.params.map((p) => {
+        const keys = fxKeys(p);
+        switch (p.kind) {
+          case "toggle":
+            return (
+              <Field key={p.id} label={p.label}>
+                <Toggle checked={get(p.id, p) >= 0.5} onChange={(v) => set({ [p.id]: v ? 1 : 0 }, false)} label={p.label} />
+              </Field>
+            );
+          case "choice": {
+            const opts = (p.options ?? []).map((label, i) => ({ value: String(i), label }));
+            return (
+              <Field key={p.id} label={p.label}>
+                {opts.length <= 3 ? (
+                  <Segmented size="sm" value={String(Math.round(get(p.id, p)))} options={opts} onChange={(v) => set({ [p.id]: Number(v) }, false)} />
+                ) : (
+                  <Select value={String(Math.round(get(p.id, p)))} options={opts} onChange={(v) => set({ [p.id]: Number(v) }, false)} />
+                )}
+              </Field>
+            );
+          }
+          case "color": {
+            const rgb = keys.map((k) => get(k, p)) as Rgb;
+            return (
+              <Field key={p.id} label={p.label}>
+                <input type="color" aria-label={p.label} className="h-6 w-10 cursor-pointer rounded-xs border border-line bg-field" value={toHex(rgb)} onChange={(ev) => { const c = fromHex(ev.target.value); set({ [keys[0]]: c[0], [keys[1]]: c[1], [keys[2]]: c[2] }, false); }} />
+                <Button size="sm" variant={picking ? "primary" : undefined} onClick={picking ? cancelPick : () => pickColor(p)}>
+                  <Pipette size={12} className="mr-1" />
+                  {picking ? "Im Monitor klicken …" : "Aus Bild wählen"}
+                </Button>
+              </Field>
+            );
+          }
+          case "point":
+            return (
+              <div key={p.id}>
+                <ParamRow label={`${p.label} X`} value={get(keys[0], p)} min={p.min} max={p.max} scale={100} step={1} precision={0} unit=" %" onChange={(v, l) => set({ [keys[0]]: v }, l)} />
+                <ParamRow label={`${p.label} Y`} value={get(keys[1], p)} min={p.min} max={p.max} scale={100} step={1} precision={0} unit=" %" onChange={(v, l) => set({ [keys[1]]: v }, l)} />
+              </div>
+            );
+          case "int":
+            return <ParamRow key={p.id} label={p.label} value={get(p.id, p)} min={p.min} max={p.max} step={1} precision={0} unit={p.unit ?? ""} onChange={(v, l) => set({ [p.id]: Math.round(v) }, l)} />;
+          case "angle":
+            return <ParamRow key={p.id} label={p.label} value={get(p.id, p)} min={p.min} max={p.max} step={1} precision={0} unit={p.unit ?? " °"} scale={p.scale ?? 1} onChange={(v, l) => set({ [p.id]: v }, l)} />;
+          default: {
+            const scale = p.scale ?? 1;
+            const span = (p.max - p.min) * scale;
+            const precision = span > 50 ? 0 : span > 5 ? 1 : 2;
+            return <ParamRow key={p.id} label={p.label} value={get(p.id, p)} min={p.min} max={p.max} scale={scale} step={10 ** -precision} precision={precision} unit={p.unit ?? ""} onChange={(v, l) => set({ [p.id]: v }, l)} />;
+          }
+        }
+      })}
+    </>
+  );
 }
 
 export const toHex = (c: Rgb) => "#" + c.map((v) => Math.round(v * 255).toString(16).padStart(2, "0")).join("");

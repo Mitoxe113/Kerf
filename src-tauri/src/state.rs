@@ -97,6 +97,9 @@ pub struct AppState {
     /// Project passed on the command line (double-click on a .kerf file),
     /// taken once by the frontend after it has started.
     pub launch_file: Mutex<Option<std::path::PathBuf>>,
+    /// Presets, favourites, recents and assets; `None` when the database
+    /// could not be opened (the error is logged and commands report it).
+    pub library: Mutex<Option<kerf_library::Library>>,
 }
 
 /// The first existing `.kerf` file among command-line arguments

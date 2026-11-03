@@ -419,6 +419,7 @@ export type EditCommand =
   | { type: "updateMedia"; media: Uuid[]; patch: MediaPatch }
   | { type: "setSourceMarks"; media: Uuid; marks: SourceMarks }
   | { type: "setEffects"; sequence: Uuid; clips: Uuid[]; effects: Effect[] }
+  | { type: "addEffects"; sequence: Uuid; clips: Uuid[]; effects: Effect[] }
   | { type: "setTransitions"; sequence: Uuid; items: { clip: Uuid; transition: Transition | null }[] }
   | { type: "setAudioEffects"; sequence: Uuid; items: { clip: Uuid; effects: AudioEffect[] }[] }
   | { type: "moveMediaToBin"; media: Uuid[]; bin: Uuid | null }
@@ -614,4 +615,23 @@ export interface RecoveryInfo {
 export interface CommandError {
   code: string;
   message: string;
+}
+
+// --- local library (kerf-library) ---------------------------------------------------
+
+export type PresetKind = "effects" | "transition" | "textStyle";
+export type ItemKind = "effect" | "preset" | "transition" | "font" | "template" | "asset";
+
+export interface Preset {
+  /** Empty for a new preset. */
+  id: string;
+  kind: PresetKind;
+  name: string;
+  category: string;
+  favorite: boolean;
+  /** "effects": Effect[]; "transition": Transition; "textStyle": object. */
+  data: unknown;
+  version: number;
+  createdAt: number;
+  updatedAt: number;
 }
