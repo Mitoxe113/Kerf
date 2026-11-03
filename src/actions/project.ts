@@ -66,21 +66,38 @@ export async function newProject() {
  */
 let foreign: { path: string; fields: string[] } | null = null;
 
+/** The engine checks an opened file in the background; its report can arrive before or after the open returns. */
+let reported: { path: string; fields: string[] } | null = null;
+
+function takeReport() {
+  const current = useProject.getState().path;
+  if (!reported || !current || !samePath(current, reported.path)) return;
+  const { path, fields } = reported;
+  reported = null;
+  foreign = { path, fields };
+  toast.error(
+    "Projekt enthält unbekannte Angaben",
+    `Die Datei stammt wohl aus einer neueren Kerf-Version (${fields.slice(0, 3).join(", ")}${fields.length > 3 ? " …" : ""}). Diese Angaben kennt diese Version nicht; speichere unter neuem Namen, um das Original zu behalten.`,
+  );
+}
+
+export function noteForeignFields(path: string, fields: string[]) {
+  reported = { path, fields };
+  takeReport();
+}
+
 export async function openProject(path?: string) {
   if (!(await guardUnsaved())) return;
   const file = path ?? (await open({ multiple: false, directory: false, filters: PROJECT_FILTER }));
   if (!file || Array.isArray(file)) return;
   try {
-    const { state, usedBackup, unknownFields } = await api.projectOpen(file);
+    foreign = null;
+    reported = null;
+    const { state, usedBackup } = await api.projectOpen(file);
     useProject.getState().applyState(state);
     resetView();
     rememberRecent(file);
-    foreign = unknownFields.length ? { path: file, fields: unknownFields } : null;
-    if (foreign)
-      toast.error(
-        "Projekt enthält unbekannte Angaben",
-        `Die Datei stammt wohl aus einer neueren Kerf-Version (${unknownFields.slice(0, 3).join(", ")}${unknownFields.length > 3 ? " …" : ""}). Diese Angaben kennt diese Version nicht; speichere unter neuem Namen, um das Original zu behalten.`,
-      );
+    takeReport();
     if (usedBackup) toast.info("Projektdatei war beschädigt", "Die letzte Sicherung (.bak) wurde geladen. Bitte speichern.");
     const missing = state.project.media.filter((m) => m.status.state === "missing").length;
     if (missing) toast.error(`${missing} Mediendatei(en) offline`, "Rechtsklick auf die Medien → Neu verknüpfen.");

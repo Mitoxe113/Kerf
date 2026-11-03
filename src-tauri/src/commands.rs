@@ -144,8 +144,14 @@ pub fn project_new(state: State<'_, AppState>, name: String) -> ProjectState {
 pub struct OpenResult {
     pub state: ProjectState,
     pub used_backup: bool,
-    /// Fields of the file this version does not know; saving over it would drop them.
-    pub unknown_fields: Vec<String>,
+}
+
+/// Sent when an opened file holds fields this version does not know; saving over it would drop them.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ForeignFields {
+    pub path: PathBuf,
+    pub fields: Vec<String>,
 }
 
 #[tauri::command(async)]
@@ -153,9 +159,17 @@ pub fn project_open(app: AppHandle, state: State<'_, AppState>, path: String) ->
     let path = PathBuf::from(path);
     let (project, used_backup) =
         kerf_core::io::load_with_fallback(&path).map_err(|e| CommandError::new("openFailed", e))?;
-    let unknown_fields = if used_backup { Vec::new() } else { std::fs::read(&path).map(|b| kerf_core::io::unknown_fields(&b)).unwrap_or_default() };
-    if !unknown_fields.is_empty() {
-        log::warn!("{} has fields this version does not know: {}", path.display(), unknown_fields.join(", "));
+    if !used_backup {
+        // Costs about three times a load on large files, so it runs beside the
+        // editor instead of delaying the open (6000 clips: 150 ms vs 50 ms).
+        let (app, path) = (app.clone(), path.clone());
+        std::thread::spawn(move || {
+            let fields = std::fs::read(&path).map(|b| kerf_core::io::unknown_fields(&b)).unwrap_or_default();
+            if !fields.is_empty() {
+                log::warn!("{} has fields this version does not know: {}", path.display(), fields.join(", "));
+                let _ = tauri::Emitter::emit(&app, "project-foreign", ForeignFields { path, fields });
+            }
+        });
     }
     log::info!("opened {} ({} media, {} sequences)", path.display(), project.media.len(), project.sequences.len());
     let media = project.media.clone();
@@ -166,7 +180,7 @@ pub fn project_open(app: AppHandle, state: State<'_, AppState>, path: String) ->
     }
     replace_session(&state, session);
     activate_media(&app, &state, &media);
-    Ok(OpenResult { state: lock(&state.session).state(), used_backup, unknown_fields })
+    Ok(OpenResult { state: lock(&state.session).state(), used_backup })
 }
 
 #[derive(Serialize)]

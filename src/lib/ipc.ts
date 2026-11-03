@@ -83,7 +83,7 @@ export const api = {
   appInfo: () => invoke<AppInfo>("app_info"),
   projectState: () => invoke<ProjectState>("project_state"),
   projectNew: (name: string) => serial(() => invoke<ProjectState>("project_new", { name })),
-  projectOpen: (path: string) => serial(() => invoke<{ state: ProjectState; usedBackup: boolean; unknownFields: string[] }>("project_open", { path })),
+  projectOpen: (path: string) => serial(() => invoke<{ state: ProjectState; usedBackup: boolean }>("project_open", { path })),
   projectSave: (path?: string) =>
     serial(() => invoke<{ path: string; revision: number; dirty: boolean; name: string }>("project_save", { path: path ?? null })),
   edit: (command: EditCommand) => serial(() => invoke<Delta>("edit", { command })),
@@ -186,5 +186,6 @@ export const events = {
   autosaved: (cb: (at: number) => void): Promise<UnlistenFn> => listen<number>("autosaved", (e) => cb(e.payload)),
   /** A .kerf file was opened from the OS while Kerf runs. */
   openProject: (cb: (path: string) => void): Promise<UnlistenFn> => listen<string>("open-project", (e) => cb(e.payload)),
+  projectForeign: (cb: (f: { path: string; fields: string[] }) => void): Promise<UnlistenFn> => listen<{ path: string; fields: string[] }>("project-foreign", (e) => cb(e.payload)),
   mediaDownload: (cb: (j: DownloadJob) => void): Promise<UnlistenFn> => listen<DownloadJob>("media-download", (e) => cb(e.payload)),
 };

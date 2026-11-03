@@ -2,7 +2,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect } from "react";
 import { installKeyboard } from "./actions/keymap";
-import { importMedia, openProject, quit } from "./actions/project";
+import { importMedia, noteForeignFields, openProject, quit } from "./actions/project";
 import { checkForUpdate } from "./actions/update";
 import { engine } from "./engine/playback";
 import { loadFonts } from "./state/fonts";
@@ -111,6 +111,7 @@ export function App() {
       events.appInfoChanged(() => void api.appInfo().then(useProject.getState().setAppInfo)),
       events.autosaved((at) => useProject.getState().setAutosaved(at)),
       events.openProject((path) => void openProject(path)),
+      events.projectForeign((f) => noteForeignFields(f.path, f.fields)),
       // Files dropped from the OS are imported into the current bin; a dropped project is opened.
       getCurrentWebview().onDragDropEvent((e) => {
         if (e.payload.type !== "drop" || !e.payload.paths.length) return;

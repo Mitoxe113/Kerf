@@ -9,6 +9,7 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use serde::Deserialize;
 use serde_json::Value;
 use thiserror::Error;
 
@@ -105,7 +106,9 @@ pub fn unknown_fields(bytes: &[u8]) -> Vec<String> {
     if input.get("schemaVersion").and_then(Value::as_u64) != Some(SCHEMA_VERSION as u64) {
         return Vec::new();
     }
-    let Ok(project) = from_json(bytes) else { return Vec::new() };
+    // Same version, so no migration: what serde keeps of the input is exactly
+    // what a save would write (normalising afterwards adds no new keys).
+    let Ok(project) = Project::deserialize(&input) else { return Vec::new() };
     let Ok(output) = serde_json::to_value(&project) else { return Vec::new() };
     let mut out = Vec::new();
     diff_keys(&input, &output, "", &mut out);
