@@ -1,16 +1,15 @@
 name: Release
 
-# A tag v1.2.3 (or a manual run) builds signed installers for all platforms
-# and puts them, with latest.json for the in-app updater, into a draft
-# release. Publishing the draft makes it the update every Kerf finds.
+# A tag v1.2.3 (or a manual run) builds the signed Windows installer and puts
+# it, with latest.json for the in-app updater, into a release. For a tag the
+# release is published once the build succeeded, which makes it the update
+# every installed Kerf finds; a manual run leaves a draft.
 #
 # Needs the secrets TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD
-# (the updater key). Optional, for code signing:
-#   Windows: WINDOWS_CERTIFICATE (base64 .pfx), WINDOWS_CERTIFICATE_PASSWORD
-#   macOS:   APPLE_CERTIFICATE (base64 .p12), APPLE_CERTIFICATE_PASSWORD,
-#            APPLE_SIGNING_IDENTITY, and for notarization APPLE_ID,
-#            APPLE_PASSWORD (app-specific), APPLE_TEAM_ID
-# Without them the installers are unsigned (SmartScreen / Gatekeeper warn).
+# (the updater key); without them the build fails and nothing is published.
+# Optional, for code signing: WINDOWS_CERTIFICATE (base64 .pfx),
+# WINDOWS_CERTIFICATE_PASSWORD. Without them the installer is unsigned
+# (SmartScreen warns). macOS and Linux are not released.
 # No build caches here: what gets signed is built from scratch.
 
 on:
@@ -38,63 +37,39 @@ jobs:
             echo "::error::Tag $GITHUB_REF_NAME passt nicht zur Version $version in tauri.conf.json"
             exit 1
           fi
-          # One draft for all platforms; a rerun uploads into the existing one.
+          # Release notes: this version's section of CHANGELOG.md.
+          notes=$(awk -v v="$version" 'index($0, "## [" v "]") == 1 { on = 1; next } /^## \[/ { on = 0 } on' CHANGELOG.md)
+          body=$(printf 'Installer für Windows (64 Bit). Kerf braucht ein installiertes FFmpeg 7 oder neuer, z. B. `winget install Gyan.FFmpeg` (siehe README).\n%s' "$notes")
+          # A rerun uploads into the existing draft.
           id=$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate --jq "map(select(.draft and .tag_name == \"v$version\"))[0].id // empty" | head -1)
           if [ -z "$id" ]; then
             id=$(gh api "repos/$GITHUB_REPOSITORY/releases" -f tag_name="v$version" -f target_commitish="$GITHUB_SHA" \
-              -f name="Kerf $version" -F draft=true --jq .id \
-              -f body="Installer für Windows, macOS und Linux. Kerf braucht ein installiertes FFmpeg (siehe README).")
+              -f name="Kerf $version" -F draft=true -f body="$body" --jq .id)
           fi
           echo "id=$id" >> "$GITHUB_OUTPUT"
 
   build:
-    name: ${{ matrix.name }}
+    name: Windows
     needs: draft
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { name: Windows, os: windows-latest, args: "", targets: "" }
-          - { name: macOS (Universal), os: macos-latest, args: "--target universal-apple-darwin", targets: "aarch64-apple-darwin,x86_64-apple-darwin" }
-          - { name: Linux, os: ubuntu-22.04, args: "", targets: "" }
-    runs-on: ${{ matrix.os }}
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: 22
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.targets }}
-      - name: System libraries
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev libdbus-1-dev patchelf
-      - name: Code signing (when certificates are set up)
+      - name: Code signing (when a certificate is set up)
         shell: bash
         env:
           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          if [ "$RUNNER_OS" = Windows ] && [ -n "$WINDOWS_CERTIFICATE" ]; then
+          if [ -n "$WINDOWS_CERTIFICATE" ]; then
             echo "$WINDOWS_CERTIFICATE" | base64 -d > "$RUNNER_TEMP/cert.pfx"
             thumbprint=$(pwsh -NoProfile -Command '(Import-PfxCertificate -FilePath "$env:RUNNER_TEMP\cert.pfx" -CertStoreLocation Cert:\CurrentUser\My -Password (ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force)).Thumbprint')
             rm "$RUNNER_TEMP/cert.pfx"
             printf '{"bundle":{"windows":{"certificateThumbprint":"%s","digestAlgorithm":"sha256","timestampUrl":"http://timestamp.digicert.com"}}}' "$thumbprint" > "$RUNNER_TEMP/signing.json"
             echo "SIGNING_ARGS=--config $RUNNER_TEMP/signing.json" >> "$GITHUB_ENV"
-          fi
-          # The Tauri CLI signs (and notarizes) on its own when these are set.
-          if [ "$RUNNER_OS" = macOS ] && [ -n "$APPLE_CERTIFICATE" ]; then
-            for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
-              [ -n "${!name}" ] && printf '%s<<EOF_%s\n%s\nEOF_%s\n' "$name" "$name" "${!name}" "$name" >> "$GITHUB_ENV"
-            done
           fi
           exit 0
       - run: npm ci
@@ -105,4 +80,14 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           releaseId: ${{ needs.draft.outputs.id }}
-          args: ${{ matrix.args }} ${{ env.SIGNING_ARGS }}
+          args: ${{ env.SIGNING_ARGS }}
+
+  publish:
+    name: Publish release
+    needs: [draft, build]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/${{ needs.draft.outputs.id }}" -F draft=false -f make_latest=true --jq '.html_url'

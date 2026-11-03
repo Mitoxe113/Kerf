@@ -2,21 +2,17 @@
 
 Nicht-linearer Videoschnitt für den Desktop. Rust-Engine, Tauri-2-Shell, React-Oberfläche, FFmpeg für Analyse und Export, WebGL2 für die Echtzeit-Vorschau.
 
-> **Stand:** Phase 1–3 und 7–10 sind fertig und getestet: Mehrspur-Timeline mit allen Profi-Werkzeugen, Quellmonitor, Keyframes mit Bezier-Kurven, Effekt-Stapel mit LUTs, Chroma-Key, Farbrädern und Kurven, Titel und Untertitel (SRT/VTT), Übergänge, Audio-Effekte und Lautheit, Geschwindigkeitsrampen und Rückwärts-Clips, verschachtelte Sequenzen, Multicam, andockbare Panels, Programmausgabe auf einem zweiten Bildschirm, segmentierter Export, automatische Updates. Builds und Tests laufen auf Windows, macOS und Linux. Was noch fehlt, steht ehrlich in [docs/STATUS.md](docs/STATUS.md), die nächsten Schritte in [docs/ROADMAP.md](docs/ROADMAP.md).
+> **Stand:** Phase 1–3 und 7–10 sind fertig und getestet: Mehrspur-Timeline mit allen Profi-Werkzeugen, Quellmonitor, Keyframes mit Bezier-Kurven, Effekt-Stapel mit LUTs, Chroma-Key, Farbrädern und Kurven, Titel und Untertitel (SRT/VTT), Übergänge, Audio-Effekte und Lautheit, Geschwindigkeitsrampen und Rückwärts-Clips, verschachtelte Sequenzen, Multicam, andockbare Panels, Programmausgabe auf einem zweiten Bildschirm, segmentierter Export, automatische Updates. Die CI baut und testet unter Windows. Was noch fehlt, steht ehrlich in [docs/STATUS.md](docs/STATUS.md), die nächsten Schritte in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Installieren
 
-Installer für Windows (`.exe`), macOS (`.dmg`) und Linux (`.deb`, `.AppImage`) liegen unter [Releases](https://github.com/Mitoxe113/Kerf/releases). Kerf sucht danach selbst nach Updates (abschaltbar in den Einstellungen); Updates sind signiert und werden vor der Installation geprüft.
+Kerf gibt es für **Windows (64 Bit)**. Den Installer (`Kerf_<Version>_x64-setup.exe`) gibt es unter [Releases](https://github.com/Mitoxe113/Kerf/releases). Danach sucht Kerf selbst nach Updates (abschaltbar in den Einstellungen); ein Update wird nur installiert, wenn seine Signatur zum in Kerf hinterlegten öffentlichen Schlüssel passt.
 
-Kerf braucht ein installiertes **FFmpeg 7 oder neuer**:
+Kerf braucht ein installiertes **FFmpeg 7 oder neuer**, unter Windows z. B. `winget install Gyan.FFmpeg`. Die Statusleiste zeigt an, ob Kerf FFmpeg gefunden hat und ob die Version reicht.
 
-| System | Installation |
-| --- | --- |
-| Windows | `winget install Gyan.FFmpeg` |
-| macOS | `brew install ffmpeg` |
-| Linux | Paket der Distribution, falls ≥ 7, sonst ein statischer Build (z. B. von BtbN) mit `KERF_FFMPEG_DIR` |
+Ist der Installer nicht mit einem Code-Signing-Zertifikat signiert, zeigt Windows beim ersten Start einen SmartScreen-Hinweis (*Weitere Informationen › Trotzdem ausführen*).
 
-Die Installer sind noch nicht mit einem Zertifikat signiert: Windows zeigt beim ersten Start einen SmartScreen-Hinweis (*Weitere Informationen › Trotzdem ausführen*), macOS fragt über Gatekeeper (*Rechtsklick › Öffnen*).
+**macOS und Linux** werden nicht gebaut und nicht getestet. Der Quellcode enthält noch die Konfiguration dafür; ein Test unter Linux (WebKitGTK 2.52) ergab, dass der Programmmonitor Videos über Tauris `asset:`-Protokoll nicht abspielt (GStreamer meldet `FormatError`), auch mit installiertem `gstreamer1.0-libav`.
 
 ## Voraussetzungen zum Entwickeln
 
@@ -57,9 +53,9 @@ npm test
 npm run typecheck
 ```
 
-Die Rust-Tests enthalten 13 echte Läufe mit FFmpeg (`crates/kerf-media/tests/pipeline.rs`): Testmedien erzeugen → analysieren → schneiden → rendern → Pixel, Ton und Dauer des Ergebnisses prüfen, für Keyframes, Effekte, Übergänge, Untertitel, Audio-Effekte, Rampen, verschachtelte Sequenzen, Multicam und den segmentierten Export. Ohne FFmpeg werden sie übersprungen; mit `KERF_REQUIRE_FFMPEG=1` (so in der CI) schlagen sie stattdessen fehl.
+Die Rust-Tests enthalten 16 echte Läufe mit FFmpeg (`crates/kerf-media/tests/pipeline.rs`): Testmedien erzeugen → analysieren → schneiden → rendern → Pixel, Ton und Dauer des Ergebnisses prüfen, für Keyframes, Effekte, Übergänge, Untertitel, Audio-Effekte, Rampen, verschachtelte Sequenzen, Multicam und den segmentierten Export. Ohne FFmpeg werden sie übersprungen; mit `KERF_REQUIRE_FFMPEG=1` (so in der CI) schlagen sie stattdessen fehl.
 
-Die [CI](.github/workflows/ci.yml) führt bei jedem Push alles auf Windows, macOS und Linux aus und baut unsignierte Installer als Artefakte.
+Die [CI](.github/workflows/ci.yml) führt bei jedem Push alles unter Windows aus und baut den unsignierten Installer als Artefakt.
 
 ## Release bauen
 
@@ -71,7 +67,7 @@ Erzeugt das Programm und die Installer unter `target/release/bundle/`. Der Insta
 
 Weil die Update-Pakete signiert werden, braucht `tauri build` den Updater-Schlüssel (`TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`). Ohne ihn baut man mit `npm run tauri build -- --config src-tauri/tauri.unsigned.conf.json`.
 
-**Veröffentlichen:** Version in `src-tauri/tauri.conf.json`, `Cargo.toml` und `package.json` erhöhen, committen, Tag `v<Version>` pushen. Der [Release-Workflow](.github/workflows/release.yml) baut alle Installer samt `latest.json` in einen Release-Entwurf; erst das Veröffentlichen des Entwurfs macht ihn zum Update für alle installierten Kerfs. Er braucht die Secrets `TAURI_SIGNING_PRIVATE_KEY` und `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`; Zertifikate für Windows und macOS sind optional (Namen im Workflow).
+**Veröffentlichen:** Version in `src-tauri/tauri.conf.json`, `Cargo.toml` und `package.json` erhöhen, committen, Tag `v<Version>` pushen. Der [Release-Workflow](.github/workflows/release.yml) baut den Windows-Installer samt `latest.json` und veröffentlicht das Release, sobald der Build gelungen ist; ab dann ist es das Update für alle installierten Kerfs. Er braucht die Secrets `TAURI_SIGNING_PRIVATE_KEY` und `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, sonst schlägt der Build fehl und nichts wird veröffentlicht. Ein Code-Signing-Zertifikat für Windows ist optional (`WINDOWS_CERTIFICATE`, `WINDOWS_CERTIFICATE_PASSWORD`). Ein manueller Lauf des Workflows erzeugt nur einen Entwurf.
 
 > Den Updater-Schlüssel und sein Passwort sicher aufbewahren: Ohne sie lassen sich keine Updates mehr für bereits installierte Kopien ausliefern.
 
@@ -135,7 +131,7 @@ src/shell            Titelleiste, Menüs, Arbeitsbereiche, Dialoge, Statusleiste
 src/actions          Aktions-Registry (Menüs, Shortcuts, Toolbars), Tastaturbelegung
 fixtures/parity      Gemeinsame Testdaten für Vorschau/Export-Parität (Rust + TS)
 docs                 Architektur, Status, Roadmap
-.github/workflows    CI (Windows, macOS, Linux) und Release
+.github/workflows    CI und Release (Windows)
 ```
 
 Details zur Architektur: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).

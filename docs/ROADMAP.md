@@ -49,7 +49,7 @@ Zuverlässigkeit (Deltas, geteilte Undo-Schnappschüsse, Autosave, Versionen, Wi
 - ✅ Marker mit Kategorie, Bereich und Kapitel, Marker-Panel, Kapitel im Export
 - ✅ Projektprüfung, Relink-Suche, Projekt archivieren, portable Pfade, Cache-Verwaltung, Metadaten
 - ☐ Transkription und automatische Untertitel (lokales Sprachmodell nötig), Smart Reframe
-- ☐ Render-Warteschlange, Einstellungsebenen, Compound Clips, überwachte Ordner, Plugins und Makros
+- ☐ Stapel-Export mehrerer Profile, Einstellungsebenen, Compound Clips, überwachte Ordner, Plugins und Makros
 
 ## Als Nächstes
 

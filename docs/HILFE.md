@@ -86,6 +86,7 @@ Kerf hat kein Plugin-, Makro- oder Skriptsystem.
 | Problem | Lösung |
 | --- | --- |
 | „FFmpeg nicht gefunden“ | FFmpeg 7+ installieren oder `KERF_FFMPEG_DIR` auf den Ordner mit `ffmpeg` und `ffprobe` setzen, Kerf neu starten. |
+| FFmpeg „(zu alt)“ in der Statusleiste | Kerf braucht FFmpeg 7 oder neuer; mit 6.x schlägt jeder Export fehl. Neueres FFmpeg installieren oder einen statischen Build über `KERF_FFMPEG_DIR` einbinden. |
 | Medium offline | Rechtsklick › *Neu verknüpfen* oder *Projekt › Verknüpfen*. |
 | Vorschau ruckelt | Vorschauqualität auf ½ oder ¼ (Einstellungen › Vorschau), Proxys einschalten. |
 | Export schlägt fehl | Export-Protokoll öffnen (Symbol am Auftrag); es enthält Befehlszeile, Filtergraph und FFmpeg-Meldungen. |

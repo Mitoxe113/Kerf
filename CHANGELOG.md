@@ -2,9 +2,9 @@
 
 Format nach [Keep a Changelog](https://keepachangelog.com/de/1.1.0/), Versionen nach [Semantic Versioning](https://semver.org/lang/de/).
 
-## [0.1.0] (unveröffentlicht)
+## [0.1.0] (2026-11-03)
 
-Erste Veröffentlichung. Projektdateien haben `schemaVersion` 1.
+Erste Veröffentlichung, nur für Windows (64 Bit). Kerf braucht ein installiertes FFmpeg 7 oder neuer. Projektdateien haben `schemaVersion` 1.
 
 ### Schnitt
 - Mehrspur-Timeline mit Auswahl, Rasierklinge, Ripple, Rollen, Slip, Slide, Einrasten, Spuren sperren, stumm und solo
@@ -36,3 +36,9 @@ Erste Veröffentlichung. Projektdateien haben `schemaVersion` 1.
 - `open_path` öffnet nur in dieser Sitzung exportierte Dateien
 - Datenschutz-Übersicht in den Einstellungen, Build-Kennung und Protokollordner unter *Über Kerf*
 - Lizenzübersicht aller Abhängigkeiten (`docs/LICENSES.md`)
+- Ein FFmpeg älter als 7 wird in Statusleiste und Export-Panel markiert; ein daran gescheiterter Export nennt den Grund
+- Vorschau-Medien, die nicht laden, landen im Protokoll statt nur einen schwarzen Monitor zu hinterlassen
+
+### Bekannte Einschränkungen
+- Code-Signing des Installers greift nur mit einem als Secret hinterlegten Zertifikat; ohne Zertifikat warnt Windows SmartScreen beim ersten Start (*Weitere Informationen › Trotzdem ausführen*). Update-Pakete sind unabhängig davon mit dem Updater-Schlüssel signiert und werden vor der Installation geprüft
+- Keine Builds für macOS und Linux

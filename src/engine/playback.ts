@@ -559,6 +559,7 @@ export class PlaybackEngine {
         const voice = v;
         el.addEventListener("seeked", () => this.onSeeked(voice));
         el.addEventListener("loadeddata", () => this.requestRender());
+        el.addEventListener("error", () => this.onMediaError(asset, el as HTMLMediaElement));
         if (kind === "audio") {
           const ctx = this.mixer.context();
           v.source = ctx.createMediaElementSource(el);
@@ -575,6 +576,19 @@ export class PlaybackEngine {
     }
     v.lastUsed = performance.now();
     return v;
+  }
+
+  /** Sources that failed to load, reported once each: without this the monitor just stays black. */
+  private failed = new Set<string>();
+
+  private onMediaError(asset: MediaAsset, el: HTMLMediaElement) {
+    const src = el.currentSrc || el.src;
+    if (this.failed.has(src)) return;
+    this.failed.add(src);
+    const e = el.error;
+    const message = `Vorschau kann „${asset.name}“ nicht laden (MediaError ${e?.code ?? "?"}${e?.message ? `: ${e.message}` : ""}) ${src}`;
+    console.error(message);
+    void api.logFrontend("warn", message).catch(() => undefined);
   }
 
   private onSeeked(v: Voice) {

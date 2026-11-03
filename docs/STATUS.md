@@ -1,8 +1,37 @@
 # Status
 
-Stand: 3. November 2026 · Version 0.1.0 · nach Phase 8–10 (Titel, Effekte, Audio, Skalierung, Arbeitsumgebung), der Release-Vorbereitung, dem Kreativ-Ökosystem (Effekt-Browser, Typografie, Stockmedien) und den Schnittassistenten mit Projektverwaltung
+Stand: 3. November 2026 · Version 0.1.0 (erstes Release, nur Windows) · nach Phase 8–10 (Titel, Effekte, Audio, Skalierung, Arbeitsumgebung), der Release-Vorbereitung, dem Kreativ-Ökosystem (Effekt-Browser, Typografie, Stockmedien) und den Schnittassistenten mit Projektverwaltung
 
 Diese Liste ist absichtlich nüchtern. „Fertig“ heißt: implementiert, durch Tests abgedeckt **und** in der laufenden App durchgespielt (echte Maus- und Tastaturereignisse über das WebView2-DevTools-Protokoll oder echte IPC-Aufrufe an die Engine). Alles andere ist als teilweise oder offen markiert. Die Ausgangslage vor Phase 7 steht in [AUDIT.md](AUDIT.md).
+
+## Release 0.1.0: Stabilisierung und Abnahme
+
+**Plattform:** Veröffentlicht wird nur Windows (64 Bit). CI und Release-Workflow bauen und testen nur noch unter Windows; macOS und Linux werden nicht gebaut.
+
+**Neu in dieser Runde, mit Tests:**
+- Beenden fragt nach laufenden Exporten und Downloads, bricht sie ab, wartet bis zu 10 s auf das Ende aller Hintergrundaufträge und löscht unvollständige Dateien (3 Frontend-Tests).
+- Unbekannte Angaben in Projektdateien (z. B. aus einer neueren Version) werden gemeldet; Überschreiben fragt nach (Rust-Test, 2 Frontend-Tests, keine Fehlmeldung bei den 10 Projekten der Pipeline-Tests). Messung mit 6.000 Clips (7,2 MB, Release-Build): Laden 51 ms, Prüfung 149 ms im Hintergrund, das Öffnen wartet nicht darauf.
+- Fehler der Oberfläche, unbehandelte Promises und nicht ladbare Vorschau-Medien landen im Protokoll; eine Fehlergrenze um die ganze App bietet „Oberfläche neu laden“.
+- `open_path` öffnet nur Dateien, die in dieser Sitzung fertig exportiert wurden.
+- FFmpeg älter als 7 wird in Statusleiste und Export-Panel markiert, ein daran gescheiterter Export nennt den Grund (Versionserkennung mit 6 echten Versionszeilen getestet).
+- *Über Kerf* zeigt Build-Kennung (Commit), Protokoll- und Datenordner; Einstellungen › Datenschutz beschreibt, was lokal bleibt und was nur auf Aktion übertragen wird.
+- Lizenzübersicht aller 534 Rust-Crates und 11 npm-Pakete in [LICENSES.md](LICENSES.md), erzeugt mit `scripts/licenses.mjs`. `npm audit`: 0 Meldungen. `cargo audit`: 0 Schwachstellen, 9 Warnungen (nicht mehr gepflegte oder zurückgezogene Crates, darunter `ttf-parser`, siehe Roadmap).
+
+**Ende-zu-Ende-Test der Release-Version** (eigener Release-Build, echte Maus- und Tastatureingaben über XTest, echte GTK-Dateidialoge). Er lief unter Linux (Xvfb, WebKitGTK 2.52, FFmpeg 6.1.1 über einen Adapter für `-/filter_complex`), weil diese Umgebung kein Windows hat:
+
+| Ablauf | Ergebnis |
+| --- | --- |
+| Start, neues Projekt, Import von 3 Dateien über den Dialog, Ziehen in die Timeline, Schnitt mit `Strg+K` | bestanden |
+| Titel einfügen und Text ändern, Effekt (Vignette) per Ziehen auf einen Clip | bestanden |
+| Speichern über den Dialog; zweites Speichern legt `.bak` mit dem vorigen Stand an | bestanden |
+| Export über die Render-Warteschlange, Datei mit `ffprobe` geprüft: H.264 1280×720, 25 fps, AAC 48 kHz Stereo, 30,28 s (= Sequenzlänge), Titel und Vignette im Bild, Ton vorhanden; Prüfung nach dem Rendern bestanden | bestanden |
+| Schließen während des Exports fragt nach („Aufträge laufen noch“), Abbrechen lässt den Export weiterlaufen | bestanden |
+| Verlauf-Panel: Sprung zu einem früheren Schritt | bestanden |
+| `kill -9` nach automatischer Sicherung, Neustart bietet den Stand an, Wiederherstellen enthält die letzte Änderung | bestanden |
+| Sauberes Beenden ohne offene Aufträge, Neustart ohne Wiederherstellungsdialog, Öffnen über „Zuletzt geöffnet“ | bestanden |
+| Programmmonitor zeigt Videobilder | **nicht bestanden unter Linux**: WebKitGTK spielt Medien über Tauris `asset:`-Protokoll nicht ab (`MediaError 4`, GStreamer `FormatError`), auch mit `gstreamer1.0-libav`; mit `file://` dekodiert derselbe Browser die Datei. Titel und Effekt-Vorschaubilder erscheinen. Unter Windows (WebView2, Medien über `http://asset.localhost`) ist die Wiedergabe laut Abschnitt *Fertig und verifiziert* in früheren Durchläufen in der laufenden App geprüft; in dieser Runde ließ sich Windows nicht bedienen. |
+
+**CI-Lauf für Commit `3e80735`:** Tests unter Windows (inkl. 16 Pipeline-Tests mit aktuellem FFmpeg) und der Windows-Installer grün.
 
 ## Schnittassistenten und Projektverwaltung
 
@@ -137,8 +166,8 @@ Dieser Abschnitt hat einen anderen Prüfstand als „Fertig und verifiziert“: 
 **Verteilung und Updates**
 - **Windows-Installer (NSIS)** auf diesem System installiert, aktualisiert und deinstalliert: Installation pro Benutzer ohne Adminrechte, Startmenü-Eintrag, Dateizuordnung. Die Deinstallation entfernt Programm, Startmenü-Eintrag, Uninstall-Eintrag und Dateityp und stellt eine vorher vorhandene Zuordnung von `.kerf` wieder her; Benutzerdaten (Wiederherstellung, Versionen) bleiben erhalten.
 - **Automatische Updates** über GitHub-Releases, signiert mit einem eigenen Updater-Schlüssel (minisign). Ende-zu-Ende geprüft mit zwei signierten Builds (0.1.0 → 0.1.1) gegen einen lokalen Update-Server: Prüfung beim Start, Dialog mit Version, Datum und Hinweisen, Download, Signaturprüfung, Installation im passiven Modus, Neustart als 0.1.1. Ist beim Start schon ein Dialog offen (z. B. Wiederherstellung), erscheint das Angebot, sobald er geschlossen ist. Abschaltbar in den Einstellungen, *Hilfe › Nach Updates suchen …* prüft von Hand.
-- **CI auf GitHub Actions** für Windows, macOS und Linux: Typprüfung, Frontend-Tests, Clippy, alle Rust-Tests einschließlich der Pipeline-Tests mit echtem FFmpeg (ein fehlendes FFmpeg lässt den Lauf scheitern statt Tests zu überspringen) und Installer für alle drei Systeme (`.exe`, `.dmg`/`.app`, `.deb`/`.AppImage`). Alle Jobs grün.
-- **Release-Workflow:** Ein Tag `v…` baut signierte Installer und `latest.json` in einen Release-Entwurf; Code-Signierung für Windows und macOS ist vorbereitet und greift, sobald die Zertifikate als Secrets hinterlegt sind.
+- **CI auf GitHub Actions** unter Windows: Typprüfung, Frontend-Tests, Clippy, alle Rust-Tests einschließlich der Pipeline-Tests mit echtem FFmpeg (ein fehlendes FFmpeg lässt den Lauf scheitern statt Tests zu überspringen) und der unsignierte Installer als Artefakt.
+- **Release-Workflow:** Ein Tag `v…` baut den Windows-Installer mit Updater-Signatur und `latest.json` und veröffentlicht das Release nach erfolgreichem Build; Code-Signing ist vorbereitet und greift, sobald ein Zertifikat als Secret hinterlegt ist.
 - **Lizenz:** GPL-3.0-or-later, Drittanbieter-Hinweise in [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
 
 ## Performance
@@ -160,19 +189,19 @@ Dieser Abschnitt hat einen anderen Prüfstand als „Fertig und verifiziert“: 
 
 | Bereich | Anzahl | Was |
 | --- | --- | --- |
-| `kerf-core` Unit | 79 | Zeit/Timecode, alle Edit-Befehle (inkl. `addEffects`, `addMarkers`, `batch`), Ducking-Kurve, Archiv, Zeitabbildung (Rampen, Rückwärts), Übergänge und Masken, verschachtelte Sequenzen, Multicam, Untertitel, Textstil und Animation, Keyframes inkl. Bezier, Undo, Projektdatei |
+| `kerf-core` Unit | 81 | Zeit/Timecode, alle Edit-Befehle (inkl. `addEffects`, `addMarkers`, `batch`), Ducking-Kurve, Archiv, Zeitabbildung (Rampen, Rückwärts), Übergänge und Masken, verschachtelte Sequenzen, Multicam, Untertitel, Textstil und Animation, Keyframes inkl. Bezier, Undo, Projektdatei inkl. unbekannter Felder und unterbrochenem Speichern |
 | `kerf-core` Parität | 1 | Farbmatrix gegen gemeinsame Fixture |
-| `kerf-media` Unit | 29 | Probe-Parsing, Filtergraph, CBR/Mono/Letterbox, EBU-R128-Parser, Teilgrenzen und Plan des segmentierten Exports, Titel-Folgen, Kapitel, Szenen/Stille/Beats/Momente an synthetischen Signalen |
+| `kerf-media` Unit | 30 | Probe-Parsing, FFmpeg-Versionserkennung, Filtergraph, CBR/Mono/Letterbox, EBU-R128-Parser, Teilgrenzen und Plan des segmentierten Exports, Titel-Folgen, Kapitel, Szenen/Stille/Beats/Momente an synthetischen Signalen |
 | `kerf-media` Erkennung | 1 | Echtes FFmpeg: Schnitte bei 2 s und 4 s, Bereichsanalyse, Stille 1,5–3 s, Abbruch |
 | `kerf-media` Pipeline | 16 | Echtes FFmpeg: Schnitt → Render → Pixelprüfung, Abbruch, Keyframes, animierte Farbe, Effekt-Stapel, Lautheit, Untertitel, Übergänge inkl. Masken, Mischmodi, animierte Titel, Audio-Effekte und Loudnorm, Rückwärts und Rampen, verschachtelte Sequenzen, Multicam-Synchronisation, segmentiert = ein Stück (inkl. Kapitel) |
 | `kerf-library` | 13 | Migrationen, Presets (Prüfung, Export/Import), Favoriten, Recents, Titelvorlagen, Assets und Sammlungen, Schriften (Import, Ablehnung, Entfernen) |
 | `kerf-assets` | 10 | Anbieter-Parser, Lizenzzuordnung, URL-Regeln, Inhaltsprüfung, Berichte; Mock-Server: Suche, Schlüssel, Download, abgelehnte Inhalte und Weiterleitungen, Abbruch, 429 |
-| App-Crate | 5 | Versionen, Projektdatei-Argument, Untertitel-Kodierung, Datumsformat, Relink-Suche |
-| Frontend (Vitest) | 97 | Timecode, Timeline-Constraints, Keyframes/Easing/Bezier, Zeitabbildung, Effekte und Kurven, Audio-DSP gegen FFmpeg-Fixtures, Textsatz und Textanimation, Deltas, Docking, unscharfe Suche, Tastaturprofile, Assistenten-Befehle (Bereiche entfernen, Marker, Szenen), Projektprüfung |
+| App-Crate | 6 | Versionen, Projektdatei-Argument, Untertitel-Kodierung, Datumsformat, Relink-Suche, Wiederherstellung nach Absturz |
+| Frontend (Vitest) | 105 | Timecode, Timeline-Constraints, Keyframes/Easing/Bezier, Zeitabbildung, Effekte und Kurven, Audio-DSP gegen FFmpeg-Fixtures, Textsatz und Textanimation, Deltas, Docking, unscharfe Suche, Tastaturprofile, Assistenten-Befehle (Bereiche entfernen, Marker, Szenen), Projektprüfung, Beenden mit laufenden Aufträgen, unbekannte Projektfelder, Codec-Prüfung der Vorschau |
 
-In dieser Arbeitsumgebung lief die Pipeline mit FFmpeg 6.1 über einen Adapter für `-/filter_complex`: 15 von 16 bestanden, `reverse_and_speed_ramps_render` scheitert dort schon vor diesen Änderungen (zuletzt geprüft nach dem Kapitel-Export). Maßgeblich ist die CI mit FFmpeg ≥ 7.
+In dieser Arbeitsumgebung lief die Pipeline mit FFmpeg 6.1 über einen Adapter für `-/filter_complex`: 15 von 16 bestanden, `reverse_and_speed_ramps_render` scheitert nur dort (Rampen-Frame 116 statt 115). Mit aktuellem FFmpeg in der CI bestehen alle 16. Zusätzlich gibt es einen Zeitmesstest für große Projekte (`cargo test -p kerf-core --release --test large_project -- --ignored --nocapture`).
 
-Alle Rust-Tests laufen in der CI auf Windows, macOS und Linux.
+Alle Tests laufen in der CI unter Windows.
 
 **QA-Durchlauf Release-Vorbereitung** (installierte App): signierter Build installiert · Dateizuordnung im Registry geprüft · `.kerf` per Shell geöffnet bei laufendem und bei geschlossenem Kerf · Datei-Drop importiert · Update beim Start gefunden, installiert, Neustart als neue Version · Schließen mit ungespeicherten Änderungen fragt nach · Deinstallation mit und ohne vorher vorhandene Zuordnung.
 
@@ -181,7 +210,8 @@ Alle Rust-Tests laufen in der CI auf Windows, macOS und Linux.
 ## Bekannte Einschränkungen
 
 - **Explorer-Drop und native Dateidialoge** wurden nicht mit echten Betriebssystem-Eingaben ferngesteuert (die Bildschirmsteuerung wurde für diesen Test nicht freigegeben). Geprüft sind der Drop-Handler mit Tauris Drop-Ereignis und die Aktionen hinter den Dialogen mit festen Pfaden.
-- **macOS und Linux** bauen und bestehen alle automatischen Tests in der CI, die Oberfläche wurde dort aber nicht von Hand bedient. Die macOS-Builds sind nicht signiert (Gatekeeper fragt beim ersten Start), ebenso der Windows-Installer (SmartScreen-Hinweis), solange keine Zertifikate hinterlegt sind.
+- **Nur Windows:** macOS und Linux werden nicht gebaut und nicht getestet. Unter Linux spielte der Programmmonitor im Test keine Videos ab (siehe *Release 0.1.0*).
+- **Code-Signing:** Ohne hinterlegtes Zertifikat ist der Windows-Installer unsigniert (SmartScreen-Hinweis beim ersten Start). Update-Pakete sind davon unabhängig mit dem Updater-Schlüssel signiert.
 - **Updates über GitHub** sind erst mit dem ersten veröffentlichten Release wirksam; der Weg über einen lokalen Server ist geprüft, der über GitHub selbst noch nicht.
 - **Export:** weiterhin ein FFmpeg-Eingang pro Clipabschnitt. Segmentiertes Rendern verteilt die Arbeit, beschleunigt aber nur aufwendige Timelines; eine eigene GPU-Pipeline gibt es nicht (bewusst: FFmpeg segmentiert statt wgpu).
 - **Ripple** betrifft die bearbeitete und verknüpfte Spuren; *Einfügen*, Extract und Standbild verschieben alle nicht gesperrten Spuren.
@@ -198,7 +228,7 @@ Alle Rust-Tests laufen in der CI auf Windows, macOS und Linux.
 - Smart Bins, Metadaten-Editor, überwachte Ordner, wählbarer Cache-Ordner und automatisches Aufräumen
 - Transkription, automatische Untertitel, Übersetzung, Smart Reframe, Tracking, KI-Masken (kein lokales Modell eingebunden)
 - Einstellungsebenen, Compound Clips (verschachtelte Sequenzen gibt es), Spurgruppen
-- Render-Warteschlange, Exportprofile im Stapel, AV1/DNxHR
+- Stapel-Export mehrerer Exportprofile in einem Schritt, AV1/DNxHR (die Render-Warteschlange gibt es)
 - Plugins, Makros, Skripte; universelle Suche über die Befehlspalette hinaus, visuelle Zwischenablage, Referenzmonitor, Brand Kits, Versionsvergleich
 - HDR, wählbare Farbmatrix für ungetaggte Quellen
 - Native GPU-Pipeline (wgpu) für den Export
