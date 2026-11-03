@@ -5,6 +5,7 @@ import {
   ChevronLast,
   Expand,
   Grid2x2,
+  MonitorUp,
   Pause,
   Play,
   Repeat,
@@ -24,6 +25,7 @@ import { formatTimecode, parseTimecode } from "../lib/time";
 import type { Clip, Sequence, Transform } from "../lib/types";
 import { cancelPick, NO_GUIDES, useEditor, type Guides } from "../state/editor";
 import { edit, sourceAsset, useActiveSequence, useProject } from "../state/project";
+import { toggleOutputWindow } from "../shell/OutputWindow";
 import { cx, IconButton, openContextMenu, PanelHeader, Select, type MenuItem } from "../ui/primitives";
 
 function TimecodeInput({ seq, frame }: { seq: Sequence; frame: number }) {
@@ -249,7 +251,7 @@ export function Monitor() {
   const playing = usePlaying();
   const rate = useRate();
   const ed = useEditor(
-    useShallow((s) => ({ fullscreen: s.fullscreen, monitorZoom: s.monitorZoom, quality: s.quality, guides: s.guides, select: s.select, set: s.set, picking: s.picker !== null })),
+    useShallow((s) => ({ fullscreen: s.fullscreen, monitorZoom: s.monitorZoom, quality: s.quality, outputScale: s.outputScale, outputWindow: s.outputWindow, guides: s.guides, select: s.select, set: s.set, picking: s.picker !== null })),
   );
   const hostRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -303,8 +305,8 @@ export function Monitor() {
       const h = height * s;
       setView({ x: (W - w) / 2, y: (H - h) / 2, w, h, s, W });
       const c = canvasRef.current!;
-      // Never render more pixels than the sequence has or the screen shows.
-      const scale = Math.min(1, s * (window.devicePixelRatio || 1)) * ed.quality;
+      // Never render more pixels than the sequence has or the screens (this one, the output window) show.
+      const scale = Math.max(Math.min(1, s * (window.devicePixelRatio || 1)), ed.outputScale) * ed.quality;
       c.width = Math.max(2, Math.round(width * scale));
       c.height = Math.max(2, Math.round(height * scale));
       engine.requestRender();
@@ -313,7 +315,7 @@ export function Monitor() {
     const ro = new ResizeObserver(fit);
     ro.observe(host);
     return () => ro.disconnect();
-  }, [seq?.settings.width, seq?.settings.height, ed.monitorZoom, ed.quality, seq]);
+  }, [seq?.settings.width, seq?.settings.height, ed.monitorZoom, ed.quality, ed.outputScale, seq]);
 
   const duration = engine.duration;
   const toggleFullscreen = async () => {
@@ -365,6 +367,7 @@ export function Monitor() {
               openContextMenu({ clientX: r.left, clientY: r.bottom + 4 }, guideMenu(g));
             }}
           />
+          <IconButton icon={<MonitorUp size={14} />} label="Programmausgabe in eigenem Fenster" active={ed.outputWindow} onClick={toggleOutputWindow} />
           <IconButton icon={<Expand size={14} />} label="Vollbild" shortcut="⇧+F" onClick={() => void toggleFullscreen()} />
         </PanelHeader>
       )}

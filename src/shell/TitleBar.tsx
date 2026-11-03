@@ -29,7 +29,7 @@ const MENUS: { label: string; items: (string | "-")[] }[] = [
   { label: "Clip", items: ["clip.rename", "@labels", "clip.reveal", "clip.matchFrame", "-", "clip.freeze", "clip.normalize", "-", "clip.enable", "clip.link", "clip.unlink", "-", "clip.nudgeLeft", "clip.nudgeRight"] },
   { label: "Effekte", items: ["clip.fades", "fx.fadeIn", "fx.fadeOut", "fx.noFades", "-", "fx.fill", "fx.fit", "fx.resetMotion", "-", "fx.mono", "fx.resetColor", "fx.color", "-", "fx.resetAudio"] },
   { label: "Wiedergabe", items: ["play.toggle", "play.inOut", "play.loop", "-", "play.reverse", "play.stop", "play.forward", "-", "play.stepBack", "play.stepFwd", "play.prevEdit", "play.nextEdit", "-", "play.start", "play.end", "-", "play.gotoIn", "play.gotoOut", "play.clipStart", "play.clipEnd"] },
-  { label: "Fenster", items: ["@workspaces", "-", "@panels", "-", "win.save", "win.reset"] },
+  { label: "Fenster", items: ["@workspaces", "-", "@panels", "-", "win.output", "-", "win.save", "win.reset"] },
   { label: "Hilfe", items: ["app.palette", "app.commands", "-", "edit.shortcuts", "app.start", "-", "help.about"] },
 ];
 

@@ -185,6 +185,10 @@ interface EditorStore {
   autosaveSeconds: number;
   /** Saved versions kept per project (0 = none). */
   keepVersions: number;
+  /** The program output window is open (not persisted). */
+  outputWindow: boolean;
+  /** Pixels per sequence pixel the output window shows (0 = none); the monitor renders at least that many. */
+  outputScale: number;
 
   set: (p: Partial<EditorStore>) => void;
   setTool: (t: ToolId) => void;
@@ -258,6 +262,8 @@ export const useEditor = create<EditorStore>((set, get) => ({
   renameMedia: null,
   autosaveSeconds: 30,
   keepVersions: 20,
+  outputWindow: false,
+  outputScale: 0,
   showStartScreen: true,
   ...prefs,
   startScreen: prefs.showStartScreen ?? true,

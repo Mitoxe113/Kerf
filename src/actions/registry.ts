@@ -2,6 +2,7 @@
 // shortcut editor all read from here, so every visible command is wired.
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { toggleOutputWindow } from "../shell/OutputWindow";
 import { switchAngle } from "./multicam";
 import { engine } from "../engine/playback";
 import { useEditor, WORKSPACES, type ToolId } from "../state/editor";
@@ -181,6 +182,7 @@ const base: Action[] = [
   },
 
   // Fenster
+  { id: "win.output", group: "Fenster", label: "Programmausgabe in eigenem Fenster", keys: [], run: toggleOutputWindow, checked: () => ed().outputWindow },
   { id: "win.reset", group: "Fenster", label: "Arbeitsbereich zurücksetzen", keys: [], run: () => ed().resetWorkspace() },
   { id: "win.save", group: "Fenster", label: "Arbeitsbereich speichern unter …", keys: [], run: () => ed().set({ dialog: { kind: "saveWorkspace" } }) },
 

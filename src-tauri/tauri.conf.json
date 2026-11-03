@@ -13,6 +13,7 @@
     "windows": [
       {
         "label": "main",
+        "create": false,
         "title": "Kerf",
         "width": 1600,
         "height": 960,

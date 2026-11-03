@@ -173,6 +173,7 @@ export class PlaybackEngine {
   private voices = new Map<string, Voice>();
   private compositor: Compositor | null = null;
   private listeners = new Set<Listener>();
+  private frameListeners = new Set<(canvas: HTMLCanvasElement) => void>();
   private raf = 0;
   private renderQueued = false;
   private startFrame = 0;
@@ -211,6 +212,13 @@ export class PlaybackEngine {
 
   get canvas() {
     return this.compositor?.canvas ?? null;
+  }
+
+  /** Calls `f` with the program canvas right after each frame is drawn (to copy it elsewhere). */
+  onFrame(f: (canvas: HTMLCanvasElement) => void): () => void {
+    this.frameListeners.add(f);
+    this.requestRender();
+    return () => this.frameListeners.delete(f);
   }
 
   subscribe(l: Listener): () => void {
@@ -911,6 +919,7 @@ export class PlaybackEngine {
     const layers = this.layers();
     this.lastLayers = layers;
     comp.render(layers);
+    for (const f of this.frameListeners) f(comp.canvas);
     if (this.scopesEnabled && this.scopesListener) {
       const now = performance.now();
       if (now - this.lastScope > 90) {

@@ -7,14 +7,45 @@ mod recovery;
 mod versions;
 mod state;
 
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
 
 use kerf_core::model::Project;
-use tauri::{Emitter, Manager};
+use tauri::webview::{NewWindowFeatures, NewWindowResponse};
+use tauri::{AppHandle, Emitter, Manager, Url, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 use crate::export_jobs::ExportService;
 use crate::media_jobs::MediaService;
 use crate::state::{now_ms, project_arg, AppPaths, AppState, Session};
+
+/// Answers `window.open("about:blank")` from the main window with a window of
+/// its own that shares the page's script context: the program output for a
+/// second display, drawn by the main window's playback engine. Nothing else
+/// may open windows.
+fn output_window(app: &AppHandle, url: Url, features: NewWindowFeatures) -> NewWindowResponse<tauri::Wry> {
+    static COUNT: AtomicU32 = AtomicU32::new(0);
+    if url.as_str() != "about:blank" {
+        log::warn!("blocked window.open({url})");
+        return NewWindowResponse::Deny;
+    }
+    let label = format!("output-{}", COUNT.fetch_add(1, Ordering::Relaxed) + 1);
+    let built = WebviewWindowBuilder::new(app, label, WebviewUrl::External(url))
+        .title("Kerf – Programm")
+        .inner_size(1280.0, 720.0)
+        .min_inner_size(320.0, 180.0)
+        .background_color(tauri::window::Color(0, 0, 0, 255))
+        .window_features(features)
+        // It shows only what the main page draws into it; it never loads anything.
+        .on_navigation(|url| url.as_str() == "about:blank")
+        .build();
+    match built {
+        Ok(window) => NewWindowResponse::Create { window },
+        Err(e) => {
+            log::error!("output window: {e}");
+            NewWindowResponse::Deny
+        }
+    }
+}
 
 pub fn run() {
     tauri::Builder::default()
@@ -81,7 +112,23 @@ pub fn run() {
             state.media.start(handle);
             state.exports.start(handle);
             recovery::start(handle);
+
+            // Built here rather than from the config alone, so the page can open
+            // the program output window (see output_window).
+            let config = app.config().app.windows.iter().find(|w| w.label == "main").cloned().ok_or("main window missing from the config")?;
+            let opener = handle.clone();
+            WebviewWindowBuilder::from_config(handle, &config)?.on_new_window(move |url, features| output_window(&opener, url, features)).build()?;
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            // Output windows go with the main window (the app ends with it).
+            if window.label() == "main" && matches!(event, WindowEvent::Destroyed) {
+                for (label, w) in window.app_handle().webview_windows() {
+                    if label != "main" {
+                        let _ = w.destroy();
+                    }
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             commands::app_info,

@@ -563,15 +563,25 @@ export function Progress({ value, indeterminate, tone = "signal" }: { value?: nu
 
 /** Tab strip of the panel group a panel sits in; it takes the place of the panel title. */
 export const PanelGroupTabs = createContext<ReactNode>(null);
+/** Starts dragging the panel to another place in the layout (from its header). */
+export const PanelDock = createContext<((e: React.PointerEvent) => void) | null>(null);
 /** True when the panel shares its area with others (its title is the tab). */
 export const useInPanelGroup = () => useContext(PanelGroupTabs) !== null;
 
 export function PanelHeader({ title, children, tabs }: { title?: ReactNode; children?: ReactNode; tabs?: ReactNode }) {
   const group = useContext(PanelGroupTabs);
+  const dock = useContext(PanelDock);
   return (
-    <div className="flex h-8 shrink-0 items-center gap-2 border-b border-line px-2.5">
+    <div
+      className="flex h-8 shrink-0 items-center gap-2 border-b border-line px-2.5"
+      // The empty header and the title move the panel; its controls stay controls.
+      onPointerDown={(e) => {
+        const t = e.target as HTMLElement;
+        if (dock && (t === e.currentTarget || t.matches("span.panel-title"))) dock(e);
+      }}
+    >
       {group}
-      {tabs ?? (!group && <span className="panel-title">{title}</span>)}
+      {tabs ?? (!group && <span className="panel-title min-w-0 truncate">{title}</span>)}
       <div className="ml-auto flex items-center gap-0.5">{children}</div>
     </div>
   );
