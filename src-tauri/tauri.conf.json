@@ -38,6 +38,10 @@
     "targets": ["nsis"],
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico"],
     "category": "Video",
+    "license": "GPL-3.0-or-later",
+    "copyright": "Copyright © 2026 Marco Blessing",
+    "publisher": "Marco Blessing",
+    "homepage": "https://github.com/Mitoxe113/Kerf",
     "fileAssociations": [
       {
         "ext": ["kerf"],

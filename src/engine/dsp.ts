@@ -1,9 +1,18 @@
 // Audio effects of the preview. Each stage computes what the FFmpeg filter
 // the export uses computes, sample for sample: the RBJ biquads of
 // af_biquads.c (direct form I), acompressor and agate (RMS detection,
-// channels averaged) and alimiter (5 ms look-ahead), ported from FFmpeg
-// (LGPL-2.1-or-later). Runs inside the AudioWorklet (audio-worklet.ts) and
-// in tests against FFmpeg's output (dsp.test.ts).
+// channels averaged) and alimiter (5 ms look-ahead), ported from FFmpeg.
+// Runs inside the AudioWorklet (audio-worklet.ts) and in tests against
+// FFmpeg's output (dsp.test.ts).
+//
+// Derived from FFmpeg's libavfilter (af_biquads.c, af_sidechaincompress.c,
+// af_agate.c, af_alimiter.c), LGPL-2.1-or-later, here under Kerf's
+// GPL-3.0-or-later (LGPL 2.1, section 3):
+//   Copyright (c) 2013 Paul B Mahol
+//   Copyright (c) 2006-2008 Rob Sykes
+//   Copyright (C) 2001-2010 Krzysztof Foltman, Markus Schmidt, Thor Harald
+//     Johansen, Damien Zammit and others
+//   Copyright (c) 2015 Paul B Mahol
 
 import type { AudioEffect, AudioEffectKind, ChannelMap, EqBand } from "../lib/types";
 

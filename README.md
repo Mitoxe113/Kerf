@@ -90,6 +90,12 @@ Alle Tastaturbefehle sind unter *Bearbeiten → Tastaturbefehle …* (`Strg+Alt+
 
 **Drag & Drop:** Dateien und Ordner aus dem Explorer ins Fenster ziehen importiert sie. Medien aus dem Browser in die Timeline ziehen überschreibt, mit gedrückter `Strg`-Taste wird eingefügt.
 
+## Lizenz
+
+Kerf ist freie Software unter der [GNU General Public License v3.0 oder später](LICENSE) (GPL-3.0-or-later). Du darfst es nutzen, untersuchen, verändern und weitergeben; Weitergaben (auch veränderte) müssen wieder unter der GPL stehen und ihren Quellcode mitliefern.
+
+Kerf bringt kein FFmpeg mit, sondern ruft ein installiertes FFmpeg als eigenes Programm auf; dafür gilt dessen Lizenz. Code und Schriften Dritter sowie der aus FFmpeg abgeleitete Teil der Audio-Vorschau sind in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) aufgeführt.
+
 ## Projektstruktur
 
 ```

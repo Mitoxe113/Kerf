@@ -635,6 +635,10 @@ function About({ onClose }: { onClose: () => void }) {
         <div className="space-y-1 text-sm">
           <div className="text-base font-semibold">Kerf {info?.version}</div>
           <div className="text-fg-3">Nicht-linearer Videoschnitt. Rust-Engine, Tauri-Shell, WebGL2-Vorschau.</div>
+          <div className="text-xs text-fg-3">
+            Freie Software unter der GNU GPL v3 (oder später), ohne Gewährleistung. Quellcode und Drittanbieter-Hinweise:{" "}
+            <span className="select-text text-fg-2">github.com/Mitoxe113/Kerf</span>
+          </div>
           <div className="pt-2 text-xs text-fg-3">{info?.ffmpeg ?? "FFmpeg nicht gefunden"}</div>
           <div className="text-xs text-fg-3">Hardware-Encoder: {info?.hwEncoders?.length ? info.hwEncoders.join(", ") : "keine"}</div>
           <div className="truncate text-xs text-fg-4" title={info?.cacheDir}>Cache: {info?.cacheDir}</div>

@@ -5,8 +5,10 @@ members = ["crates/kerf-core", "crates/kerf-media", "src-tauri"]
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-authors = ["Kerf"]
+authors = ["Marco Blessing"]
 rust-version = "1.82"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/Mitoxe113/Kerf"
 
 [workspace.dependencies]
 kerf-core = { path = "crates/kerf-core" }
