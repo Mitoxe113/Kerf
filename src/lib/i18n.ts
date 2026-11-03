@@ -83,6 +83,8 @@ const ERRORS: Record<string, string> = {
   libraryFailed: "Die lokale Bibliothek (Presets, Favoriten) ist nicht verfügbar.",
   notFound: "Der Eintrag existiert nicht mehr.",
   invalid: "Die Daten sind ungültig.",
+  providerFailed: "Der Medienanbieter ist nicht erreichbar oder antwortete mit einem Fehler.",
+  keyStoreFailed: "Der Schlüsselspeicher des Betriebssystems ist nicht verfügbar.",
 };
 
 export const errorText = (code: string, message: string) => ERRORS[code] ?? message;

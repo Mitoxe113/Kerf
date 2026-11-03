@@ -245,6 +245,18 @@ export function ExportPanel() {
       });
       if (go !== true) return;
     }
+    // License hints for downloaded assets (information only; Kerf cannot clear rights).
+    const files = (useProject.getState().project?.media ?? []).filter((m) => m.path && !m.title).map((m) => m.path);
+    const lic = await api.licenseEntries(files).catch(() => []);
+    const notCommercial = lic.filter((e) => e.asset && e.asset.commercial !== "yes").length;
+    const credits = lic.filter((e) => e.asset?.attributionRequired).length;
+    if (notCommercial || credits) {
+      toast.info(
+        "Lizenzhinweise",
+        [notCommercial && `${notCommercial} heruntergeladene Medien ohne ausdrückliche Erlaubnis zur kommerziellen Nutzung`, credits && `${credits} verlangen eine Namensnennung`].filter(Boolean).join(", ") +
+          ". Details im Lizenzbericht (Stockmedien).",
+      );
+    }
     try {
       // Titles and burned-in subtitles are drawn here and overlaid as PNGs.
       const titles = await titleFiles(seq, useProject.getState().mediaById);

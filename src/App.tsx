@@ -8,6 +8,7 @@ import { engine } from "./engine/playback";
 import { loadFonts } from "./state/fonts";
 import { api, events } from "./lib/ipc";
 import { ExportPanel } from "./panels/ExportPanel";
+import { StockBrowser } from "./panels/StockBrowser";
 import { HistoryPanel } from "./panels/History";
 import { Inspector } from "./panels/Inspector";
 import { MediaBrowser } from "./panels/MediaBrowser";
@@ -42,6 +43,7 @@ const PANELS: Record<PanelId, React.ReactNode> = {
   subtitles: <SubtitlesPanel />,
   multicam: <MulticamPanel />,
   effects: <EffectsBrowser />,
+  stock: <StockBrowser />,
 };
 
 /** Keeps the playback engine in sync with the document and view settings. */
