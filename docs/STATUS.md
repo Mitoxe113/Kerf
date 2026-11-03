@@ -1,8 +1,28 @@
 # Status
 
-Stand: 3. November 2026 · Version 0.1.0 · nach Phase 8–10 (Titel, Effekte, Audio, Skalierung, Arbeitsumgebung), der Release-Vorbereitung und dem Kreativ-Ökosystem (Effekt-Browser, Typografie, Stockmedien)
+Stand: 3. November 2026 · Version 0.1.0 · nach Phase 8–10 (Titel, Effekte, Audio, Skalierung, Arbeitsumgebung), der Release-Vorbereitung, dem Kreativ-Ökosystem (Effekt-Browser, Typografie, Stockmedien) und den Schnittassistenten mit Projektverwaltung
 
 Diese Liste ist absichtlich nüchtern. „Fertig“ heißt: implementiert, durch Tests abgedeckt **und** in der laufenden App durchgespielt (echte Maus- und Tastaturereignisse über das WebView2-DevTools-Protokoll oder echte IPC-Aufrufe an die Engine). Alles andere ist als teilweise oder offen markiert. Die Ausgangslage vor Phase 7 steht in [AUDIT.md](AUDIT.md).
+
+## Schnittassistenten und Projektverwaltung
+
+Gleicher Prüfstand wie das Kreativ-Ökosystem: implementiert, durch automatische Tests (zum Teil mit echtem FFmpeg) abgedeckt, Oberflächen in Headless-Chromium mit simuliertem Backend gerendert. **In der laufenden Tauri-App bedient wurde davon nichts.** Keine Funktion schickt Medien an einen Dienst; alles läuft lokal über FFmpeg. Die Bestandsaufnahme und die bewusst ausgelassenen Teile stehen in [AUDIT.md](AUDIT.md#audit-phase-10-werkzeuge-und-projektverwaltung).
+
+### Implementiert und automatisch geprüft
+
+- **Szenenerkennung** (Panel *Assistent*): harte Schnitte über Histogrammabstand mit adaptiver Schwelle, Blitzunterdrückung, weiche Übergänge über die Erdbewegerdistanz, Mindestlänge. Ergebnis als Liste zum Abhaken; übernommen werden wahlweise Schnitte am Clip, Marker der Kategorie „Szenen“ oder neue Clips je Szene. Für Clips und für Medien im Medienpool, abbrechbar, mit Fortschritt.
+- **Stille finden und entfernen**: RMS in 10-ms-Blöcken, Grundrauschen als 10. Perzentil, relative oder absolute Schwelle, Mindestdauer, Vor- und Nachlauf, kurze Geräusche überbrücken. Entfernen schneidet den Clip und seine verknüpften Partner und schließt die Lücken; alles ist ein Undo-Schritt.
+- **Beat-Erkennung**: spektraler Fluss, Tempo per Autokorrelation, Beat-Verfolgung per dynamischer Programmierung; Taktbeginn nur, wenn er sich deutlich abhebt (sonst nicht angezeigt). Übernahme als Marker (alle Beats, starke Beats oder Taktanfänge).
+- **Momente** (Highlights): Vorschläge aus Bewegung, Lautstärke und Schnittdichte, ausdrücklich als Vorschläge beschriftet, nicht als Qualitätsurteil.
+- **Ducking**: Sprachbereiche aus Auslöser-Spuren, Absenkungskurve mit Attack, Hold und Release als Lautstärke-Keyframes auf den Zielclips; Vorschau der Kurve vor der Übernahme, vorhandene Lautstärke-Keyframes werden ausgewiesen, bevor sie ersetzt werden.
+- **Marker**: Kategorie, Dauer (Bereichsmarker) und Kapitel-Kennzeichen; Panel *Marker* mit Suche, Filter, Umbenennen, Notiz, Farbe, Kapitel, Löschen. Neue Edit-Befehle `addMarkers`, `removeMarkers` und `batch` (mehrere Befehle als ein Undo-Schritt, ganz oder gar nicht).
+- **Kapitel im Export**: Marker mit Kapitel-Kennzeichen werden als Kapitelspur in MP4/MOV geschrieben (FFmpeg-Metadatendatei, `-map_chapters`), im Einzel- und im segmentierten Export, nach dem Export-Bereich zugeschnitten. Schalter im Export-Panel, sichtbar sobald es Kapitelmarker gibt. Mit FFmpeg 6.1 in beiden Exportwegen per `ffprobe -show_chapters` geprüft.
+- **Projektprüfung** (Panel *Projekt*): fehlende oder unlesbare Medien, fehlende Schriften, nötige Proxys, leere Sequenzen, ungewöhnliche Bildraten, ungerade Abmessungen, leere Bereiche (mit „Lücke schließen“ oder Springen), abweichende Bildraten der Quellen, sehr kurze und deaktivierte Clips, Marker hinter dem Ende. Sie meldet nur; jede Korrektur ist ein eigener Klick.
+- **Neu verknüpfen**: Suche nach fehlenden Medien in gewählten Ordnern (Name und Größe, Name, Dateiname ohne Endung), die besten Treffer werden auf gleiche Dauer geprüft; Übernahme als ein Undo-Schritt. Begrenzt auf 300.000 Einträge und 16 Ebenen, überspringt versteckte Ordner und den Cache.
+- **Projekt archivieren**: kopiert benutzte (wahlweise alle) Medien und LUTs in einen leeren Zielordner, schreibt ein Projekt mit relativen Pfaden und eine `ARCHIV.txt` (mit nicht mitkopierten Schriften), prüft Größen und liest das Projekt zurück. Kopien laufen über `.part`-Dateien; Abbruch, voller Datenträger und nicht leere Ziele werden gemeldet. Abgeleitete Dateien (Proxys, Wellenformen) werden nicht mitkopiert, sondern am Ziel neu erzeugt.
+- **Portable Projekte**: Projektdateien dürfen relative Medienpfade enthalten (`portablePaths`); alte Projekte bleiben unverändert lesbar.
+- **Cache-Verwaltung**: Größe je Art (Proxys, Miniaturen, Wellenformen, Sonstiges wie Vorschaudateien und Analysen) und davon ungenutzt, freier Speicher; Leeren je Art, wahlweise auch für geöffnete Medien (diese werden neu erzeugt). Nur Ordner mit Kerfs Fingerabdruck-Namen im Cache werden gelöscht, nie Originale oder Projektdateien.
+- **Metadaten**: vollständige `ffprobe`-Ausgabe je Medium mit Farbunterabtastung und Bittiefe.
 
 ## Kreativ-Ökosystem (Effekte, Typografie, Stockmedien)
 
@@ -140,16 +160,17 @@ Dieser Abschnitt hat einen anderen Prüfstand als „Fertig und verifiziert“: 
 
 | Bereich | Anzahl | Was |
 | --- | --- | --- |
-| `kerf-core` Unit | 73 | Zeit/Timecode, alle Edit-Befehle (inkl. `addEffects`), Zeitabbildung (Rampen, Rückwärts), Übergänge und Masken, verschachtelte Sequenzen, Multicam, Untertitel, Textstil und Animation, Keyframes inkl. Bezier, Undo, Projektdatei |
+| `kerf-core` Unit | 79 | Zeit/Timecode, alle Edit-Befehle (inkl. `addEffects`, `addMarkers`, `batch`), Ducking-Kurve, Archiv, Zeitabbildung (Rampen, Rückwärts), Übergänge und Masken, verschachtelte Sequenzen, Multicam, Untertitel, Textstil und Animation, Keyframes inkl. Bezier, Undo, Projektdatei |
 | `kerf-core` Parität | 1 | Farbmatrix gegen gemeinsame Fixture |
-| `kerf-media` Unit | 23 | Probe-Parsing, Filtergraph, CBR/Mono/Letterbox, EBU-R128-Parser, Teilgrenzen und Plan des segmentierten Exports, Titel-Folgen |
-| `kerf-media` Pipeline | 16 | Echtes FFmpeg: Schnitt → Render → Pixelprüfung, Abbruch, Keyframes, animierte Farbe, Effekt-Stapel, Lautheit, Untertitel, Übergänge inkl. Masken, Mischmodi, animierte Titel, Audio-Effekte und Loudnorm, Rückwärts und Rampen, verschachtelte Sequenzen, Multicam-Synchronisation, segmentiert = ein Stück |
+| `kerf-media` Unit | 29 | Probe-Parsing, Filtergraph, CBR/Mono/Letterbox, EBU-R128-Parser, Teilgrenzen und Plan des segmentierten Exports, Titel-Folgen, Kapitel, Szenen/Stille/Beats/Momente an synthetischen Signalen |
+| `kerf-media` Erkennung | 1 | Echtes FFmpeg: Schnitte bei 2 s und 4 s, Bereichsanalyse, Stille 1,5–3 s, Abbruch |
+| `kerf-media` Pipeline | 16 | Echtes FFmpeg: Schnitt → Render → Pixelprüfung, Abbruch, Keyframes, animierte Farbe, Effekt-Stapel, Lautheit, Untertitel, Übergänge inkl. Masken, Mischmodi, animierte Titel, Audio-Effekte und Loudnorm, Rückwärts und Rampen, verschachtelte Sequenzen, Multicam-Synchronisation, segmentiert = ein Stück (inkl. Kapitel) |
 | `kerf-library` | 13 | Migrationen, Presets (Prüfung, Export/Import), Favoriten, Recents, Titelvorlagen, Assets und Sammlungen, Schriften (Import, Ablehnung, Entfernen) |
 | `kerf-assets` | 10 | Anbieter-Parser, Lizenzzuordnung, URL-Regeln, Inhaltsprüfung, Berichte; Mock-Server: Suche, Schlüssel, Download, abgelehnte Inhalte und Weiterleitungen, Abbruch, 429 |
-| App-Crate | 4 | Versionen, Projektdatei-Argument, Untertitel-Kodierung, Datumsformat |
-| Frontend (Vitest) | 90 | Timecode, Timeline-Constraints, Keyframes/Easing/Bezier, Zeitabbildung, Effekte und Kurven, Audio-DSP gegen FFmpeg-Fixtures, Textsatz und Textanimation, Deltas, Docking, unscharfe Suche, Tastaturprofile |
+| App-Crate | 5 | Versionen, Projektdatei-Argument, Untertitel-Kodierung, Datumsformat, Relink-Suche |
+| Frontend (Vitest) | 97 | Timecode, Timeline-Constraints, Keyframes/Easing/Bezier, Zeitabbildung, Effekte und Kurven, Audio-DSP gegen FFmpeg-Fixtures, Textsatz und Textanimation, Deltas, Docking, unscharfe Suche, Tastaturprofile, Assistenten-Befehle (Bereiche entfernen, Marker, Szenen), Projektprüfung |
 
-In dieser Arbeitsumgebung lief die Pipeline mit FFmpeg 6.1 über einen Adapter für `-/filter_complex`: 15 von 16 bestanden, `reverse_and_speed_ramps_render` scheitert dort schon vor diesen Änderungen. Maßgeblich ist die CI mit FFmpeg ≥ 7.
+In dieser Arbeitsumgebung lief die Pipeline mit FFmpeg 6.1 über einen Adapter für `-/filter_complex`: 15 von 16 bestanden, `reverse_and_speed_ramps_render` scheitert dort schon vor diesen Änderungen (zuletzt geprüft nach dem Kapitel-Export). Maßgeblich ist die CI mit FFmpeg ≥ 7.
 
 Alle Rust-Tests laufen in der CI auf Windows, macOS und Linux.
 
@@ -174,7 +195,11 @@ Alle Rust-Tests laufen in der CI auf Windows, macOS und Linux.
 
 - Masken (Formen) und Rauschunterdrückung
 - Keyframe-Editor in der Timeline, Keyframes einzeln kopieren
-- Smart Bins, Metadaten-Editor, Projekt archivieren (Medien sammeln), Cache-Verwaltung
+- Smart Bins, Metadaten-Editor, überwachte Ordner, wählbarer Cache-Ordner und automatisches Aufräumen
+- Transkription, automatische Untertitel, Übersetzung, Smart Reframe, Tracking, KI-Masken (kein lokales Modell eingebunden)
+- Einstellungsebenen, Compound Clips (verschachtelte Sequenzen gibt es), Spurgruppen
+- Render-Warteschlange, Exportprofile im Stapel, AV1/DNxHR
+- Plugins, Makros, Skripte; universelle Suche über die Befehlspalette hinaus, visuelle Zwischenablage, Referenzmonitor, Brand Kits, Versionsvergleich
 - HDR, wählbare Farbmatrix für ungetaggte Quellen
 - Native GPU-Pipeline (wgpu) für den Export
 - Code-Signatur-Zertifikate (der Release-Workflow ist vorbereitet), Absturzberichte (bewusst ausgelassen)

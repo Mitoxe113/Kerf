@@ -217,7 +217,7 @@ fn edit_and_render_real_media() {
         title_files: Default::default(),
         title_sequences: Default::default(),
         loudness: None,
-        segmented: false,
+        segmented: false, chapters: false,
     };
     let plan = render::plan(&p, sequence, &settings, d, &[]).unwrap();
     assert_eq!(plan.inputs, 6, "2 video halves + still + 2 audio halves + tone\n{}", plan.graph);
@@ -295,7 +295,7 @@ fn cancelled_render_leaves_no_file() {
         title_files: Default::default(),
         title_sequences: Default::default(),
         loudness: None,
-        segmented: false,
+        segmented: false, chapters: false,
     };
     let plan = render::plan(&p, p.sequence(seq).unwrap(), &settings, dir.path(), &[]).unwrap();
     let cancel = AtomicBool::new(false);
@@ -387,7 +387,7 @@ fn keyframed_position_opacity_and_volume_render() {
         title_files: Default::default(),
         title_sequences: Default::default(),
         loudness: None,
-        segmented: false,
+        segmented: false, chapters: false,
     };
     let plan = render::plan(&p, p.sequence(seq).unwrap(), &export, dir.path(), &[]).unwrap();
     render::render(&tools, &plan, &AtomicBool::new(false), |_| {}).expect("render with keyframes");
@@ -448,7 +448,7 @@ fn animated_colour_renders() {
         title_files: Default::default(),
         title_sequences: Default::default(),
         loudness: None,
-        segmented: false,
+        segmented: false, chapters: false,
     };
     let plan = render::plan(&p, p.sequence(seq).unwrap(), &export, dir.path(), &[]).unwrap();
     render::render(&tools, &plan, &AtomicBool::new(false), |_| {}).expect("render with colour keys");
@@ -511,7 +511,7 @@ fn effect_stack_renders() {
         title_files: Default::default(),
         title_sequences: Default::default(),
         loudness: None,
-        segmented: false,
+        segmented: false, chapters: false,
     };
     let plan = render::plan(&p, p.sequence(seq).unwrap(), &export, dir.path(), &[]).unwrap();
     let mut log = String::new();
@@ -568,7 +568,7 @@ fn catalog_effects_render() {
         title_files: Default::default(),
         title_sequences: Default::default(),
         loudness: None,
-        segmented: false,
+        segmented: false, chapters: false,
     };
     let plan = render::plan(&p, p.sequence(seq).unwrap(), &export, dir.path(), &[]).unwrap();
     let mut log = String::new();
@@ -649,7 +649,7 @@ fn subtitles_burn_embed_and_sidecar() {
         title_files: Default::default(),
         title_sequences: Default::default(),
         loudness: None,
-        segmented: false,
+        segmented: false, chapters: false,
     };
     let plan = render::plan(&p, p.sequence(seq).unwrap(), &export, dir.path(), &[]).unwrap();
     let mut log = String::new();
@@ -729,7 +729,7 @@ fn transitions_render() {
             title_files: Default::default(),
             title_sequences: Default::default(),
             loudness: None,
-            segmented: false,
+            segmented: false, chapters: false,
         };
         let plan = render::plan(p, p.sequence(seq).unwrap(), &export, dir.path(), &[]).unwrap();
         let mut log = String::new();
@@ -854,7 +854,7 @@ fn audio_effects_and_loudness_render() {
             title_files: Default::default(),
             title_sequences: Default::default(),
             loudness,
-            segmented: false,
+            segmented: false, chapters: false,
         };
         let plan = render::plan(p, p.sequence(seq).unwrap(), &export, dir.path(), &[]).unwrap();
         let mut log = String::new();
@@ -977,7 +977,7 @@ fn reverse_and_speed_ramps_render() {
             title_files: Default::default(),
             title_sequences: Default::default(),
             loudness: None,
-            segmented: false,
+            segmented: false, chapters: false,
         };
         let plan = render::plan(p, p.sequence(seq).unwrap(), &export, dir.path(), &[]).unwrap();
         let mut log = String::new();
@@ -1111,7 +1111,7 @@ fn nested_sequences_render() {
         title_files: Default::default(),
         title_sequences: Default::default(),
         loudness: None,
-        segmented: false,
+        segmented: false, chapters: false,
     };
     let plan = render::plan(&p, p.sequence(outer).unwrap(), &export, d, &[]).unwrap();
     assert_eq!(plan.nested.len(), 2, "both levels render first");
@@ -1204,6 +1204,10 @@ fn segmented_export_matches_one_piece() {
     kerf_core::ops::apply(&mut p, &EditCommand::SetTransitions { sequence: seq, items }).unwrap();
     let cues = vec![Cue { id: Uuid::new_v4(), start: 200, end: 300, text: "Über die Grenze".into() }];
     kerf_core::ops::apply(&mut p, &EditCommand::SetSubtitles { sequence: seq, cues }).unwrap();
+    // Chapters at 0 s and 12 s (the second one across a part boundary); a plain marker is no chapter.
+    let mark = |frame, name: &str, chapter| kerf_core::ops::NewMarker { frame, name: name.into(), note: String::new(), color: MarkerColor::Blue, category: String::new(), duration: 0, chapter };
+    let markers = vec![mark(0, "Anfang", true), mark(300, "Teil = 2; #b", true), mark(400, "kein Kapitel", false)];
+    kerf_core::ops::apply(&mut p, &EditCommand::AddMarkers { sequence: seq, markers }).unwrap();
 
     let render = |segmented: bool| {
         let file = dir.path().join(if segmented { "parts.mp4" } else { "whole.mp4" });
@@ -1225,6 +1229,7 @@ fn segmented_export_matches_one_piece() {
             title_sequences: Default::default(),
             loudness: Some(LoudnessTarget { integrated: -20.0, true_peak: -1.0 }),
             segmented,
+            chapters: true,
         };
         let plan = render::plan_with(&p, p.sequence(seq).unwrap(), &export, dir.path(), &[], Some(2)).unwrap();
         assert_eq!(plan.parts.len(), if segmented { 3 } else { 0 });
@@ -1249,6 +1254,10 @@ fn segmented_export_matches_one_piece() {
     }
     assert_eq!(probe_entries(&tools, &parts, &["-select_streams", "v", "-show_entries", "stream=r_frame_rate,color_space"]), "bt709,25/1");
     assert_eq!(probe_entries(&tools, &parts, &["-select_streams", "s", "-show_entries", "stream=codec_name"]), "mov_text");
+    for f in [&parts, &whole] {
+        let chapters = probe_entries(&tools, f, &["-show_chapters", "-show_entries", "chapter=start_time,end_time:chapter_tags=title"]);
+        assert_eq!(chapters.lines().collect::<Vec<_>>(), ["0.000000,12.000000,Anfang", "12.000000,30.000000,Teil = 2; #b"], "{f:?}");
+    }
     // The parts follow each other without a jump in the timestamps.
     assert!(!log.to_lowercase().contains("monoton"), "{log}");
     // Every frame matches its counterpart (a frame off would show in the moving pattern).
@@ -1307,7 +1316,7 @@ fn blend_modes_render() {
             output: file.clone(), video_codec: VideoCodec::H264, hardware: false, width: 320, height: 180,
             fps: Rational::new(25, 1), rate: RateControl::Quality { crf: 10 }, audio_codec: AudioCodec::Aac,
             audio_bitrate_kbps: 192, sample_rate: 48_000, audio_channels: 2, use_in_out: false,
-            subtitles: Default::default(), title_files: Default::default(), title_sequences: Default::default(), loudness: None, segmented: false,
+            subtitles: Default::default(), title_files: Default::default(), title_sequences: Default::default(), loudness: None, segmented: false, chapters: false,
         };
         let plan = render::plan(p, p.sequence(seq).unwrap(), &export, d, &[]).unwrap();
         let mut log = String::new();
@@ -1362,7 +1371,7 @@ fn animated_title_frames_render() {
         fps: Rational::new(25, 1), rate: RateControl::Quality { crf: 10 }, audio_codec: AudioCodec::Aac,
         audio_bitrate_kbps: 192, sample_rate: 48_000, audio_channels: 2, use_in_out: false,
         subtitles: Default::default(), title_files: Default::default(),
-        title_sequences: [(clip, frames)].into_iter().collect(), loudness: None, segmented: false,
+        title_sequences: [(clip, frames)].into_iter().collect(), loudness: None, segmented: false, chapters: false,
     };
     let plan = render::plan(&p, p.sequence(seq).unwrap(), &export, d, &[]).unwrap();
     let mut log = String::new();

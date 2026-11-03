@@ -483,6 +483,16 @@ export function ExportPanel() {
             </Field>
           </Section>
         )}
+        {seq.markers.some((m) => m.chapter) && (
+          <Section title="Kapitel">
+            <Field label="Kapitel">
+              <Toggle checked={!!s.chapters} onChange={(v) => upd({ chapters: v })} label="Kapitelmarker in die Datei schreiben" />
+              <span className="truncate text-xs text-fg-3" title="Marker mit Kapitel-Kennzeichen (Marker-Panel) werden als Kapitelspur in MP4/MOV geschrieben. Ein Kapitel reicht bis zum nächsten oder bis zum Ende des Exports.">
+                {seq.markers.filter((m) => m.chapter).length} im Marker-Panel markiert
+              </span>
+            </Field>
+          </Section>
+        )}
         <div className="space-y-2 border-b border-line p-3">
           <div className="flex justify-between gap-2 text-xs text-fg-3">
             <span>Dauer {formatDuration(seconds)}</span>

@@ -576,6 +576,8 @@ export interface ExportSettings {
   loudness?: LoudnessTarget | null;
   /** Encode the picture in parts side by side, joined without re-encoding. */
   segmented?: boolean;
+  /** Write the sequence's chapter markers into the file. */
+  chapters?: boolean;
 }
 
 export interface LoudnessTarget {
