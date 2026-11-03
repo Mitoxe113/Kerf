@@ -5,7 +5,7 @@ import { create } from "zustand";
 import type { KeyParam, PasteItem, Rgb, Uuid } from "../lib/types";
 
 export type ToolId = "select" | "razor" | "ripple" | "roll" | "slip" | "slide" | "hand" | "zoom";
-export type PanelId = "media" | "monitor" | "inspector" | "timeline" | "meters" | "scopes" | "export" | "mixer" | "history" | "source" | "subtitles" | "multicam" | "effects";
+export type PanelId = "media" | "monitor" | "inspector" | "timeline" | "meters" | "scopes" | "export" | "mixer" | "history" | "source" | "subtitles" | "multicam" | "effects" | "stock";
 export type WorkspaceId = "edit" | "media" | "color" | "audio" | "export";
 
 export interface LayoutNode {
@@ -48,7 +48,7 @@ const timelineRow = (size: number) => leaf(row(leaf("timeline", 1), leaf("meters
 
 export const DEFAULT_LAYOUTS: Record<WorkspaceId, WorkspaceLayout> = {
   edit: {
-    root: col(leaf(row(leaf(tabs("media", "source", "effects", "multicam", "subtitles"), 0.25), leaf("monitor", 0.49), leaf(tabs("inspector", "history"), 0.26)), 0.57, "top"), timelineRow(0.43)),
+    root: col(leaf(row(leaf(tabs("media", "source", "effects", "stock", "multicam", "subtitles"), 0.25), leaf("monitor", 0.49), leaf(tabs("inspector", "history"), 0.26)), 0.57, "top"), timelineRow(0.43)),
     hidden: [],
   },
   media: {
@@ -91,6 +91,7 @@ export const PANEL_LABELS: Record<PanelId, string> = {
   subtitles: "Untertitel",
   multicam: "Multicam",
   effects: "Effekte",
+  stock: "Stockmedien",
 };
 
 export interface CustomWorkspace {

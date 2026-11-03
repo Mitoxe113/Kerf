@@ -706,3 +706,133 @@ export interface FontFaceInfo {
   designer: string;
   vendorUrl: string;
 }
+
+// --- media providers and the asset library (kerf-assets, kerf-library::assets) -------
+
+export type ProviderId = "pexels" | "giphy" | "freesound" | "openverse";
+export type SearchKind = "photo" | "video" | "gif" | "audio";
+/** "yes" only when the provider's license explicitly allows it. */
+export type Commercial = "yes" | "no" | "unknown";
+
+export interface ProviderInfo {
+  id: ProviderId;
+  name: string;
+  kinds: SearchKind[];
+  needsKey: boolean;
+  /** Where the key is kept: OS credential store, this session only, or none. */
+  keyStorage: "system" | "session" | "";
+  keyUrl: string;
+}
+
+export interface RemoteFile {
+  url: string;
+  label: string;
+  width: number;
+  height: number;
+  mime: string;
+  size: number;
+}
+
+export interface AssetLicense {
+  code: string;
+  name: string;
+  url: string;
+  commercial: Commercial;
+  modification: Commercial;
+  attributionRequired: boolean;
+  attribution: string;
+  notes: string;
+}
+
+export interface RemoteAsset {
+  provider: ProviderId;
+  providerId: string;
+  kind: string;
+  title: string;
+  creator: string;
+  creatorUrl: string;
+  pageUrl: string;
+  thumbUrl: string;
+  width: number;
+  height: number;
+  durationMs: number;
+  tags: string[];
+  files: RemoteFile[];
+  license: AssetLicense;
+  rating: string;
+}
+
+export interface SearchPage {
+  results: RemoteAsset[];
+  page: number;
+  hasMore: boolean;
+  total: number | null;
+  notice: string;
+}
+
+export interface SearchRequest {
+  provider: ProviderId;
+  kind: SearchKind;
+  query: string;
+  page: number;
+  commercialOnly: boolean;
+}
+
+export interface AssetRecord {
+  id: string;
+  provider: string;
+  providerId: string;
+  kind: string;
+  title: string;
+  creator: string;
+  creatorUrl: string;
+  pageUrl: string;
+  licenseCode: string;
+  licenseName: string;
+  licenseUrl: string;
+  commercial: Commercial;
+  attributionRequired: boolean;
+  attribution: string;
+  filePath: string;
+  sha256: string;
+  size: number;
+  mime: string;
+  width: number;
+  height: number;
+  durationMs: number;
+  tags: string[];
+  favorite: boolean;
+  addedAt: number;
+  missing: boolean;
+}
+
+export interface AssetQuery {
+  kind?: string | null;
+  provider?: string | null;
+  text?: string | null;
+  favorites?: boolean;
+  commercialOnly?: boolean;
+  collection?: string | null;
+  limit?: number | null;
+}
+
+export interface DownloadJob {
+  id: string;
+  provider: string;
+  providerId: string;
+  title: string;
+  kind: string;
+  state: "queued" | "running" | "done" | "failed" | "cancelled";
+  done: number;
+  total: number | null;
+  error: string | null;
+  asset: AssetRecord | null;
+  existing: boolean;
+}
+
+export interface LicenseEntry {
+  file: string;
+  asset: AssetRecord | null;
+}
+
+export type ReportFormat = "txt" | "csv" | "html" | "json";

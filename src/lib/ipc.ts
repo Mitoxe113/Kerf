@@ -12,6 +12,15 @@ import type {
   ExportJob,
   ExportSettings,
   FontFaceInfo,
+  AssetQuery,
+  AssetRecord,
+  DownloadJob,
+  LicenseEntry,
+  ProviderId,
+  ProviderInfo,
+  ReportFormat,
+  SearchPage,
+  SearchRequest,
   HistoryList,
   ItemKind,
   MediaAsset,
@@ -118,6 +127,22 @@ export const api = {
   fontList: (refresh = false) => invoke<FontFaceInfo[]>("font_list", { refresh }),
   fontImport: (paths: string[]) => invoke<FontFaceInfo[]>("font_import", { paths }),
   fontRemove: (path: string) => invoke<void>("font_remove", { path }),
+  mediaProviders: () => invoke<ProviderInfo[]>("media_providers"),
+  mediaSetKey: (provider: ProviderId, key: string, persist: boolean) => invoke<"system" | "session">("media_set_key", { provider, key, persist }),
+  mediaClearKey: (provider: ProviderId) => invoke<void>("media_clear_key", { provider }),
+  mediaSearch: (request: SearchRequest) => invoke<SearchPage>("media_search", { request }),
+  mediaThumb: (provider: string, id: string) => invoke<string>("media_thumb", { provider, id }),
+  mediaDownload: (provider: string, id: string, file: number) => invoke<DownloadJob>("media_download", { provider, id, file }),
+  mediaDownloadCancel: (id: string) => invoke<void>("media_download_cancel", { id }),
+  mediaDownloads: () => invoke<DownloadJob[]>("media_downloads"),
+  mediaDownloadsClear: () => invoke<void>("media_downloads_clear"),
+  /** which: "page", "creator", "license" or "key" (where to get an API key). */
+  mediaOpenLink: (provider: string, id: string, which: "page" | "creator" | "license" | "key") => invoke<void>("media_open_link", { provider, id, which }),
+  assetList: (query: AssetQuery) => invoke<AssetRecord[]>("asset_list", { query }),
+  assetFavorite: (id: string, on: boolean) => invoke<void>("asset_favorite", { id, on }),
+  assetDelete: (id: string, deleteFile: boolean) => invoke<void>("asset_delete", { id, deleteFile }),
+  licenseEntries: (files: string[]) => invoke<LicenseEntry[]>("license_entries", { files }),
+  licenseReport: (project: string, files: string[], format: ReportFormat, path: string) => invoke<void>("license_report", { project, files, format, path }),
 };
 
 export interface MediaJobEvent {
@@ -134,4 +159,5 @@ export const events = {
   autosaved: (cb: (at: number) => void): Promise<UnlistenFn> => listen<number>("autosaved", (e) => cb(e.payload)),
   /** A .kerf file was opened from the OS while Kerf runs. */
   openProject: (cb: (path: string) => void): Promise<UnlistenFn> => listen<string>("open-project", (e) => cb(e.payload)),
+  mediaDownload: (cb: (j: DownloadJob) => void): Promise<UnlistenFn> => listen<DownloadJob>("media-download", (e) => cb(e.payload)),
 };
