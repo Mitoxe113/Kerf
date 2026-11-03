@@ -14,7 +14,7 @@
 // nested sequence's file with straight alpha.
 
 import { api } from "../lib/ipc";
-import type { ColorAdjust, EffectKind, TransitionKind } from "../lib/types";
+import type { BlendMode, ColorAdjust, EffectKind, TransitionKind } from "../lib/types";
 import { EffectPipeline } from "./effects";
 import { colorMatrix, contrastSlope, IDENTITY_COLOR, type Mat3 } from "./math";
 
@@ -45,6 +45,8 @@ export interface Layer {
   fxScale?: number;
   /** Clip-local frame index (grain and glitch change with it). */
   fxFrame?: number;
+  /** How the layer mixes with what is below it; absent = normal. */
+  blend?: BlendMode;
 }
 
 /** Two clips of one track mixed by a transition. */
@@ -113,6 +115,37 @@ void main() {
   outColor = u_premul > 0.5 ? vec4(rgb * a, a) : vec4(rgb, a);
 }`;
 
+/** Blend modes (BlendMode in kerf-core): the composite below as A, the
+ * clip's premultiplied colour as B, in 8-bit integers as FFmpeg's blend. */
+const BLEND_FS = `#version 300 es
+precision highp float;
+in vec2 v_uv;
+uniform sampler2D u_base;
+uniform sampler2D u_layer;
+uniform int u_mode;
+out vec4 outColor;
+float mul(float a, float b) { return floor(a * b / 255.0 + 1e-4); }
+float f(float A, float B) {
+  if (u_mode == 1) return mul(A, B);
+  if (u_mode == 2) return 255.0 - mul(255.0 - A, 255.0 - B);
+  if (u_mode == 3) return A < 128.0 ? 2.0 * mul(A, B) : 255.0 - 2.0 * mul(255.0 - A, 255.0 - B);
+  if (u_mode == 4) return min(255.0, A + B);
+  if (u_mode == 5) return max(A, B);
+  if (u_mode == 6) return min(A, B);
+  if (u_mode == 7) return abs(A - B);
+  return B;
+}
+void main() {
+  vec4 b = texture(u_layer, v_uv);
+  if (b.a <= 0.0) discard;
+  vec4 a = texture(u_base, v_uv);
+  vec3 A = floor((a.a > 0.0 ? a.rgb / a.a : vec3(0.0)) * 255.0 + 0.5);
+  vec3 B = floor(b.rgb * 255.0 + 0.5);
+  vec3 m = vec3(f(A.r, B.r), f(A.g, B.g), f(A.b, B.b)) / 255.0;
+  outColor = vec4(m * b.a, b.a);
+}`;
+export const BLEND_MODES: BlendMode[] = ["normal", "multiply", "screen", "overlay", "add", "lighten", "darken", "difference"];
+
 const FULL_QUAD = new Float32Array([2, 0, 0, 0, 2, 0, -1, -1, 1]);
 /** Mask transitions in the order of the shader's u_mask (1-based). */
 export const MASK_TRANSITIONS: TransitionKind[] = ["irisRound", "irisBox", "clock", "barnDoorH", "barnDoorV", "wipeDiagonal", "blinds"];
@@ -132,6 +165,7 @@ export class Compositor {
   readonly scopePixels = new Uint8Array(SCOPE_W * SCOPE_H * 4);
   private fx: EffectPipeline;
   private solids = new Map<string, WebGLTexture>();
+  private blendProgram: WebGLProgram | null = null;
   /** Drawing into a group's framebuffer: layer matrices are flipped vertically. */
   private flip = false;
 
@@ -269,14 +303,16 @@ export class Compositor {
   private drawLayers(items: DrawItem[], target: WebGLFramebuffer | null, width: number, height: number, upload: boolean, transparent = false) {
     const gl = this.gl;
     // With transitions the frame is built in a framebuffer and drawn at the end.
-    const acc = items.some(isTransition) ? this.fx.acquire(width, height) : null;
+    // So are blend modes, which read what is below (never the multisampled canvas).
+    const acc = items.some((it) => isTransition(it) || (it.blend !== undefined && it.blend !== "normal")) ? this.fx.acquire(width, height) : null;
     const into = acc?.fbo ?? target;
     this.bindMain(into, width, height);
     gl.clearColor(0, 0, 0, transparent ? 0 : 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
     for (const it of items) {
       if (!isTransition(it)) {
-        this.drawLayer(it, into, width, height, upload);
+        if (it.blend && it.blend !== "normal") this.drawBlended(it, into, width, height, upload);
+        else this.drawLayer(it, into, width, height, upload);
         continue;
       }
       // The incoming clip goes over a copy of the stack so far, the outgoing one over the stack.
@@ -298,7 +334,40 @@ export class Compositor {
     }
   }
 
-  private copy(from: WebGLFramebuffer, to: WebGLFramebuffer, width: number, height: number) {
+  /** Draws a layer with a blend mode: the layer alone into a buffer, then mixed with a copy of what is below. */
+  private drawBlended(l: Layer, target: WebGLFramebuffer | null, width: number, height: number, upload: boolean) {
+    const gl = this.gl;
+    const layer = this.fx.acquire(width, height);
+    this.bindMain(layer.fbo, width, height);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    this.drawLayer(l, layer.fbo, width, height, upload);
+    const base = this.fx.acquire(width, height);
+    this.copy(target, base.fbo, width, height);
+    this.blendProgram ??= link(gl, VS, BLEND_FS);
+    const p = this.blendProgram;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, target);
+    gl.viewport(0, 0, width, height);
+    gl.useProgram(p);
+    gl.bindVertexArray(this.vao);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.uniformMatrix3fv(gl.getUniformLocation(p, "u_matrix"), false, FULL_QUAD);
+    gl.uniform4fv(gl.getUniformLocation(p, "u_crop"), NO_CROP);
+    gl.uniform1i(gl.getUniformLocation(p, "u_mode"), Math.max(0, BLEND_MODES.indexOf(l.blend ?? "normal")));
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, layer.tex);
+    gl.uniform1i(gl.getUniformLocation(p, "u_layer"), 1);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, base.tex);
+    gl.uniform1i(gl.getUniformLocation(p, "u_base"), 0);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    this.fx.release(layer);
+    this.fx.release(base);
+    this.bindMain(target, width, height);
+  }
+
+  private copy(from: WebGLFramebuffer | null, to: WebGLFramebuffer, width: number, height: number) {
     const gl = this.gl;
     gl.bindFramebuffer(gl.READ_FRAMEBUFFER, from);
     gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, to);

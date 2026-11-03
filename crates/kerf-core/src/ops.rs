@@ -83,6 +83,7 @@ pub struct ClipPatch {
     pub reverse: Option<bool>,
     /// Skips the effect stack without changing it.
     pub fx_bypass: Option<bool>,
+    pub blend_mode: Option<BlendMode>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -2217,6 +2218,9 @@ fn update_clips(seq: &mut Sequence, media: &[MediaAsset], ids: &[Uuid], p: &Clip
         }
         if let Some(b) = p.fx_bypass {
             c.fx_bypass = b;
+        }
+        if let Some(m) = p.blend_mode {
+            c.blend_mode = m;
         }
         if let Some(v) = p.fade_in {
             c.fade_in = v;

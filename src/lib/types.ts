@@ -219,6 +219,7 @@ export interface Clip {
   multicam?: Uuid | null;
   /** Skips the whole effect stack without changing it. */
   fxBypass?: boolean;
+  blendMode?: BlendMode;
 }
 
 export type EqShape = "highPass" | "lowShelf" | "peak" | "highShelf" | "lowPass";
@@ -239,6 +240,8 @@ export type AudioEffect = { id: Uuid; enabled: boolean } & AudioEffectKind;
 export type ChannelMap = "stereo" | "mono" | "left" | "right" | "swap";
 
 /** Wipes name the direction the edge moves; crossfade is the audio kind. */
+export type BlendMode = "normal" | "multiply" | "screen" | "overlay" | "add" | "lighten" | "darken" | "difference";
+
 export type TransitionKind =
   | "dissolve"
   | "dipBlack"
@@ -415,7 +418,7 @@ export type Edge = "start" | "end";
 export type PlaceMode = "overwrite" | "insert";
 
 export type ClipPatch = Partial<
-  Pick<Clip, "name" | "enabled" | "transform" | "opacity" | "volumeDb" | "pan" | "speed" | "fadeIn" | "fadeOut" | "color" | "label" | "channels" | "reverse" | "fxBypass">
+  Pick<Clip, "name" | "enabled" | "transform" | "opacity" | "volumeDb" | "pan" | "speed" | "fadeIn" | "fadeOut" | "color" | "label" | "channels" | "reverse" | "fxBypass" | "blendMode">
 >;
 export type TrackPatch = Partial<Pick<Track, "name" | "muted" | "solo" | "locked" | "hidden" | "volumeDb" | "color" | "height" | "effects" | "mono">>;
 export type MediaPatch = Partial<Pick<MediaAsset, "favorite" | "label" | "tags" | "note">>;
