@@ -350,7 +350,25 @@ export interface Marker {
   name: string;
   note: string;
   color: MarkerColor;
+  /** Free category, e.g. "scene", "beat" (empty: none). */
+  category?: string;
+  /** Length in frames for range markers (0: a point). */
+  duration?: Frame;
+  /** Written as a chapter into exports that support chapters. */
+  chapter?: boolean;
 }
+
+export interface NewMarker {
+  frame: Frame;
+  name: string;
+  note?: string;
+  color: MarkerColor;
+  category?: string;
+  duration?: Frame;
+  chapter?: boolean;
+}
+
+export type BatchLabel = "sceneCuts" | "removeSilence" | "ducking" | "analysisMarkers" | "relinkMedia";
 
 export interface Sequence {
   id: Uuid;
@@ -513,8 +531,11 @@ export type EditCommand =
   | { type: "linkClips"; sequence: Uuid; clips: Uuid[] }
   | { type: "unlinkClips"; sequence: Uuid; clips: Uuid[] }
   | { type: "addMarker"; sequence: Uuid; frame: Frame; name: string; color: MarkerColor }
-  | { type: "updateMarker"; sequence: Uuid; marker: Uuid; patch: Partial<Pick<Marker, "frame" | "name" | "note" | "color">> }
+  | { type: "updateMarker"; sequence: Uuid; marker: Uuid; patch: Partial<Pick<Marker, "frame" | "name" | "note" | "color" | "category" | "duration" | "chapter">> }
   | { type: "removeMarker"; sequence: Uuid; marker: Uuid }
+  | { type: "addMarkers"; sequence: Uuid; markers: NewMarker[] }
+  | { type: "removeMarkers"; sequence: Uuid; markers: Uuid[] }
+  | { type: "batch"; label: BatchLabel; commands: EditCommand[] }
   | { type: "setKeyframes"; sequence: Uuid; clip: Uuid; param: KeyParam; keys: Keyframe[] }
   | { type: "setClipGain"; sequence: Uuid; gains: ClipGain[] }
   | { type: "removeRange"; sequence: Uuid; start: Frame; end: Frame; ripple: boolean; tracks?: Uuid[] | null }
@@ -836,3 +857,50 @@ export interface LicenseEntry {
 }
 
 export type ReportFormat = "txt" | "csv" | "html" | "json";
+
+// --- editing assistants --------------------------------------------------------
+
+export type AnalysisTarget = { type: "media"; media: Uuid } | { type: "clip"; sequence: Uuid; clip: Uuid };
+
+export interface SceneOptions { threshold: number; gradual: boolean; minScene: number; ignoreFlashes: boolean }
+export interface SilenceOptions { thresholdDb: number; relative: boolean; minSilence: number; padAfter: number; padBefore: number; ignoreBursts: number }
+export interface BeatOptions { minBpm: number; maxBpm: number; preferBpm: number; peakThreshold: number; beatsPerBar: number }
+export interface HighlightOptions { window: number; count: number; motion: number; loudness: number; cuts: number }
+export interface DuckOptions { depthDb: number; attack: number; hold: number; release: number }
+
+export type AnalysisRequest =
+  | { type: "scenes"; options: SceneOptions }
+  | { type: "silence"; options: SilenceOptions }
+  | { type: "beats"; options: BeatOptions }
+  | { type: "highlights"; options: HighlightOptions; scenes: SceneOptions };
+
+export interface SceneCut { time: number; kind: "hard" | "gradual"; from: number; to: number; score: number; lumaChange: number }
+export interface Silence { start: number; end: number; cutStart: number; cutEnd: number }
+export interface SilenceReport { noiseFloorDb: number; thresholdDb: number; silences: Silence[] }
+export interface Beat { time: number; strength: number; beatInBar: number | null }
+export interface BeatReport { bpm: number | null; tempoConfidence: number; beats: Beat[]; peaks: [number, number][]; bars: boolean }
+export interface Highlight { start: number; end: number; score: number; reasons: ("motion" | "loudness" | "cuts")[] }
+
+export interface AnalysisResult {
+  sourceStart: number;
+  sourceEnd: number;
+  scenes: SceneCut[] | null;
+  silence: SilenceReport | null;
+  beats: BeatReport | null;
+  highlights: Highlight[] | null;
+  sceneFrames: (Frame | null)[];
+  beatFrames: (Frame | null)[];
+  peakFrames: (Frame | null)[];
+  silenceRanges: ([Frame, Frame] | null)[];
+  highlightRanges: ([Frame, Frame] | null)[];
+}
+
+export interface AnalysisProgress { job: Uuid; done: number; total: number }
+
+export interface DuckPlan {
+  speech: [number, number][];
+  curve: [number, number][];
+  clips: { clip: Uuid; name: string; keys: Keyframe[]; replacesKeys: boolean }[];
+  skipped: string[];
+  unreadable: string[];
+}

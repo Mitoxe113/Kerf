@@ -28,6 +28,8 @@ import { EffectsBrowser } from "./panels/EffectsBrowser";
 import { useEditor, type PanelId } from "./state/editor";
 import { activeSequence, useProject } from "./state/project";
 import { ContextMenuHost } from "./ui/primitives";
+import { AssistantPanel } from "./panels/Assistant";
+import { MarkersPanel } from "./panels/Markers";
 
 const PANELS: Record<PanelId, React.ReactNode> = {
   media: <MediaBrowser />,
@@ -44,6 +46,8 @@ const PANELS: Record<PanelId, React.ReactNode> = {
   multicam: <MulticamPanel />,
   effects: <EffectsBrowser />,
   stock: <StockBrowser />,
+  assist: <AssistantPanel />,
+  markers: <MarkersPanel />,
 };
 
 /** Keeps the playback engine in sync with the document and view settings. */

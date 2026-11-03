@@ -142,7 +142,7 @@ fn onsets(s: &[f32]) -> Vec<f64> {
 }
 
 /// In-place radix-2 FFT; the inverse is not scaled. `re.len()` is a power of two.
-fn fft(re: &mut [f64], im: &mut [f64], inverse: bool) {
+pub(crate) fn fft(re: &mut [f64], im: &mut [f64], inverse: bool) {
     let n = re.len();
     let mut j = 0;
     for i in 1..n {

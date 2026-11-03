@@ -53,6 +53,12 @@ const EDIT_LABELS: Record<string, string> = {
   createMulticam: "Multicam erstellen",
   placeMulticam: "Multicam einfügen",
   switchAngle: "Kamera wechseln",
+  addMarkers: "Marker setzen",
+  removeMarkers: "Marker löschen",
+  sceneCuts: "Szenenschnitte",
+  removeSilence: "Pausen entfernen",
+  ducking: "Ducking",
+  analysisMarkers: "Analyse-Marker",
 };
 
 export const editLabel = (key: string | null | undefined) => (key ? EDIT_LABELS[key] ?? key : "");
@@ -75,6 +81,14 @@ const ERRORS: Record<string, string> = {
   exportFailed: "Der Export konnte nicht gestartet werden.",
   recoveryFailed: "Die Wiederherstellung ist fehlgeschlagen.",
   ffmpegMissing: "FFmpeg wurde nicht gefunden.",
+  analysisFailed: "Die Analyse ist fehlgeschlagen.",
+  mediaOffline: "Die Mediendatei ist nicht erreichbar.",
+  noVideo: "Das Medium hat kein Bild.",
+  noAudio: "Das Medium hat keinen Ton.",
+  nestedClip: "Verschachtelte Sequenzen lassen sich nicht analysieren. Öffne die Sequenz und analysiere ihre Clips.",
+  notMedia: "Titel enthalten nichts zu analysieren.",
+  tooLong: "Die Beat-Analyse verarbeitet höchstens 30 Minuten am Stück. Analysiere einen Clip der Musik.",
+  noTriggers: "Die Auslöser-Spuren enthalten keine Audioclips.",
   freezeNeedsVideo: "Standbilder lassen sich nur aus Videoclips erzeugen.",
   freezeFailed: "Das Standbild konnte nicht erzeugt werden.",
   versionNotFound: "Diese Version existiert nicht mehr.",

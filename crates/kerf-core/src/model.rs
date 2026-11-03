@@ -1269,6 +1269,15 @@ pub struct Marker {
     #[serde(default)]
     pub note: String,
     pub color: MarkerColor,
+    /// Free category, e.g. "scene", "beat", "silence" (empty: none).
+    #[serde(default)]
+    pub category: String,
+    /// Length in frames for range markers (0: a point).
+    #[serde(default)]
+    pub duration: Frame,
+    /// Written as a chapter into exported files that support chapters.
+    #[serde(default)]
+    pub chapter: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

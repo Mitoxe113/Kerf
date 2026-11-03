@@ -103,8 +103,17 @@ export function drawRuler(ctx: CanvasRenderingContext2D, seq: Sequence, v: View)
   // Markers
   for (const m of seq.markers) {
     const x = m.frame * v.zoom - v.scrollX;
-    if (x < -8 || x > v.width + 8) continue;
+    const len = (m.duration ?? 0) * v.zoom;
+    if (x + len < -8 || x > v.width + 8) continue;
     ctx.fillStyle = COLORS.marker[m.color];
+    // Range markers: a bar along the bottom of the ruler.
+    if (len > 0) {
+      ctx.globalAlpha = 0.45;
+      ctx.fillRect(x, RULER_H - 4, len, 3);
+      ctx.globalAlpha = 1;
+    }
+    // Chapters get a taller flag.
+    if (m.chapter) ctx.fillRect(x - 0.5, 2, 1, RULER_H - 6);
     ctx.beginPath();
     ctx.moveTo(x - 5, RULER_H - 15);
     ctx.lineTo(x + 5, RULER_H - 15);
