@@ -11,6 +11,10 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
+use skrifa::raw::tables::os2::SelectionFlags;
+use skrifa::raw::{FileRef, FontRef, TableProvider};
+use skrifa::{MetadataProvider, string::StringId};
+
 use crate::{invalid, Result};
 
 pub const FONT_EXTENSIONS: &[&str] = &["ttf", "otf", "ttc", "otc"];
@@ -53,26 +57,51 @@ pub struct FontFace {
     pub vendor_url: String,
 }
 
-fn name(face: &ttf_parser::Face, ids: &[u16]) -> String {
+fn name(face: &FontRef, ids: &[u16]) -> String {
     for id in ids {
-        // Prefer an English Windows/Unicode name, then any decodable one.
+        // Prefer the English (US) Windows name, then any decodable one.
         let mut any = None;
-        for n in face.names() {
-            if n.name_id != *id {
+        for n in face.localized_strings(StringId::new(*id)) {
+            let s = n.to_string();
+            if s.is_empty() {
+                // Encodings read-fonts cannot decode yield no characters.
                 continue;
             }
-            if let Some(s) = n.to_string() {
-                if n.language_id == 0x0409 {
-                    return clean(&s, 2000);
-                }
-                any.get_or_insert(s);
+            if n.language() == Some("en-US") {
+                return clean(&s, 2000);
             }
+            any.get_or_insert(s);
         }
         if let Some(s) = any {
             return clean(&s, 2000);
         }
     }
     String::new()
+}
+
+/// OS/2 fsType as embedding permission. Up to version 2 several bits may be
+/// set and the most permissive applies; from version 3 they are exclusive.
+fn embedding(os2: &skrifa::raw::tables::os2::Os2) -> &'static str {
+    let n = os2.fs_type();
+    if os2.version() <= 2 {
+        if n & 0xF == 0 {
+            "installable"
+        } else if n & 8 != 0 {
+            "editable"
+        } else if n & 4 != 0 {
+            "previewAndPrint"
+        } else {
+            "restricted"
+        }
+    } else {
+        match n & 0xF {
+            0 => "installable",
+            2 => "restricted",
+            4 => "previewAndPrint",
+            8 => "editable",
+            _ => "",
+        }
+    }
 }
 
 fn clean(s: &str, max: usize) -> String {
@@ -90,40 +119,50 @@ pub fn read_faces(path: &Path, source: &str) -> Result<Vec<FontFace>> {
 }
 
 pub fn faces_of(data: &[u8], path: &Path, source: &str) -> Result<Vec<FontFace>> {
-    let count = ttf_parser::fonts_in_collection(data).unwrap_or(1);
+    // With their index in the collection (the webview and FFmpeg address faces by it).
+    let fonts: Vec<(u32, FontRef)> = match FileRef::new(data) {
+        Ok(FileRef::Font(f)) => vec![(0, f)],
+        Ok(FileRef::Collection(c)) => (0..c.len().min(64)).filter_map(|i| c.get(i).ok().map(|f| (i, f))).collect(),
+        Err(_) => Vec::new(),
+    };
     let mut out = Vec::new();
-    for index in 0..count.min(64) {
-        let Ok(face) = ttf_parser::Face::parse(data, index) else { continue };
-        let family = name(&face, &[16, 1]);
+    for (index, face) in &fonts {
+        // The tables every usable font has (also what a renderer needs first).
+        if face.head().is_err() || face.hhea().is_err() || face.maxp().is_err() {
+            continue;
+        }
+        let family = name(face, &[16, 1]);
         if family.is_empty() {
             continue;
         }
-        let embedding = match face.permissions() {
-            Some(ttf_parser::Permissions::Installable) => "installable",
-            Some(ttf_parser::Permissions::Restricted) => "restricted",
-            Some(ttf_parser::Permissions::PreviewAndPrint) => "previewAndPrint",
-            Some(ttf_parser::Permissions::Editable) => "editable",
-            None => "",
-        };
+        let os2 = face.os2().ok();
+        let italic_bit = os2.as_ref().is_some_and(|t| t.fs_selection().contains(SelectionFlags::ITALIC));
+        // A face can have a normal style and a non-zero italic angle, which also makes it italic.
+        let italic_angle = face.post().map(|p| p.italic_angle().to_f32()).unwrap_or(0.0);
+        let axes = face.fvar().ok().and_then(|f| f.axes().ok()).unwrap_or(&[]);
         out.push(FontFace {
-            style: name(&face, &[17, 2]),
-            full_name: name(&face, &[4]),
-            weight: face.weight().to_number(),
-            italic: face.is_italic(),
-            variable: face.is_variable(),
-            axes: face
-                .variation_axes()
-                .into_iter()
-                .map(|a| FontAxis { tag: a.tag.to_string(), min: a.min_value, default: a.def_value, max: a.max_value })
+            style: name(face, &[17, 2]),
+            full_name: name(face, &[4]),
+            weight: os2.as_ref().map_or(400, |t| t.us_weight_class()),
+            italic: italic_bit || italic_angle != 0.0,
+            variable: !axes.is_empty(),
+            axes: axes
+                .iter()
+                .map(|a| FontAxis {
+                    tag: a.axis_tag().to_string(),
+                    min: a.min_value().to_f32(),
+                    default: a.default_value().to_f32(),
+                    max: a.max_value().to_f32(),
+                })
                 .collect(),
             path: path.to_string_lossy().into_owned(),
-            index,
+            index: *index,
             source: source.into(),
-            embedding: embedding.into(),
-            license: name(&face, &[13]),
-            license_url: name(&face, &[14]),
-            designer: name(&face, &[9]),
-            vendor_url: name(&face, &[11]),
+            embedding: os2.as_ref().map_or("", embedding).into(),
+            license: name(face, &[13]),
+            license_url: name(face, &[14]),
+            designer: name(face, &[9]),
+            vendor_url: name(face, &[11]),
             family,
         });
     }

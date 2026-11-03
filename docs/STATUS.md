@@ -15,7 +15,7 @@ Diese Liste ist absichtlich nüchtern. „Fertig“ heißt: implementiert, durch
 - `open_path` öffnet nur Dateien, die in dieser Sitzung fertig exportiert wurden.
 - FFmpeg älter als 7 wird in Statusleiste und Export-Panel markiert, ein daran gescheiterter Export nennt den Grund (Versionserkennung mit 6 echten Versionszeilen getestet).
 - *Über Kerf* zeigt Build-Kennung (Commit), Protokoll- und Datenordner; Einstellungen › Datenschutz beschreibt, was lokal bleibt und was nur auf Aktion übertragen wird.
-- Lizenzübersicht aller 534 Rust-Crates und 11 npm-Pakete in [LICENSES.md](LICENSES.md), erzeugt mit `scripts/licenses.mjs`. `npm audit`: 0 Meldungen. `cargo audit`: 0 Schwachstellen, 9 Warnungen (nicht mehr gepflegte oder zurückgezogene Crates, darunter `ttf-parser`, siehe Roadmap).
+- Lizenzübersicht aller 537 Rust-Crates und 11 npm-Pakete in [LICENSES.md](LICENSES.md), erzeugt mit `scripts/licenses.mjs`. `npm audit`: 0 Meldungen. `cargo audit` (0.22.2, nach dem Wechsel von `ttf-parser` zu `skrifa`): 0 Schwachstellen, 8 Warnungen (7 nicht mehr gepflegt: `proc-macro-error`, `zbus_names`, `zvariant`, `zvariant_derive`; 1 unsound: `glib`). Die Prüfung auf zurückgezogene Versionen scheiterte in der Prüfumgebung an einer 503-Antwort der Registry.
 
 **Ende-zu-Ende-Test der Release-Version** (eigener Release-Build, echte Maus- und Tastatureingaben über XTest, echte GTK-Dateidialoge). Er lief unter Linux (Xvfb, WebKitGTK 2.52, FFmpeg 6.1.1 über einen Adapter für `-/filter_complex`), weil diese Umgebung kein Windows hat:
 

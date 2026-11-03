@@ -58,9 +58,8 @@ Zuverlässigkeit (Deltas, geteilte Undo-Schnappschüsse, Autosave, Versionen, Wi
 3. **Code-Signierung:** Ein Authenticode-Zertifikat für Windows besorgen und als Secret hinterlegen; der Release-Workflow ist dafür vorbereitet. Bis dahin warnt SmartScreen beim Installer.
 4. **macOS und Linux (derzeit nicht geplant):** Vor einer Rückkehr müsste unter Linux die Wiedergabe über das `asset:`-Protokoll in WebKitGTK gelöst werden (siehe STATUS, *Release 0.1.0*); unter macOS Dateizuordnung über `RunEvent::Opened`, Dialoge und Wiedergabe in WKWebView prüfen.
 5. **Keyframes:** Keyframe-Editor in der Timeline (Gummiband für Lautstärke), Keyframes einzeln kopieren und einfügen.
-6. **`ttf-parser` ersetzen:** Die Crate ist laut RUSTSEC-2026-0192 nicht mehr gepflegt und liest importierte (also fremde) Schriftdateien; als Nachfolger nennt das Advisory `skrifa`.
-7. **Assistenten in der App durchspielen:** Szenen, Stille, Beats, Ducking, Archiv, Relink und Cache mit echten Projekten in der Tauri-App bedienen; Kapitel in einem Abspieler prüfen.
-8. **Effekte:** Masken (Rechteck, Ellipse, Freiform, animierbar), Rauschunterdrückung (`afftdn` im Export, Gegenstück in der Vorschau).
+6. **Assistenten in der App durchspielen:** Szenen, Stille, Beats, Ducking, Archiv, Relink und Cache mit echten Projekten in der Tauri-App bedienen; Kapitel in einem Abspieler prüfen.
+7. **Effekte:** Masken (Rechteck, Ellipse, Freiform, animierbar), Rauschunterdrückung (`afftdn` im Export, Gegenstück in der Vorschau).
 
 ## Später
 

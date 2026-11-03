@@ -58,7 +58,7 @@ Kerf trennt strikt zwischen **Engine** (Rust) und **Oberfläche** (React). Die E
 - **Presets** (`effects`, `transition`, `textStyle`, `titleTemplate`): Die Daten werden beim Speichern und beim Import mit den Typen und Sanitizern aus `kerf-core` geprüft; unbekannte Effekt-IDs werden abgelehnt. Austausch als `.kerfpreset` (JSON mit `app`, `kind`, `version`).
 - **Favoriten und zuletzt verwendet** je Art (Effekt, Preset, Übergang, Schrift, Vorlage, Asset).
 - **Assets:** ein Eintrag je `(Anbieter, ID)` mit Lizenzfeldern, Datei, SHA-256 und Maßen; `commercial` ist `yes`, `no` oder `unknown` und wird nie von Kerf selbst hochgestuft. Sammlungen als n:m-Tabelle.
-- **Schriften** (`fonts.rs`): liest Familien, Schnitte, Achsen, Lizenztexte und OS/2-Einbettungsrechte mit `ttf-parser`. Systemordner werden nur gelesen; importierte Schriften landen inhaltsbenannt in Kerfs Schriftordner und werden nur von der WebView geladen.
+- **Schriften** (`fonts.rs`): liest Familien, Schnitte, Achsen, Lizenztexte und OS/2-Einbettungsrechte mit `skrifa` (Fontations). Systemordner werden nur gelesen; importierte Schriften landen inhaltsbenannt in Kerfs Schriftordner und werden nur von der WebView geladen.
 
 ## kerf-assets
 

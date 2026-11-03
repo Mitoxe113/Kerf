@@ -2,6 +2,22 @@
 
 Format nach [Keep a Changelog](https://keepachangelog.com/de/1.1.0/), Versionen nach [Semantic Versioning](https://semver.org/lang/de/).
 
+## [Unreleased]
+
+### Behoben
+- Schnitt: Teilen und Slip runden die Quellposition nicht mehr auf; ein Teil konnte sonst ein Bild über das Clipende oder das Medium hinausreichen.
+- Trimm- und Slip-Grenzen messen vom ungerundeten Bereichsende; in Zeitlupe vor einer Rampe ließ sich sonst weit über das Medium hinaus trimmen.
+- Rückwärts-Clips zeigen kein Bild mehr hinter dem Medienende (Umschalten auf rückwärts, Tempoänderung).
+- Bildratenwechsel der Sequenz rechnet Keyframes, Übergänge, Marker und Untertitel mit um und hält Clips ohne Überlappung im Medium.
+- Einfügen in eine Sequenz mit anderer Bildrate rechnet die Clips um; Einfügen prüft Medium und Spurart.
+- Gleitkommawerte bleiben beim Speichern und Laden exakt erhalten.
+- Export: LUT-Pfade mit Apostroph brachen den Filtergraphen ab.
+- Export: Eine Zieldatei, die im Projekt als Medium verwendet wird, wird abgelehnt, statt das Original zu ersetzen.
+- Speichern unter „Film v1.2“ ergab „Film v1.kerf“; die Endung wird jetzt angehängt.
+
+### Geändert
+- Schriften werden mit `skrifa` statt `ttf-parser` gelesen (RUSTSEC-2026-0192: nicht mehr gepflegt). An 109 Systemschriften und einer Schrift mit Variationsachsen liefern beide dieselben Angaben.
+
 ## [0.1.0] (2026-11-03)
 
 Erste Veröffentlichung, nur für Windows (64 Bit). Kerf braucht ein installiertes FFmpeg 7 oder neuer. Projektdateien haben `schemaVersion` 1.

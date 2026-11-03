@@ -35,7 +35,7 @@ Beide stehen unter der SIL Open Font License 1.1 (<https://openfontlicense.org>)
 
 ## Rust-Crates (in der App enthalten)
 
-Direkt eingebunden für das Kreativ-Ökosystem: `rusqlite` 0.32 (MIT) mit gebündeltem **SQLite** (gemeinfrei) über `libsqlite3-sys` (MIT), `ttf-parser` 0.25 (MIT oder Apache-2.0), `sha2` 0.10 (MIT oder Apache-2.0), `reqwest` 0.13 (MIT oder Apache-2.0), `rustls` 0.23 (Apache-2.0, ISC oder MIT) mit `ring` 0.17 (Apache-2.0 und ISC), `url` 2 (MIT oder Apache-2.0), `keyring` 3.6 (MIT oder Apache-2.0; unter Linux mit `dbus-secret-service`, MIT oder Apache-2.0, und `dbus`, Apache-2.0/MIT).
+Direkt eingebunden für das Kreativ-Ökosystem: `rusqlite` 0.32 (MIT) mit gebündeltem **SQLite** (gemeinfrei) über `libsqlite3-sys` (MIT), `skrifa` 0.39 mit `read-fonts` 0.36 und `font-types` 0.10 (je MIT oder Apache-2.0), `sha2` 0.10 (MIT oder Apache-2.0), `reqwest` 0.13 (MIT oder Apache-2.0), `rustls` 0.23 (Apache-2.0, ISC oder MIT) mit `ring` 0.17 (Apache-2.0 und ISC), `url` 2 (MIT oder Apache-2.0), `keyring` 3.6 (MIT oder Apache-2.0; unter Linux mit `dbus-secret-service`, MIT oder Apache-2.0, und `dbus`, Apache-2.0/MIT).
 
 Kerf baut auf Tauri 2 und insgesamt 534 Crates auf (Summe über alle Zielplattformen; ein einzelner Build nutzt weniger). Die vollständige Liste mit Versionen und erklärten Lizenzen steht in [docs/LICENSES.md](docs/LICENSES.md) und wird mit `node scripts/licenses.mjs` aus `Cargo.lock` neu erzeugt. Fast alle stehen unter MIT und/oder Apache-2.0; daneben kommen Unicode-3.0, Zlib, ISC, BSD-2/3-Clause, 0BSD, CC0/MIT-0/Unlicense, MPL-2.0 (`cssparser`, `selectors`, `dtoa-short`, `option-ext`; dateiweise, unverändert genutzt) und CDLA-Permissive-2.0 (`webpki-root-certs`, die Liste der Stammzertifikate) vor.
 

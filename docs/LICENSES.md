@@ -2,14 +2,14 @@
 
 Erzeugt mit `node scripts/licenses.mjs` aus `Cargo.lock` (`cargo metadata`, normale Abhängigkeiten der App für alle Zielplattformen, ohne Test- und Build-Werkzeuge) und `node_modules` (Pakete, die in die Oberfläche gebündelt werden). Angegeben ist die Lizenz, die das jeweilige Paket in seinem Manifest erklärt; sie wurde nicht gegen die Lizenzdateien jedes Pakets geprüft. Hinweise zu FFmpeg, Schriften und portiertem Code stehen in [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
 
-## Rust-Crates (534)
+## Rust-Crates (537)
 
 | Lizenz | Anzahl |
 | --- | --- |
-| MIT OR Apache-2.0 | 259 |
+| MIT OR Apache-2.0 | 261 |
 | MIT | 120 |
 | Apache-2.0 OR MIT | 50 |
-| Zlib OR Apache-2.0 OR MIT | 18 |
+| Zlib OR Apache-2.0 OR MIT | 19 |
 | Unicode-3.0 | 18 |
 | MIT/Apache-2.0 | 14 |
 | Unlicense OR MIT | 9 |
@@ -77,6 +77,7 @@ Erzeugt mit `node scripts/licenses.mjs` aus `Cargo.lock` (`cargo metadata`, norm
 | bs58 | 0.5.1 | MIT/Apache-2.0 |
 | bumpalo | 3.20.3 | MIT OR Apache-2.0 |
 | bytemuck | 1.25.2 | Zlib OR Apache-2.0 OR MIT |
+| bytemuck_derive | 1.12.1 | Zlib OR Apache-2.0 OR MIT |
 | byteorder | 1.5.0 | Unlicense OR MIT |
 | bytes | 1.12.1 | MIT |
 | cairo-rs | 0.18.5 | MIT |
@@ -150,6 +151,7 @@ Erzeugt mit `node scripts/licenses.mjs` aus `Cargo.lock` (`cargo metadata`, norm
 | flate2 | 1.1.10 | MIT OR Apache-2.0 |
 | fnv | 1.0.7 | Apache-2.0 / MIT |
 | foldhash | 0.2.0 | Zlib |
+| font-types | 0.10.1 | MIT OR Apache-2.0 |
 | foreign-types | 0.5.0 | MIT/Apache-2.0 |
 | foreign-types-macros | 0.2.4 | MIT/Apache-2.0 |
 | foreign-types-shared | 0.3.1 | MIT/Apache-2.0 |
@@ -336,6 +338,7 @@ Erzeugt mit `node scripts/licenses.mjs` aus `Cargo.lock` (`cargo metadata`, norm
 | rand_chacha | 0.3.1 | MIT OR Apache-2.0 |
 | rand_core | 0.6.4 | MIT OR Apache-2.0 |
 | raw-window-handle | 0.6.2 | MIT OR Apache-2.0 OR Zlib |
+| read-fonts | 0.36.0 | MIT OR Apache-2.0 |
 | redox_syscall | 0.5.18 | MIT |
 | redox_users | 0.5.3 | MIT |
 | ref-cast | 1.0.27 | MIT OR Apache-2.0 |
@@ -390,6 +393,7 @@ Erzeugt mit `node scripts/licenses.mjs` aus `Cargo.lock` (`cargo metadata`, norm
 | simd-adler32 | 0.3.10 | MIT |
 | simdutf8 | 0.1.5 | MIT OR Apache-2.0 |
 | siphasher | 1.0.4 | MIT OR Apache-2.0 |
+| skrifa | 0.39.0 | MIT OR Apache-2.0 |
 | slab | 0.4.12 | MIT |
 | smallvec | 1.16.4 | MIT OR Apache-2.0 |
 | socket2 | 0.6.5 | MIT OR Apache-2.0 |
@@ -456,7 +460,6 @@ Erzeugt mit `node scripts/licenses.mjs` aus `Cargo.lock` (`cargo metadata`, norm
 | tracing-core | 0.1.36 | MIT |
 | tray-icon | 0.25.1 | MIT OR Apache-2.0 |
 | try-lock | 0.2.5 | MIT |
-| ttf-parser | 0.25.1 | MIT OR Apache-2.0 |
 | typed-path | 0.13.0 | MIT OR Apache-2.0 |
 | typeid | 1.0.3 | MIT OR Apache-2.0 |
 | typenum | 1.20.1 | MIT OR Apache-2.0 |
