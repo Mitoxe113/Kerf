@@ -6,6 +6,7 @@ import { Component, Fragment, useRef, type ReactNode } from "react";
 import { movePanel, zoneAt, type DockZone } from "../state/dock";
 import { currentLayout, isBranch, leafTabs, PANEL_LABELS, useEditor, type LayoutChild, type LayoutNode, type PanelGroup, type PanelId, type WorkspaceLayout } from "../state/editor";
 import { Button, cx, PanelDock, PanelGroupTabs } from "../ui/primitives";
+import { logError } from "../lib/errors";
 
 /** Keeps a failing panel from taking the whole window down. */
 class PanelBoundary extends Component<{ id: PanelId; children: ReactNode }, { error: Error | null }> {
@@ -15,6 +16,7 @@ class PanelBoundary extends Component<{ id: PanelId; children: ReactNode }, { er
   }
   componentDidCatch(error: Error) {
     console.error(`panel ${this.props.id} crashed`, error);
+    logError(`panel ${this.props.id} crashed: ${error.stack ?? error.message}`);
   }
   render() {
     if (!this.state.error) return this.props.children;

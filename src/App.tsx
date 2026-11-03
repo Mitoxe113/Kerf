@@ -2,7 +2,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect } from "react";
 import { installKeyboard } from "./actions/keymap";
-import { guardUnsaved, importMedia, openProject } from "./actions/project";
+import { importMedia, openProject, quit } from "./actions/project";
 import { checkForUpdate } from "./actions/update";
 import { engine } from "./engine/playback";
 import { loadFonts } from "./state/fonts";
@@ -120,9 +120,7 @@ export function App() {
       }),
       getCurrentWindow().onCloseRequested(async (e) => {
         e.preventDefault();
-        if (!(await guardUnsaved())) return;
-        await api.sessionEnd().catch(() => undefined);
-        await getCurrentWindow().destroy();
+        await quit();
       }),
     ];
 

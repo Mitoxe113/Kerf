@@ -1,11 +1,17 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
+import { installErrorLogging } from "./lib/errors";
+import { RootBoundary } from "./shell/RootBoundary";
 import "./styles.css";
+
+installErrorLogging();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <App />
+    <RootBoundary>
+      <App />
+    </RootBoundary>
   </StrictMode>,
 );
 

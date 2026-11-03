@@ -130,6 +130,24 @@ impl ExportService {
         job
     }
 
+    /// Cancels every queued and running export (used when the app ends).
+    pub fn cancel_all(&self, app: &AppHandle) {
+        let ids: Vec<Uuid> = lock(&self.jobs).iter().filter(|j| matches!(j.status, ExportStatus::Queued | ExportStatus::Running)).map(|j| j.id).collect();
+        for id in ids {
+            self.cancel(app, id);
+        }
+    }
+
+    /// True when `path` is the output of an export that finished in this session.
+    pub fn is_finished_output(&self, path: &std::path::Path) -> bool {
+        lock(&self.jobs).iter().any(|j| j.status == ExportStatus::Done && j.output == path)
+    }
+
+    /// True while an export is rendering (its FFmpeg processes may still run).
+    pub fn running(&self) -> bool {
+        lock(&self.jobs).iter().any(|j| j.status == ExportStatus::Running)
+    }
+
     pub fn cancel(&self, app: &AppHandle, id: Uuid) {
         if let Some(flag) = lock(&self.cancels).get(&id) {
             flag.store(true, Ordering::Relaxed);

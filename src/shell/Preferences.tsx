@@ -127,10 +127,22 @@ export function Preferences({ onClose }: { onClose: () => void }) {
           </Field>
         </Group>
 
+        <Group title="Datenschutz">
+          <Note>
+            <b className="font-medium text-fg-2">Lokal:</b> Projekte, Wiederherstellungs- und Versionsstände, der Cache (Proxys, Vorschaubilder, Wellenformen, Analysen), die Bibliothek (Presets, Favoriten, heruntergeladene Medien, Schriften) und das Protokoll liegen auf diesem Computer. Szenen-, Stille-, Beat- und Lautheitsanalysen rechnet Kerf lokal mit FFmpeg; es gibt keine KI- oder Cloud-Verarbeitung.
+          </Note>
+          <Note>
+            <b className="font-medium text-fg-2">Übertragen wird nur auf deine Aktion:</b> Suchbegriffe und dein API-Schlüssel an den gewählten Stockmedien-Anbieter (Pexels, GIPHY, Freesound, Openverse), wenn du dort suchst oder lädst; die Abfrage der Release-Seite auf GitHub bei der Update-Suche (abschaltbar unter „Updates“). Medien und Projekte werden nie hochgeladen.
+          </Note>
+          <Note>
+            <b className="font-medium text-fg-2">Keine Telemetrie:</b> Kerf sendet keine Nutzungsdaten und keine Absturzberichte. API-Schlüssel liegen im Schlüsselspeicher des Systems (oder nur für diese Sitzung), nicht in Projektdateien oder im Protokoll.
+          </Note>
+        </Group>
+
         <Group title="System">
           <Field label="FFmpeg">
             <span className="truncate text-xs text-fg-2" title={info?.ffmpeg ?? undefined}>
-              {info?.ffmpeg?.replace(/s*Copyright.*$/, "") ?? "nicht gefunden"}
+              {info?.ffmpeg?.replace(/\s*Copyright.*$/, "") ?? "nicht gefunden"}
             </span>
           </Field>
           <Field label="Encoder">

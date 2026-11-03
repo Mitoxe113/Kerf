@@ -651,6 +651,10 @@ export interface AppInfo {
   ffmpeg: string | null;
   hwEncoders: string[] | null;
   cacheDir: string;
+  build: string;
+  debug: boolean;
+  logDir: string | null;
+  dataDir: string | null;
 }
 
 /** EBU R128 measurement; null = silent. */

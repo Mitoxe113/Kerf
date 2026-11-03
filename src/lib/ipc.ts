@@ -83,7 +83,7 @@ export const api = {
   appInfo: () => invoke<AppInfo>("app_info"),
   projectState: () => invoke<ProjectState>("project_state"),
   projectNew: (name: string) => serial(() => invoke<ProjectState>("project_new", { name })),
-  projectOpen: (path: string) => serial(() => invoke<{ state: ProjectState; usedBackup: boolean }>("project_open", { path })),
+  projectOpen: (path: string) => serial(() => invoke<{ state: ProjectState; usedBackup: boolean; unknownFields: string[] }>("project_open", { path })),
   projectSave: (path?: string) =>
     serial(() => invoke<{ path: string; revision: number; dirty: boolean; name: string }>("project_save", { path: path ?? null })),
   edit: (command: EditCommand) => serial(() => invoke<Delta>("edit", { command })),
@@ -136,6 +136,7 @@ export const api = {
   versionRestore: (file: string) => serial(() => invoke<ProjectState>("version_restore", { file })),
   setPreferences: (autosaveSecs: number, keepVersions: number) => invoke<void>("set_preferences", { autosaveSecs, keepVersions }),
   sessionEnd: () => invoke<void>("session_end"),
+  logFrontend: (level: "error" | "warn", message: string) => invoke<void>("log_frontend", { level, message }),
   revealPath: (path: string) => invoke<void>("reveal_path", { path }),
   presetList: (kind?: PresetKind) => invoke<Preset[]>("preset_list", { kind: kind ?? null }),
   presetSave: (preset: Preset) => invoke<Preset>("preset_save", { preset }),

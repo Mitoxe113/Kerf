@@ -95,6 +95,56 @@ pub fn load(path: &Path) -> Result<Project, ProjectIoError> {
     Ok(project)
 }
 
+/// Fields of a project file this version does not know (written by a newer
+/// Kerf or by hand), as JSON paths. They are dropped when the file is parsed,
+/// so saving over the file would lose them. Default-like values (false, 0, "",
+/// empty lists, null) are not reported: those are fields left out on writing.
+pub fn unknown_fields(bytes: &[u8]) -> Vec<String> {
+    let Ok(input) = serde_json::from_slice::<Value>(bytes) else { return Vec::new() };
+    // Older files are migrated; renamed fields are expected to disappear there.
+    if input.get("schemaVersion").and_then(Value::as_u64) != Some(SCHEMA_VERSION as u64) {
+        return Vec::new();
+    }
+    let Ok(project) = from_json(bytes) else { return Vec::new() };
+    let Ok(output) = serde_json::to_value(&project) else { return Vec::new() };
+    let mut out = Vec::new();
+    diff_keys(&input, &output, "", &mut out);
+    out
+}
+
+fn diff_keys(input: &Value, output: &Value, at: &str, out: &mut Vec<String>) {
+    const LIMIT: usize = 50;
+    let empty = |v: &Value| match v {
+        Value::Null => true,
+        Value::Bool(b) => !b,
+        Value::Number(n) => n.as_f64() == Some(0.0),
+        Value::String(s) => s.is_empty(),
+        Value::Array(a) => a.is_empty(),
+        Value::Object(o) => o.is_empty(),
+    };
+    match (input, output) {
+        (Value::Object(a), Value::Object(b)) => {
+            for (k, v) in a {
+                if out.len() >= LIMIT {
+                    return;
+                }
+                let path = if at.is_empty() { k.clone() } else { format!("{at}.{k}") };
+                match b.get(k) {
+                    Some(w) => diff_keys(v, w, &path, out),
+                    None if !empty(v) => out.push(path),
+                    None => {}
+                }
+            }
+        }
+        (Value::Array(a), Value::Array(b)) => {
+            for (i, (v, w)) in a.iter().zip(b).enumerate() {
+                diff_keys(v, w, &format!("{at}[{i}]"), out);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Every file path the project refers to (media and LUTs), for rewriting.
 pub fn for_each_path(project: &mut Project, mut f: impl FnMut(&mut std::path::PathBuf)) {
     for m in project.media.iter_mut().filter(|m| m.title.is_none()) {
@@ -230,5 +280,18 @@ mod tests {
         let clips = &loaded.sequences[0].tracks[0].clips;
         assert_eq!(clips.len(), 1, "overlapping clip dropped");
         assert_eq!(clips[0].name, "a");
+    }
+
+    #[test]
+    fn unknown_fields_are_reported_not_invented() {
+        let p = Project::new("Neu", 1);
+        let json = serde_json::to_vec(&p).unwrap();
+        assert_eq!(unknown_fields(&json), Vec::<String>::new());
+        let mut v: Value = serde_json::from_slice(&json).unwrap();
+        v["futureFeature"] = serde_json::json!({ "a": 1 });
+        v["sequences"][0]["laterFlag"] = Value::Bool(true);
+        v["sequences"][0]["unsetFlag"] = Value::Bool(false);
+        let found = unknown_fields(&serde_json::to_vec(&v).unwrap());
+        assert_eq!(found, vec!["futureFeature".to_string(), "sequences[0].laterFlag".to_string()]);
     }
 }

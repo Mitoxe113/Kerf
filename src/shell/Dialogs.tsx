@@ -680,7 +680,13 @@ function About({ onClose }: { onClose: () => void }) {
       <div className="flex items-start gap-4">
         <Logo size={56} />
         <div className="space-y-1 text-sm">
-          <div className="text-base font-semibold">Kerf {info?.version}</div>
+          <div className="text-base font-semibold">
+            Kerf {info?.version}
+            <span className="ml-2 font-mono text-xs font-normal text-fg-4" title="Commit, aus dem diese Version gebaut wurde">
+              Build {info?.build}
+              {info?.debug ? " · Debug" : ""}
+            </span>
+          </div>
           <div className="text-fg-3">Nicht-linearer Videoschnitt. Rust-Engine, Tauri-Shell, WebGL2-Vorschau.</div>
           <div className="text-xs text-fg-3">
             Freie Software unter der GNU GPL v3 (oder später), ohne Gewährleistung. Quellcode und Drittanbieter-Hinweise:{" "}
@@ -689,6 +695,16 @@ function About({ onClose }: { onClose: () => void }) {
           <div className="pt-2 text-xs text-fg-3">{info?.ffmpeg ?? "FFmpeg nicht gefunden"}</div>
           <div className="text-xs text-fg-3">Hardware-Encoder: {info?.hwEncoders?.length ? info.hwEncoders.join(", ") : "keine"}</div>
           <div className="truncate text-xs text-fg-4" title={info?.cacheDir}>Cache: {info?.cacheDir}</div>
+          {info?.logDir && (
+            <div className="flex items-center gap-1 text-xs text-fg-4">
+              <span className="truncate" title={info.logDir}>Protokoll: {info.logDir}</span>
+              <Button size="sm" variant="ghost" onClick={() => void api.revealPath(info.logDir!).catch(reportError)}>
+                Anzeigen
+              </Button>
+            </div>
+          )}
+          {info?.dataDir && <div className="truncate text-xs text-fg-4" title={info.dataDir}>Daten: {info.dataDir}</div>}
+          <div className="pt-1 text-[10.5px] leading-relaxed text-fg-4">Kerf sammelt keine Nutzungsdaten. Was wohin übertragen wird, steht in den Einstellungen unter „Datenschutz“.</div>
         </div>
       </div>
     </Modal>

@@ -318,6 +318,12 @@ fn pump(app: &AppHandle) {
     }
 }
 
+/// Cancels queued and running downloads; returns how many are still running.
+pub(crate) fn cancel_all(hub: &MediaHub) -> usize {
+    lock(&hub.cancels).values().for_each(|f| f.store(true, Ordering::Relaxed));
+    *lock(&hub.running)
+}
+
 async fn run(app: &AppHandle, p: Pending) {
     let hub = app.state::<MediaHub>();
     let state = app.state::<AppState>();

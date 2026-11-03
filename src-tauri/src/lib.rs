@@ -192,6 +192,7 @@ pub fn run() {
             commands::recovery_discard,
             commands::session_end,
             commands::reveal_path,
+            commands::log_frontend,
             commands::set_preferences,
             commands::version_list,
             commands::version_restore,

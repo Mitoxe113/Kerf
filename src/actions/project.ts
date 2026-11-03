@@ -8,6 +8,7 @@ import { engine } from "../engine/playback";
 import { useEditor } from "../state/editor";
 import { edit, reportError, useProject } from "../state/project";
 import { toast } from "../state/toasts";
+import { useAssets } from "../state/assets";
 
 const PROJECT_FILTER = [{ name: "Kerf-Projekt", extensions: ["kerf"] }];
 export const MEDIA_EXTENSIONS = [
@@ -51,21 +52,35 @@ export async function newProject() {
   if (!(await guardUnsaved())) return;
   try {
     useProject.getState().applyState(await api.projectNew("Unbenanntes Projekt"));
+    foreign = null;
     resetView();
   } catch (e) {
     reportError(e);
   }
 }
 
+/**
+ * The open file holds fields this version does not know (e.g. from a newer
+ * Kerf). They are not in the loaded project, so saving over that file would
+ * drop them; saving asks first.
+ */
+let foreign: { path: string; fields: string[] } | null = null;
+
 export async function openProject(path?: string) {
   if (!(await guardUnsaved())) return;
   const file = path ?? (await open({ multiple: false, directory: false, filters: PROJECT_FILTER }));
   if (!file || Array.isArray(file)) return;
   try {
-    const { state, usedBackup } = await api.projectOpen(file);
+    const { state, usedBackup, unknownFields } = await api.projectOpen(file);
     useProject.getState().applyState(state);
     resetView();
     rememberRecent(file);
+    foreign = unknownFields.length ? { path: file, fields: unknownFields } : null;
+    if (foreign)
+      toast.error(
+        "Projekt enthält unbekannte Angaben",
+        `Die Datei stammt wohl aus einer neueren Kerf-Version (${unknownFields.slice(0, 3).join(", ")}${unknownFields.length > 3 ? " …" : ""}). Diese Angaben kennt diese Version nicht; speichere unter neuem Namen, um das Original zu behalten.`,
+      );
     if (usedBackup) toast.info("Projektdatei war beschädigt", "Die letzte Sicherung (.bak) wurde geladen. Bitte speichern.");
     const missing = state.project.media.filter((m) => m.status.state === "missing").length;
     if (missing) toast.error(`${missing} Mediendatei(en) offline`, "Rechtsklick auf die Medien → Neu verknüpfen.");
@@ -77,6 +92,16 @@ export async function openProject(path?: string) {
 export async function saveProject(saveAs = false): Promise<boolean> {
   const st = useProject.getState();
   let path = saveAs ? null : st.path;
+  if (path && foreign && samePath(path, foreign.path)) {
+    const answer = await confirm({
+      title: "Original überschreiben?",
+      body: `Diese Datei enthält Angaben, die diese Kerf-Version nicht kennt (${foreign.fields.slice(0, 5).join(", ")}${foreign.fields.length > 5 ? " …" : ""}). Beim Überschreiben gehen sie verloren.`,
+      confirm: "Unter neuem Namen speichern",
+      discard: "Trotzdem überschreiben",
+    });
+    if (answer === false) return false;
+    if (answer === true) path = null;
+  }
   if (!path) {
     path = await save({ filters: PROJECT_FILTER, defaultPath: `${st.project?.name ?? "Projekt"}.kerf` });
     if (!path) return false;
@@ -85,6 +110,7 @@ export async function saveProject(saveAs = false): Promise<boolean> {
     const r = await api.projectSave(path);
     useProject.getState().markSaved(r.path, r.revision, r.dirty, r.name);
     rememberRecent(r.path);
+    if (foreign && samePath(r.path, foreign.path)) foreign = null;
     toast.success("Gespeichert", r.path);
     return true;
   } catch (e) {
@@ -191,8 +217,32 @@ function rememberRecent(path: string) {
 
 // --- window ------------------------------------------------------------------
 
+/** Resolves true when no export or download runs, or the user agrees to cancel them. */
+export async function guardJobs(): Promise<boolean> {
+  const exports = useProject.getState().exports.filter((j) => j.status === "queued" || j.status === "running").length;
+  const downloads = useAssets.getState().downloads.filter((d) => d.state === "queued" || d.state === "running").length;
+  if (!exports && !downloads) return true;
+  const what = [exports && `${exports} ${exports === 1 ? "Export" : "Exporte"}`, downloads && `${downloads} ${downloads === 1 ? "Download" : "Downloads"}`].filter(Boolean).join(" und ");
+  const answer = await confirm({
+    title: "Aufträge laufen noch",
+    body: `${what} ${exports + downloads === 1 ? "ist" : "sind"} noch nicht fertig. Beim Beenden werden sie abgebrochen und unvollständige Dateien gelöscht; fertige Dateien bleiben erhalten.`,
+    confirm: "Abbrechen und beenden",
+    danger: true,
+  });
+  return answer === true;
+}
+
+let quitting = false;
+
+/** Ends the app: asks about running jobs and unsaved changes, then stops every background job. */
 export async function quit() {
-  if (!(await guardUnsaved())) return;
-  await api.sessionEnd().catch(() => undefined);
-  await getCurrentWindow().destroy();
+  if (quitting) return;
+  quitting = true;
+  try {
+    if (!(await guardJobs()) || !(await guardUnsaved())) return;
+    await api.sessionEnd().catch(() => undefined);
+    await getCurrentWindow().destroy();
+  } finally {
+    quitting = false;
+  }
 }

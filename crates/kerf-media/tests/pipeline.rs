@@ -219,6 +219,7 @@ fn edit_and_render_real_media() {
         loudness: None,
         segmented: false, chapters: false,
     };
+    assert_no_unknown_fields(&p);
     let plan = render::plan(&p, sequence, &settings, d, &[]).unwrap();
     assert_eq!(plan.inputs, 6, "2 video halves + still + 2 audio halves + tone\n{}", plan.graph);
     let mut updates = 0;
@@ -297,6 +298,7 @@ fn cancelled_render_leaves_no_file() {
         loudness: None,
         segmented: false, chapters: false,
     };
+    assert_no_unknown_fields(&p);
     let plan = render::plan(&p, p.sequence(seq).unwrap(), &settings, dir.path(), &[]).unwrap();
     let cancel = AtomicBool::new(false);
     let res = render::render(&tools, &plan, &cancel, |pr| {
@@ -389,6 +391,7 @@ fn keyframed_position_opacity_and_volume_render() {
         loudness: None,
         segmented: false, chapters: false,
     };
+    assert_no_unknown_fields(&p);
     let plan = render::plan(&p, p.sequence(seq).unwrap(), &export, dir.path(), &[]).unwrap();
     render::render(&tools, &plan, &AtomicBool::new(false), |_| {}).expect("render with keyframes");
 
@@ -450,6 +453,7 @@ fn animated_colour_renders() {
         loudness: None,
         segmented: false, chapters: false,
     };
+    assert_no_unknown_fields(&p);
     let plan = render::plan(&p, p.sequence(seq).unwrap(), &export, dir.path(), &[]).unwrap();
     render::render(&tools, &plan, &AtomicBool::new(false), |_| {}).expect("render with colour keys");
     let (dark, mid, end) = (mean_luma(&tools, &file, 0.0), mean_luma(&tools, &file, 0.8), mean_luma(&tools, &file, 1.8));
@@ -513,6 +517,7 @@ fn effect_stack_renders() {
         loudness: None,
         segmented: false, chapters: false,
     };
+    assert_no_unknown_fields(&p);
     let plan = render::plan(&p, p.sequence(seq).unwrap(), &export, dir.path(), &[]).unwrap();
     let mut log = String::new();
     let res = render::render_logged(&tools, &plan, &AtomicBool::new(false), |_| {}, &mut log);
@@ -570,6 +575,7 @@ fn catalog_effects_render() {
         loudness: None,
         segmented: false, chapters: false,
     };
+    assert_no_unknown_fields(&p);
     let plan = render::plan(&p, p.sequence(seq).unwrap(), &export, dir.path(), &[]).unwrap();
     let mut log = String::new();
     let res = render::render_logged(&tools, &plan, &AtomicBool::new(false), |_| {}, &mut log);
@@ -651,6 +657,7 @@ fn subtitles_burn_embed_and_sidecar() {
         loudness: None,
         segmented: false, chapters: false,
     };
+    assert_no_unknown_fields(&p);
     let plan = render::plan(&p, p.sequence(seq).unwrap(), &export, dir.path(), &[]).unwrap();
     let mut log = String::new();
     let res = render::render_logged(&tools, &plan, &AtomicBool::new(false), |_| {}, &mut log);
@@ -1113,6 +1120,7 @@ fn nested_sequences_render() {
         loudness: None,
         segmented: false, chapters: false,
     };
+    assert_no_unknown_fields(&p);
     let plan = render::plan(&p, p.sequence(outer).unwrap(), &export, d, &[]).unwrap();
     assert_eq!(plan.nested.len(), 2, "both levels render first");
     let mut saw_nested = false;
@@ -1158,6 +1166,12 @@ fn angles_sync_by_their_sound() {
     assert!((offsets[1].unwrap() - 3.37).abs() < 0.002, "B");
     // AAC adds a little delay of its own; within a frame is what counts.
     assert!((offsets[2].unwrap() + 1.5).abs() < 0.03, "C");
+}
+
+/// The project survives a save and load without fields the loader would drop.
+fn assert_no_unknown_fields(p: &Project) {
+    let json = serde_json::to_vec(p).unwrap();
+    assert_eq!(kerf_core::io::unknown_fields(&json), Vec::<String>::new());
 }
 
 fn probe_entries(tools: &Tools, file: &Path, args: &[&str]) -> String {
@@ -1231,6 +1245,7 @@ fn segmented_export_matches_one_piece() {
             segmented,
             chapters: true,
         };
+        assert_no_unknown_fields(&p);
         let plan = render::plan_with(&p, p.sequence(seq).unwrap(), &export, dir.path(), &[], Some(2)).unwrap();
         assert_eq!(plan.parts.len(), if segmented { 3 } else { 0 });
         let (mut parallel, mut joining) = (0, false);
@@ -1373,6 +1388,7 @@ fn animated_title_frames_render() {
         subtitles: Default::default(), title_files: Default::default(),
         title_sequences: [(clip, frames)].into_iter().collect(), loudness: None, segmented: false, chapters: false,
     };
+    assert_no_unknown_fields(&p);
     let plan = render::plan(&p, p.sequence(seq).unwrap(), &export, d, &[]).unwrap();
     let mut log = String::new();
     let res = render::render_logged(&tools, &plan, &AtomicBool::new(false), |_| {}, &mut log);

@@ -69,6 +69,12 @@ pub struct AppInfo {
     pub ffmpeg: Option<String>,
     pub hw_encoders: Option<Vec<String>>,
     pub cache_dir: PathBuf,
+    /// Commit the binary was built from, and whether it is a debug build.
+    pub build: String,
+    pub debug: bool,
+    /// Where Kerf keeps its log file, settings and library (for support).
+    pub log_dir: Option<PathBuf>,
+    pub data_dir: Option<PathBuf>,
 }
 
 /// The project Kerf was launched with, once.
@@ -84,6 +90,10 @@ pub fn app_info(app: AppHandle, state: State<'_, AppState>) -> AppInfo {
         ffmpeg: state.media.tools.as_ref().and_then(|t| t.version().ok()),
         hw_encoders: lock(&state.media.hw_encoders).clone(),
         cache_dir: state.paths.cache.clone(),
+        build: env!("KERF_COMMIT").to_string(),
+        debug: cfg!(debug_assertions),
+        log_dir: app.path().app_log_dir().ok(),
+        data_dir: app.path().app_data_dir().ok(),
     }
 }
 
@@ -134,6 +144,8 @@ pub fn project_new(state: State<'_, AppState>, name: String) -> ProjectState {
 pub struct OpenResult {
     pub state: ProjectState,
     pub used_backup: bool,
+    /// Fields of the file this version does not know; saving over it would drop them.
+    pub unknown_fields: Vec<String>,
 }
 
 #[tauri::command(async)]
@@ -141,6 +153,10 @@ pub fn project_open(app: AppHandle, state: State<'_, AppState>, path: String) ->
     let path = PathBuf::from(path);
     let (project, used_backup) =
         kerf_core::io::load_with_fallback(&path).map_err(|e| CommandError::new("openFailed", e))?;
+    let unknown_fields = if used_backup { Vec::new() } else { std::fs::read(&path).map(|b| kerf_core::io::unknown_fields(&b)).unwrap_or_default() };
+    if !unknown_fields.is_empty() {
+        log::warn!("{} has fields this version does not know: {}", path.display(), unknown_fields.join(", "));
+    }
     log::info!("opened {} ({} media, {} sequences)", path.display(), project.media.len(), project.sequences.len());
     let media = project.media.clone();
     let mut session = Session::new(project, Some(path));
@@ -150,7 +166,7 @@ pub fn project_open(app: AppHandle, state: State<'_, AppState>, path: String) ->
     }
     replace_session(&state, session);
     activate_media(&app, &state, &media);
-    Ok(OpenResult { state: lock(&state.session).state(), used_backup })
+    Ok(OpenResult { state: lock(&state.session).state(), used_backup, unknown_fields })
 }
 
 #[derive(Serialize)]
@@ -532,9 +548,14 @@ pub fn json_write(path: String, text: String) -> CmdResult<()> {
 
 /// Opens a file with its default application.
 #[tauri::command]
-pub fn open_path(path: String) -> CmdResult<()> {
+pub fn open_path(state: State<'_, AppState>, path: String) -> CmdResult<()> {
     let p = PathBuf::from(&path);
-    if !p.exists() {
+    // Only files Kerf itself exported are handed to the system's default app;
+    // anything else (an executable, a script) could run code.
+    if !state.exports.is_finished_output(&p) {
+        return Err(CommandError::new("openFileFailed", "only finished exports can be opened"));
+    }
+    if !p.is_file() {
         return Err(CommandError::new("openFileFailed", "file not found"));
     }
     #[cfg(windows)]
@@ -581,10 +602,46 @@ pub fn recovery_discard(state: State<'_, AppState>, id: Uuid) {
 /// Called by the UI right before the window closes after the user resolved
 /// unsaved changes: the session ended cleanly, so no recovery is needed.
 #[tauri::command]
-pub fn session_end(state: State<'_, AppState>) {
+pub async fn session_end(app: AppHandle) {
+    // The app is ending (quit, window closed, update): stop every background job
+    // and wait for their FFmpeg processes, so none keeps running after Kerf and
+    // no half-written file stays behind (cancelled jobs remove their partial files).
+    let state = app.state::<AppState>();
     let id = lock(&state.session).project.id;
     recovery::discard(&state.paths.recovery, id);
     state.media.cancel_proxies.store(true, std::sync::atomic::Ordering::Relaxed);
+    state.exports.cancel_all(&app);
+    // Waits off the async workers, which the downloads need to notice the cancel.
+    let app2 = app.clone();
+    let _ = tauri::async_runtime::spawn_blocking(move || wait_idle(&app2)).await;
+}
+
+/// Polls until no background job runs any more (at most 10 s).
+fn wait_idle(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let hub = app.state::<crate::media_library::MediaHub>();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let busy = crate::assist::cancel_all() + crate::media_library::cancel_all(&hub) + state.exports.running() as usize + state.media.proxies_pending();
+        if busy == 0 {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            log::warn!("{busy} background job(s) still running at exit");
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+/// Writes an error from the page (uncaught exception, crashed panel) into Kerf's log file.
+#[tauri::command]
+pub fn log_frontend(level: String, message: String) {
+    let message: String = message.chars().take(4000).collect();
+    match level.as_str() {
+        "warn" => log::warn!(target: "kerf::ui", "{message}"),
+        _ => log::error!(target: "kerf::ui", "{message}"),
+    }
 }
 
 #[tauri::command]

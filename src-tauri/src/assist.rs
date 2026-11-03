@@ -47,6 +47,13 @@ impl Drop for Job {
     }
 }
 
+/// Cancels every running analysis, ducking plan and archive copy; returns how many still run.
+pub(crate) fn cancel_all() -> usize {
+    let map = lock(cancels());
+    map.values().for_each(|f| f.store(true, Ordering::Relaxed));
+    map.len()
+}
+
 #[tauri::command]
 pub fn analyze_cancel(job: Uuid) {
     if let Some(f) = lock(cancels()).get(&job) {

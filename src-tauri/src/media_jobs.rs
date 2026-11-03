@@ -94,6 +94,11 @@ impl MediaService {
         }
     }
 
+    /// Proxy jobs queued or running (they drain quickly once `cancel_proxies` is set).
+    pub fn proxies_pending(&self) -> usize {
+        lock(&self.pending).iter().filter(|(_, proxy)| *proxy).count()
+    }
+
     pub fn submit(&self, job: Job) {
         let (id, proxy) = match job {
             Job::Analyze(id) => (id, false),
