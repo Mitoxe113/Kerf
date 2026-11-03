@@ -1,6 +1,6 @@
 # Roadmap
 
-Die Phasen folgen dem ursprünglichen Auftrag. Jede Phase endet mit Tests in Rust und TypeScript und einem Durchlauf in der echten App.
+Die Phasen folgen dem ursprünglichen Auftrag. Jede Phase endet mit Tests in Rust und TypeScript und einem Durchlauf in der echten App. Details zum aktuellen Stand in [STATUS.md](STATUS.md).
 
 ## Phase 1–2 · Fundament ✅
 
@@ -12,27 +12,39 @@ Mehrspur-Timeline mit acht Werkzeugen, Snapping, Marker, verknüpfte Clips, Inse
 
 ## Phase 7 · Professional Polish ✅
 
-Zuverlässigkeit: Deltas statt Gesamtzustand, geteilte Undo-Schnappschüsse, Autosave-Intervall, Versionen, Speicherstatus, Absturz-Wiederherstellung geprüft. Schnitt: Quellmonitor mit Dreipunktschnitt, Match Frame, Lift/Extract, Clip ersetzen, Standbild, Spurhöhen und -farben, Clip-Beschriftungen, Auto-Scroll, Verlauf-Panel, J/L-Hinweis. Keyframes mit Easing für Bewegung, Deckkraft und Lautstärke inkl. Export. Audio: Normalisieren nach Peak/True Peak/LUFS, Übersteuerungsanzeige. Monitor: Raster, Masken, verworfene Frames. Export: Plattform- und eigene Vorgaben, VBR/CBR, Mono, Speicherplatzprüfung, Protokoll, Wiederholen, Prüfung nach dem Rendern. Bedienung: Suche/Befehlspalette, Einstellungen, Tastaturprofile mit Import/Export, Startbildschirm, Dateizuordnung `.kerf`. Details in [STATUS.md](STATUS.md).
+Zuverlässigkeit (Deltas, geteilte Undo-Schnappschüsse, Autosave, Versionen, Wiederherstellung), Quellmonitor mit Dreipunktschnitt, Match Frame, Lift/Extract, Keyframes mit Easing, Normalisieren, Plattform-Vorgaben, Prüfung nach dem Rendern, Befehlspalette, Tastaturprofile, Startbildschirm, Dateizuordnung.
 
-## Als Nächstes · Phase 8 · Titel, Übergänge, Effekte
+## Phase 8 · Titel, Übergänge, Effekte ✅
 
-1. **Titel und Untertitel:** Text-Clips (Schrift, Größe, Farbe, Kontur, Schatten, Hintergrund) als eigene Medienart. Vorschau per Canvas2D → Textur, Export als PNG-Sequenz oder `drawtext`, Parität per Pixelvergleich. SRT/VTT importieren und exportieren, Untertitelspur.
-2. **Übergänge:** Überblendung, Blende über Schwarz, Wischen. Modell: Übergang am Schnittpunkt mit Dauer und Ausrichtung; braucht Handles aus den Quellen, die beim Anlegen geprüft werden.
-3. **Effekt-Stapel:** Ein Effekt = Parameterbeschreibung + GLSL-Fragment (Vorschau) + FFmpeg-Filterfragment (Export) + Paritätstest. Erste Effekte: Weichzeichner, Schärfen, Vignette, LUT (`.cube`), Chroma-Key, Masken. Parameter über das bestehende Keyframe-System animierbar.
-4. **Farbe:** Farbräder (Lift/Gamma/Gain), Kurven, animierbare Farbkorrektur.
-5. **Keyframes ausbauen:** Bezier-Griffe, Keyframe-Editor in der Timeline (Gummiband für Lautstärke), Keyframes einzeln kopieren.
+- Titel (Schrift, Kontur, Schatten, Hintergrund, Vorlagen) und Untertitel mit SRT/VTT-Import und -Export, einbrennen oder einbetten
+- Übergänge: Blende, Abblende, Wischen, Audio-Kreuzblende
+- Effekt-Stapel mit gemeinsamer Mathematik in Vorschau und Export: Weichzeichner, Schärfen, Vignette, 3D-LUT, Chroma-Key
+- Farbe: Farbräder, Kurven, animierbare Farbkorrektur
+- Bezier-Keyframes mit Kurveneditor; Quellmonitor-Marken im Projekt; Farbparität für Material ohne Tag
 
-## Phase 9 · Audio
+## Phase 9 · Audio ✅
 
-- Spur- und Clip-Effekte: EQ, Kompressor, Limiter, Rauschgate (WebAudio-Knoten in der Vorschau, FFmpeg-Filter im Export)
-- Lautheit beim Export normalisieren (zweistufiges `loudnorm`), Lautheitsmessung live während der Wiedergabe
-- Mono/Stereo-Spurtypen, Kanalzuordnung
+- Clip- und Spureffekte: EQ, Kompressor, Noise-Gate, Limiter (FFmpeg im Export, Ports derselben Filter in der Vorschau)
+- Loudness-Normalisierung beim Export (zweistufiges `loudnorm`), LUFS-Anzeige am Master, Limiter beim Normalisieren
+- Mono-Spuren und Kanalzuordnung
 
-## Phase 10 · Skalierung und Arbeitsumgebung
+## Phase 10 · Skalierung und Arbeitsumgebung ✅
 
-- **Native Render-Pipeline:** wgpu-Compositor in Rust für den Export, damit lange Timelines nicht einen FFmpeg-Eingang pro Clip brauchen.
-- Verschachtelte Sequenzen, Multicam, Geschwindigkeitsrampen und Rückwärts-Clips
-- Andockbare Panels (zwischen Bereichen ziehen), zweites Fenster für den Programmmonitor auf einem weiteren Bildschirm
+- Segmentierter Export (Bild in Teilen parallel, Ton daneben, verlustfrei zusammengefügt) statt einer eigenen GPU-Pipeline
+- Verschachtelte Sequenzen, Multicam mit Ton-Synchronisation, Geschwindigkeitsrampen und Rückwärts-Clips
+- Andockbare Panels, Programmausgabe in eigenem Fenster für einen zweiten Bildschirm
+- Installer getestet, automatische Updates (signiert, über GitHub-Releases), CI und Installer für Windows, macOS und Linux, Lizenz GPL-3.0-or-later
+
+## Als Nächstes
+
+1. **Erstes Release:** Updater-Schlüssel als Secrets hinterlegen, Version taggen, Entwurf prüfen und veröffentlichen. Danach den Update-Weg über GitHub einmal mit einer installierten Vorversion durchspielen.
+2. **Code-Signierung:** Zertifikate für Windows (Authenticode) und macOS (Developer ID, Notarisierung) besorgen und als Secrets hinterlegen; der Release-Workflow ist dafür vorbereitet.
+3. **macOS und Linux von Hand prüfen:** Dateizuordnung (unter macOS über `RunEvent::Opened`), Drag & Drop, Dialoge, Wiedergabe in WKWebView bzw. WebKitGTK (andere Codecs als WebView2).
+4. **Keyframes:** Keyframe-Editor in der Timeline (Gummiband für Lautstärke), Keyframes einzeln kopieren und einfügen.
+5. **Effekte:** Masken (Rechteck, Ellipse, Freiform, animierbar), Rauschunterdrückung (`afftdn` im Export, Gegenstück in der Vorschau).
+
+## Später
+
 - Medienverwaltung: Smart Bins, Metadaten-Editor, Projekt archivieren (Medien sammeln), Cache-Verwaltung
-- Farbmanagement für ungetaggte Quellen (wählbare Matrix im Vorschau-Shader), HDR-Metadaten
-- Installer-Signatur, automatische Updates, macOS- und Linux-Builds
+- Farbmanagement: wählbare Matrix für ungetaggte Quellen, HDR-Metadaten
+- Native Render-Pipeline (wgpu), falls der segmentierte Export bei sehr langen Timelines nicht reicht
