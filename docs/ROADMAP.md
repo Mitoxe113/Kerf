@@ -21,6 +21,7 @@ Zuverlässigkeit (Deltas, geteilte Undo-Schnappschüsse, Autosave, Versionen, Wi
 - Effekt-Stapel mit gemeinsamer Mathematik in Vorschau und Export: Weichzeichner, Schärfen, Vignette, 3D-LUT, Chroma-Key
 - Farbe: Farbräder, Kurven, animierbare Farbkorrektur
 - Bezier-Keyframes mit Kurveneditor; Quellmonitor-Marken im Projekt; Farbparität für Material ohne Tag
+- Lautstärke-Gummiband in der Timeline; Keyframes einzeln kopieren und einfügen
 
 ## Phase 9 · Audio ✅
 
@@ -57,9 +58,8 @@ Zuverlässigkeit (Deltas, geteilte Undo-Schnappschüsse, Autosave, Versionen, Wi
 2. **Updates über GitHub einschalten:** 0.1.0 ist ohne Update-Daten veröffentlicht. Den privaten Updater-Schlüssel (passend zum öffentlichen in `tauri.conf.json`) und sein Passwort als Secrets `TAURI_SIGNING_PRIVATE_KEY` und `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` hinterlegen, dann bekommt 0.1.1 ein `latest.json`. Den Weg 0.1.0 → 0.1.1 über GitHub einmal mit einer installierten 0.1.0 durchspielen.
 3. **Code-Signierung:** Ein Authenticode-Zertifikat für Windows besorgen und als Secret hinterlegen; der Release-Workflow ist dafür vorbereitet. Bis dahin warnt SmartScreen beim Installer.
 4. **macOS und Linux (derzeit nicht geplant):** Vor einer Rückkehr müsste unter Linux die Wiedergabe über das `asset:`-Protokoll in WebKitGTK gelöst werden (siehe STATUS, *Release 0.1.0*); unter macOS Dateizuordnung über `RunEvent::Opened`, Dialoge und Wiedergabe in WKWebView prüfen.
-5. **Keyframes:** Keyframe-Editor in der Timeline (Gummiband für Lautstärke), Keyframes einzeln kopieren und einfügen.
-6. **Assistenten in der App durchspielen:** Szenen, Stille, Beats, Ducking, Archiv, Relink und Cache mit echten Projekten in der Tauri-App bedienen; Kapitel in einem Abspieler prüfen.
-7. **Effekte:** Masken (Rechteck, Ellipse, Freiform, animierbar), Rauschunterdrückung (`afftdn` im Export, Gegenstück in der Vorschau).
+5. **Assistenten in der App durchspielen:** Szenen, Stille, Beats, Ducking, Archiv, Relink und Cache mit echten Projekten in der Tauri-App bedienen; Kapitel in einem Abspieler prüfen.
+6. **Effekte:** Masken (Rechteck, Ellipse, Freiform, animierbar), Rauschunterdrückung (`afftdn` im Export, Gegenstück in der Vorschau).
 
 ## Später
 

@@ -1,5 +1,6 @@
 import { useShallow } from "zustand/react/shallow";
-import { shownFrame, slippedIn } from "../lib/keys";
+import { keysOf, paramAt, playheadKeyPos, removeKey, shownFrame, slippedIn, upsertKey } from "../lib/keys";
+import { hasBand, segmentKeys, shiftKeys, shiftVolume, volumeBand, volumeHitAt, type VolumeHit } from "../timeline/volume";
 import { Eye, EyeOff, Lock, Magnet, Plus, Unlock, Link2, Film, Music } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { nestSelection, openNested, openSequence } from "../actions/editing";
@@ -10,7 +11,7 @@ import { TOOLS } from "../actions/registry";
 import { formatCombo, keysFor } from "../actions/keymap";
 import { engine, sequenceDuration } from "../engine/playback";
 import { formatTimecode, fpsOf } from "../lib/time";
-import type { Clip, MarkerColor, Sequence, Track, Transition, Uuid } from "../lib/types";
+import type { Clip, Keyframe, MarkerColor, Sequence, Track, Transition, Uuid } from "../lib/types";
 import { ALIGNS, applyDefaultTransitions, kindsFor, removeTransitions, setTransition } from "../actions/transitions";
 import { useEditor, type ToolId } from "../state/editor";
 import { edit, nestedSequence, sourceAsset, useActiveSequence, useProject } from "../state/project";
@@ -58,6 +59,8 @@ type Drag =
   | { kind: "trim"; clip: Clip; track: number; ci: number; edge: "start" | "end"; ripple: boolean; x0: number; delta: number; snapAt: number | null }
   | { kind: "roll"; clip: Clip; track: number; ci: number; x0: number; delta: number; snapAt: number | null }
   | { kind: "slip"; clip: Clip; track: number; ci: number; x0: number; delta: number }
+  /** Volume rubber band: moves the keys at `ats`, or the static volume when empty, by `dpos` band heights. */
+  | { kind: "volume"; clip: Clip; track: number; y0: number; height: number; ats: number[]; dpos: number; moved: boolean }
   | { kind: "slide"; clip: Clip; track: number; ci: number; x0: number; delta: number; snapAt: number | null }
   | { kind: "marquee"; x0: number; y0: number; x1: number; y1: number; additive: boolean }
   | { kind: "hand"; x0: number; y0: number; sx: number; sy: number }
@@ -260,6 +263,13 @@ function TrackHeader({ row, seq }: { row: TrackRow; seq: Sequence }) {
   );
 }
 
+/** The dragged clip as the volume drag would leave it. */
+function volumePreview(d: Extract<Drag, { kind: "volume" }>): Clip {
+  const c = d.clip;
+  if (!d.ats.length) return { ...c, volumeDb: shiftVolume(c.volumeDb, d.dpos) };
+  return { ...c, keys: { ...c.keys, volume: shiftKeys(keysOf(c, "volume"), d.ats, d.dpos) } };
+}
+
 export function Timeline() {
   const seq = useActiveSequence();
   const mediaById = useProject((s) => s.mediaById);
@@ -268,6 +278,7 @@ export function Timeline() {
   const ed = useEditor(
     useShallow((s) => ({
       clipboard: s.clipboard,
+      keyClipboard: s.keyClipboard,
       linkedSelection: s.linkedSelection,
       scrollX: s.scrollX,
       scrollY: s.scrollY,
@@ -296,6 +307,8 @@ export function Timeline() {
   const [size, setSize] = useState({ w: 800, h: 300 });
   const [markerEdit, setMarkerEdit] = useState<{ id: Uuid; x: number; name: string } | null>(null);
   const drawQueued = useRef(false);
+  // Clips drawn with an uncommitted change (volume drag).
+  const previewRef = useRef(new Map<Uuid, Clip>());
 
   const trackResize = useEditor((s) => s.trackResize);
   const layout: TrackLayout | null = useMemo(() => (seq ? layoutTracks(seq, ed.trackSize, trackResize) : null), [seq, ed.trackSize, trackResize]);
@@ -331,7 +344,7 @@ export function Timeline() {
     const ctx = c.getContext("2d")!;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, v.width, v.height);
-    drawTracks(ctx, layout, v, { seq, media: mediaById, sequences: sequenceNames, selection, activeTransition: ed.activeTransition, redraw: () => requestBase() });
+    drawTracks(ctx, layout, v, { seq, media: mediaById, sequences: sequenceNames, selection, activeTransition: ed.activeTransition, redraw: () => requestBase(), preview: previewRef.current });
     drawSubtitleLane(ctx, seq, v, ed.activeCue);
     drawRuler(ctx, seq, v);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -412,6 +425,11 @@ export function Timeline() {
         const r = rowOf(d.track)!;
         ghost(fx(d.clip.start), top + r.y, d.clip.duration * v.zoom, r.h, true);
         label = `Slip ${d.delta >= 0 ? "+" : "−"}${Math.abs(d.delta)} F · In ${formatTimecode(slippedIn(d.clip, d.delta), seq.settings.fps)}`;
+      } else if (d.kind === "volume") {
+        const p = volumePreview(d);
+        const db = (v: number) => (v <= -96 ? "−∞ dB" : `${v > 0 ? "+" : v < 0 ? "−" : ""}${Math.abs(v).toFixed(1).replace(".", ",")} dB`);
+        label = d.ats.length ? keysOf(p, "volume").filter((k) => d.ats.includes(k.at)).map((k) => db(k.value)).join(" · ") : db(p.volumeDb);
+        label = `Lautstärke ${label} · Umschalt: fein${d.ats.length ? "" : " · Strg+Klick: Keyframe"}`;
       } else if (d.kind === "slide") {
         const r = rowOf(d.track)!;
         ghost(fx(d.clip.start + d.delta), top + r.y, d.clip.duration * v.zoom, r.h, true);
@@ -684,6 +702,26 @@ export function Timeline() {
     return null;
   };
 
+  /** Volume line or key of an audio clip under the pointer. */
+  const volumeAt = (x: number, y: number): { hit: VolumeHit; clip: Clip; row: TrackRow; height: number } | null => {
+    const h = hitTest(x, y);
+    if (!h || h.zone !== "body" || h.row.track.kind !== "audio" || h.row.track.locked) return null;
+    const c = h.clip;
+    const state = sourceAsset(c.mediaId)?.status.state;
+    if (state === "missing" || state === "error") return null;
+    const x0 = c.start * view.zoom - view.scrollX;
+    if (!hasBand(h.row.h, c.duration * view.zoom)) return null;
+    const band = volumeBand(RULER_H - view.scrollY + h.row.y, h.row.h);
+    const hit = volumeHitAt(c, x0, view.zoom, band, x, y);
+    return hit && { hit, clip: c, row: h.row, height: band.height };
+  };
+  const setVolumeKeys = (c: Clip, keys: Keyframe[]) => edit({ type: "setKeyframes", sequence: seq.id, clip: c.id, param: "volume", keys });
+  /** Source position and current level of the line at clip-local `local`. */
+  const volumeKeyAt = (c: Clip, local: number) => ({
+    at: playheadKeyPos(c, c.start + local),
+    value: Math.round(paramAt(c, "volume", Math.min(local, c.duration - 1e-6)) * 10) / 10,
+  });
+
   const markerAt = (x: number) => seq.markers.find((m) => Math.abs(m.frame * view.zoom - view.scrollX - x) <= 6) ?? null;
   const lenOf = (c: Clip) => mediaLength(sourceAsset(c.mediaId), seq);
   const targets = (exclude?: Set<Uuid>) => snapTargets(seq, engine.frame, exclude);
@@ -698,6 +736,7 @@ export function Timeline() {
     if (tool === "hand") return setCursor("grab");
     if (tool === "zoom") return setCursor("zoom-in");
     if (tool === "razor") return setCursor(hitTest(x, y) ? "crosshair" : "default");
+    if (tool === "select" && volumeAt(x, y)) return setCursor("ns-resize");
     const h = hitTest(x, y);
     if (!h || h.row.track.locked) return setCursor("default");
     if (h.zone !== "body" && (tool === "select" || tool === "ripple" || tool === "roll")) return setCursor(tool === "roll" ? "col-resize" : "ew-resize");
@@ -759,6 +798,24 @@ export function Timeline() {
       if (Math.abs(engine.frame - f) * view.zoom <= SNAP_PX) f = Math.round(engine.frame);
       const clips = e.shiftKey ? null : ed.linkedSelection && !e.altKey ? expandLinks(seq, [h.clip.id]) : [h.clip.id];
       void edit({ type: "splitAt", sequence: seq.id, frame: f, clips });
+      return;
+    }
+    // Volume rubber band: drag the line or a key; Ctrl+click adds or removes a key.
+    const vh = tool === "select" ? volumeAt(x, y) : null;
+    if (vh) {
+      const c = vh.clip;
+      if (e.ctrlKey) {
+        const keys = keysOf(c, "volume");
+        if (vh.hit.kind === "key") void setVolumeKeys(c, removeKey(keys, vh.hit.at));
+        else {
+          const k = volumeKeyAt(c, vh.hit.local);
+          void setVolumeKeys(c, upsertKey(keys, k.at, k.value));
+        }
+        return;
+      }
+      if (!selection.has(c.id)) selectClips([c.id], false, e.altKey);
+      const ats = vh.hit.kind === "key" ? [vh.hit.at] : segmentKeys(c, vh.hit.local);
+      dragRef.current = { kind: "volume", clip: c, track: vh.row.index, y0: y, height: vh.height, ats, dpos: 0, moved: false };
       return;
     }
     // A transition (away from the clip edges at its cut) is picked for the inspector and Delete.
@@ -911,6 +968,16 @@ export function Timeline() {
         showSourceFrame(d.clip, shownFrame(d.clip, d.clip.duration + d.delta - 1));
         break;
       }
+      case "volume": {
+        // Shift: fine adjustment.
+        d.dpos = ((d.y0 - y) / Math.max(1, d.height)) * (e.shiftKey ? 0.1 : 1);
+        d.moved ||= Math.abs(d.y0 - y) > 1;
+        const p = volumePreview(d);
+        previewRef.current.set(p.id, p);
+        engine.setOverride(p.id, d.ats.length ? { keys: p.keys } : { volumeDb: p.volumeDb });
+        requestBase();
+        break;
+      }
       case "slip": {
         d.delta = clampSlip(d.clip, Math.round((d.x0 - x) / view.zoom), lenOf(d.clip));
         showSourceFrame(d.clip, shownFrame({ ...d.clip, sourceIn: slippedIn(d.clip, d.delta) }, 0));
@@ -989,6 +1056,10 @@ export function Timeline() {
       dragRef.current = null;
       engine.setPreviewFrame(null);
       engine.clearOverrides();
+      if (previewRef.current.size) {
+        previewRef.current.clear();
+        requestBase();
+      }
       drawOverlay();
       updateHoverCursor(local(e).x, local(e).y);
     };
@@ -1008,6 +1079,13 @@ export function Timeline() {
       case "roll":
         if (d.delta) await edit({ type: "rollEdit", sequence: seq.id, clip: d.clip.id, delta: d.delta, linked: !e.altKey });
         break;
+      case "volume": {
+        if (!d.moved) break;
+        const p = volumePreview(d);
+        if (d.ats.length) await setVolumeKeys(p, keysOf(p, "volume"));
+        else if (p.volumeDb !== d.clip.volumeDb) await edit({ type: "updateClips", sequence: seq.id, clips: [p.id], patch: { volumeDb: p.volumeDb } });
+        break;
+      }
       case "slip":
         if (d.delta) await edit({ type: "slipClip", sequence: seq.id, clip: d.clip.id, delta: d.delta, linked: !e.altKey });
         break;
@@ -1061,6 +1139,29 @@ export function Timeline() {
         { label: "Farbe", submenu: MARKER_COLORS.map((c) => ({ label: c.label, checked: m.color === c.value, onSelect: () => void edit({ type: "updateMarker", sequence: seq.id, marker: m.id, patch: { color: c.value } }) })) },
         { separator: true },
         { label: "Marker löschen", danger: true, onSelect: () => void edit({ type: "removeMarker", sequence: seq.id, marker: m.id }) },
+      ]);
+    }
+    const vh = volumeAt(x, y);
+    if (vh) {
+      const c = vh.clip;
+      const keys = keysOf(c, "volume");
+      const here = vh.hit.kind === "line" ? volumeKeyAt(c, vh.hit.local) : null;
+      const key = vh.hit.kind === "key" ? keys.find((k) => vh.hit.kind === "key" && k.at === vh.hit.at) : undefined;
+      const copied = ed.keyClipboard?.volume;
+      return openContextMenu(e, [
+        ...(key
+          ? [
+              { label: "Keyframe kopieren", onSelect: () => ed.set({ keyClipboard: { volume: { value: key.value, ease: key.ease } } }) },
+              { label: "Keyframe löschen", danger: true, onSelect: () => void setVolumeKeys(c, removeKey(keys, key.at)) },
+            ]
+          : [
+              { label: "Lautstärke-Keyframe setzen", shortcut: "Strg+Klick", onSelect: () => here && void setVolumeKeys(c, upsertKey(keys, here.at, here.value)) },
+              {
+                label: "Keyframe einfügen",
+                disabled: !copied,
+                onSelect: () => here && copied && void setVolumeKeys(c, upsertKey(keys, here.at, copied.value, copied.ease)),
+              },
+            ]),
       ]);
     }
     const h = hitTest(x, y);

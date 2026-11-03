@@ -127,6 +127,8 @@ Dieser Abschnitt hat einen anderen Prüfstand als „Fertig und verifiziert“: 
 - Animierbar: Position, Skalierung, Rotation, Deckkraft, Lautstärke, Geschwindigkeit sowie **Belichtung, Kontrast, Sättigung, Temperatur und Tönung**.
 - Interpolation linear, Ease-In/-Out/-In-Out, Halten und **eigene Bezier-Kurven** (wie CSS `cubic-bezier`) mit Kurveneditor, Vorgaben und Bewegungsvorschau. Rust und TypeScript rechnen identisch, geprüft gegen Referenzwerte der WebView2 (Web Animations API).
 - Keyframes hängen an der Quellposition: Trimmen und Teilen verschieben sie nicht.
+- **Lautstärke-Gummiband** auf Audioclips in der Timeline: die Lautstärke als Linie über der Wellenform (Höhe nach der Wurzel der Verstärkung wie die Wellenform: 0 dB auf halber Höhe, +12 dB oben, Stille unten). Linie ziehen ändert die Lautstärke, mit Keyframes die beiden Keyframes um die Stelle; Keyframe-Punkte einzeln ziehen; Strg+Klick setzt oder entfernt einen Keyframe; Umschalt fein. Werte über +12 dB (erlaubt bis +24 dB) liegen am oberen Rand.
+- **Keyframes kopieren und einfügen:** Rechtsklick auf die Raute im Inspector (oder auf einen Lautstärke-Punkt in der Timeline) kopiert Wert und Interpolation; eingefügt wird am Playhead (Inspector) oder an der Klickstelle (Timeline), auch in einen anderen Clip.
 - Export: Bewegung über `perspective`, Deckkraft und Farbe über `sendcmd`, Lautstärke über `volume`-Ausdrücke; Bezier-Kurven als stückweise lineare Ausdrücke (bis 32 Stücke).
 
 **Effekte und Farbe**
@@ -191,15 +193,16 @@ Dieser Abschnitt hat einen anderen Prüfstand als „Fertig und verifiziert“: 
 
 | Bereich | Anzahl | Was |
 | --- | --- | --- |
-| `kerf-core` Unit | 81 | Zeit/Timecode, alle Edit-Befehle (inkl. `addEffects`, `addMarkers`, `batch`), Ducking-Kurve, Archiv, Zeitabbildung (Rampen, Rückwärts), Übergänge und Masken, verschachtelte Sequenzen, Multicam, Untertitel, Textstil und Animation, Keyframes inkl. Bezier, Undo, Projektdatei inkl. unbekannter Felder und unterbrochenem Speichern |
+| `kerf-core` Unit | 83 | Zeit/Timecode, alle Edit-Befehle (inkl. `addEffects`, `addMarkers`, `batch`), Ducking-Kurve, Archiv, Zeitabbildung (Rampen, Rückwärts), Übergänge und Masken, verschachtelte Sequenzen, Multicam, Untertitel, Textstil und Animation, Keyframes inkl. Bezier, Undo, Projektdatei inkl. unbekannter Felder und unterbrochenem Speichern |
 | `kerf-core` Parität | 1 | Farbmatrix gegen gemeinsame Fixture |
-| `kerf-media` Unit | 30 | Probe-Parsing, FFmpeg-Versionserkennung, Filtergraph, CBR/Mono/Letterbox, EBU-R128-Parser, Teilgrenzen und Plan des segmentierten Exports, Titel-Folgen, Kapitel, Szenen/Stille/Beats/Momente an synthetischen Signalen |
+| `kerf-core` Fuzz | 1 | Zufällige Befehlsfolgen über `History` (300 Seeds, `KERF_FUZZ_SEEDS` für mehr; 40 000 bestanden): nach jedem Schritt sortierte Clips, jedes gezeigte Bild im Medium, gültige Geschwindigkeiten, Blenden, Keyframes, Übergänge, Marker und Untertitel, exaktes Undo/Redo, unverändertes Projekt nach Fehlern, verlustfreies JSON |
+| `kerf-media` Unit | 32 | Probe-Parsing, FFmpeg-Versionserkennung, Filtergraph, CBR/Mono/Letterbox, EBU-R128-Parser, Teilgrenzen und Plan des segmentierten Exports, Titel-Folgen, Kapitel, Szenen/Stille/Beats/Momente an synthetischen Signalen |
 | `kerf-media` Erkennung | 1 | Echtes FFmpeg: Schnitte bei 2 s und 4 s, Bereichsanalyse, Stille 1,5–3 s, Abbruch |
 | `kerf-media` Pipeline | 16 | Echtes FFmpeg: Schnitt → Render → Pixelprüfung, Abbruch, Keyframes, animierte Farbe, Effekt-Stapel, Lautheit, Untertitel, Übergänge inkl. Masken, Mischmodi, animierte Titel, Audio-Effekte und Loudnorm, Rückwärts und Rampen, verschachtelte Sequenzen, Multicam-Synchronisation, segmentiert = ein Stück (inkl. Kapitel) |
 | `kerf-library` | 13 | Migrationen, Presets (Prüfung, Export/Import), Favoriten, Recents, Titelvorlagen, Assets und Sammlungen, Schriften (Import, Ablehnung, Entfernen) |
 | `kerf-assets` | 10 | Anbieter-Parser, Lizenzzuordnung, URL-Regeln, Inhaltsprüfung, Berichte; Mock-Server: Suche, Schlüssel, Download, abgelehnte Inhalte und Weiterleitungen, Abbruch, 429 |
-| App-Crate | 6 | Versionen, Projektdatei-Argument, Untertitel-Kodierung, Datumsformat, Relink-Suche, Wiederherstellung nach Absturz |
-| Frontend (Vitest) | 105 | Timecode, Timeline-Constraints, Keyframes/Easing/Bezier, Zeitabbildung, Effekte und Kurven, Audio-DSP gegen FFmpeg-Fixtures, Textsatz und Textanimation, Deltas, Docking, unscharfe Suche, Tastaturprofile, Assistenten-Befehle (Bereiche entfernen, Marker, Szenen), Projektprüfung, Beenden mit laufenden Aufträgen, unbekannte Projektfelder, Codec-Prüfung der Vorschau |
+| App-Crate | 7 | Versionen, Projektdatei-Argument, Endung beim Speichern, Untertitel-Kodierung, Datumsformat, Relink-Suche, Wiederherstellung nach Absturz |
+| Frontend (Vitest) | 113 | Timecode, Timeline-Constraints, Lautstärke-Gummiband, Keyframes/Easing/Bezier, Zeitabbildung, Effekte und Kurven, Audio-DSP gegen FFmpeg-Fixtures, Textsatz und Textanimation, Deltas, Docking, unscharfe Suche, Tastaturprofile, Assistenten-Befehle (Bereiche entfernen, Marker, Szenen), Projektprüfung, Beenden mit laufenden Aufträgen, unbekannte Projektfelder, Codec-Prüfung der Vorschau |
 
 In dieser Arbeitsumgebung lief die Pipeline mit FFmpeg 6.1 über einen Adapter für `-/filter_complex`: 15 von 16 bestanden, `reverse_and_speed_ramps_render` scheitert nur dort (Rampen-Frame 116 statt 115). Mit aktuellem FFmpeg in der CI bestehen alle 16. Zusätzlich gibt es einen Zeitmesstest für große Projekte (`cargo test -p kerf-core --release --test large_project -- --ignored --nocapture`).
 
@@ -217,7 +220,7 @@ Alle Tests laufen in der CI unter Windows.
 - **Updates über GitHub:** 0.1.0 enthält keine Update-Daten. Wirksam wird der Weg erst mit einem späteren Release, das mit dem zum öffentlichen Schlüssel in `tauri.conf.json` passenden privaten Schlüssel gebaut wurde. Geprüft ist er gegen einen lokalen Server, über GitHub noch nicht.
 - **Export:** weiterhin ein FFmpeg-Eingang pro Clipabschnitt. Segmentiertes Rendern verteilt die Arbeit, beschleunigt aber nur aufwendige Timelines; eine eigene GPU-Pipeline gibt es nicht (bewusst: FFmpeg segmentiert statt wgpu).
 - **Ripple** betrifft die bearbeitete und verknüpfte Spuren; *Einfügen*, Extract und Standbild verschieben alle nicht gesperrten Spuren.
-- **Keyframes:** kein Keyframe-Editor in der Timeline (Gummiband), Keyframes lassen sich nicht einzeln kopieren.
+- **Keyframes:** In der Timeline gibt es das Gummiband nur für die Lautstärke; andere Parameter werden im Inspector animiert. Keyframes lassen sich in der Timeline nicht zeitlich verschieben.
 - **Normalisieren** misst die Quelle ohne Blenden und Spurlautstärke.
 - **Programmausgabe-Fenster:** Der Ton bleibt beim Hauptfenster; das Fenster zeigt nur etwas, solange der Programmmonitor im Arbeitsbereich sichtbar ist (es sagt das dann an).
 - **Multicam-Synchronisation** über den Ton braucht gemeinsamen Ton der Kameras; sonst werden sie am Anfang ausgerichtet.
@@ -226,7 +229,6 @@ Alle Tests laufen in der CI unter Windows.
 ## Noch nicht umgesetzt
 
 - Masken (Formen) und Rauschunterdrückung
-- Keyframe-Editor in der Timeline, Keyframes einzeln kopieren
 - Smart Bins, Metadaten-Editor, überwachte Ordner, wählbarer Cache-Ordner und automatisches Aufräumen
 - Transkription, automatische Untertitel, Übersetzung, Smart Reframe, Tracking, KI-Masken (kein lokales Modell eingebunden)
 - Einstellungsebenen, Compound Clips (verschachtelte Sequenzen gibt es), Spurgruppen

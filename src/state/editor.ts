@@ -2,7 +2,7 @@
 // workspaces. View preferences persist per user in localStorage.
 
 import { create } from "zustand";
-import type { KeyParam, PasteItem, Rgb, Uuid } from "../lib/types";
+import type { Ease, KeyParam, PasteItem, Rgb, Uuid } from "../lib/types";
 
 export type ToolId = "select" | "razor" | "ripple" | "roll" | "slip" | "slide" | "hand" | "zoom";
 export type PanelId = "media" | "monitor" | "inspector" | "timeline" | "meters" | "scopes" | "export" | "mixer" | "history" | "source" | "subtitles" | "multicam" | "effects" | "stock" | "assist" | "markers" | "project";
@@ -168,6 +168,8 @@ interface EditorStore {
   layouts: Record<string, WorkspaceLayout>;
   customWorkspaces: CustomWorkspace[];
   clipboard: PasteItem[];
+  /** A copied keyframe: value and interpolation per parameter (position copies x and y). */
+  keyClipboard: Partial<Record<KeyParam, { value: number; ease: Ease }>> | null;
   dialog: Dialog | null;
   /** Eyedropper waiting for a click in the program monitor (null = cancelled). */
   picker: ((rgb: Rgb | null) => void) | null;
@@ -256,6 +258,7 @@ export const useEditor = create<EditorStore>((set, get) => ({
   layouts: {},
   customWorkspaces: [],
   clipboard: [],
+  keyClipboard: null,
   dialog: null,
   picker: null,
   inspectorTab: "clip",

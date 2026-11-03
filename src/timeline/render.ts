@@ -3,11 +3,12 @@
 
 import { cachedImage, cachedPeaks } from "../lib/media";
 import { formatTimecode, fpsOf, timecodeBase } from "../lib/time";
-import { isAnimated, localOf, paramAt, sourceAt } from "../lib/keys";
+import { isAnimated, keysOf, localOf, paramAt, sourceAt } from "../lib/keys";
 import { labelColor } from "../lib/labels";
 import type { Clip, MediaAsset, Sequence, Track, Uuid } from "../lib/types";
 import { dbToGain } from "../engine/math";
 import { TRANSITIONS } from "../actions/transitions";
+import { bandY, hasBand, volumeBand } from "./volume";
 import { DIVIDER_H, RULER_H, subLane, transitionInto, type TrackLayout, type TransitionSpan } from "./geometry";
 
 export const COLORS = {
@@ -167,6 +168,8 @@ interface DrawContext {
   /** Highlighted transition (the clip it leads into). */
   activeTransition: Uuid | null;
   redraw: () => void;
+  /** Clips drawn with changes not yet committed (a volume drag). */
+  preview?: Map<Uuid, Clip>;
 }
 
 export function drawTracks(ctx: CanvasRenderingContext2D, layout: TrackLayout, v: View, d: DrawContext) {
@@ -223,7 +226,7 @@ export function drawTracks(ctx: CanvasRenderingContext2D, layout: TrackLayout, v
     }
     let i = lo;
     for (; i < clips.length; i++) {
-      const c = clips[i];
+      const c = d.preview?.get(clips[i].id) ?? clips[i];
       if (c.start > f1) break;
       drawClip(ctx, c, row.track, c.start * v.zoom - v.scrollX, y, c.duration * v.zoom, row.h, v, d, dim);
     }
@@ -331,13 +334,17 @@ function drawClip(
     ctx.lineTo(x + w, y + h);
     ctx.stroke();
   }
+  // Volume rubber band: the level over the waveform, volume keys as handles on it.
+  const band = kind === "audio" && !offline && hasBand(rowH, w);
+  if (band) drawVolumeBand(ctx, c, x, vx, vw, volumeBand(rowY, rowH), v);
   // Keyframes: one diamond per keyed source position along the bottom edge.
   if (detail && h >= 20 && c.keys) {
     const seen = new Set<number>();
     const ky = y + h - 6;
     ctx.fillStyle = "#e7e7ec";
     ctx.strokeStyle = "rgba(0,0,0,0.6)";
-    for (const list of Object.values(c.keys)) {
+    for (const [param, list] of Object.entries(c.keys)) {
+      if (band && param === "volume") continue;
       for (const k of list ?? []) {
         if (seen.has(k.at)) continue;
         seen.add(k.at);
@@ -381,6 +388,44 @@ function drawClip(
     ctx.lineWidth = 1;
   }
   ctx.stroke();
+  ctx.restore();
+}
+
+/** The clip's volume as a line over its waveform; keys drawn as handles. */
+function drawVolumeBand(ctx: CanvasRenderingContext2D, c: Clip, x: number, vx: number, vw: number, band: { top: number; height: number }, v: View) {
+  const x0 = Math.max(vx, x);
+  const x1 = Math.min(vx + vw, x + c.duration * v.zoom);
+  if (x1 <= x0) return;
+  ctx.save();
+  ctx.strokeStyle = "rgba(245,181,68,0.9)";
+  ctx.lineWidth = 1.25;
+  ctx.beginPath();
+  const keys = keysOf(c, "volume");
+  if (!keys.length) {
+    const ly = Math.round(bandY(band, c.volumeDb)) + 0.5;
+    ctx.moveTo(x0, ly);
+    ctx.lineTo(x1, ly);
+  } else {
+    // Sampled every 2 px: eases and the gain scale make the line curved between keys.
+    for (let px = x0; px <= x1; px += 2) {
+      const local = Math.min((Math.min(px, x1) - x) / v.zoom, c.duration - 1e-6);
+      const ly = bandY(band, paramAt(c, "volume", Math.max(0, local)));
+      if (px === x0) ctx.moveTo(px, ly);
+      else ctx.lineTo(px, ly);
+    }
+  }
+  ctx.stroke();
+  ctx.fillStyle = "#f5b544";
+  ctx.strokeStyle = "rgba(0,0,0,0.7)";
+  ctx.lineWidth = 1;
+  for (const k of keys) {
+    const kx = x + localOf(c, k.at) * v.zoom;
+    if (kx < x0 - 4 || kx > x1 + 4) continue;
+    ctx.beginPath();
+    ctx.arc(kx, bandY(band, k.value), 3.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  }
   ctx.restore();
 }
 

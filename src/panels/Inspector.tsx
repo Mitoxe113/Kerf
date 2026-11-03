@@ -211,8 +211,34 @@ function KeyNav({ seq, clips, params, frame }: { seq: Sequence; clips: Clip[]; p
       await setKeys(seq, c, p, onKey ? removeKey(keys, at) : upsertKey(keys, at, paramAt(c, p, local)));
     }
   };
+  // Read when a menu opens: the clipboard does not re-render this component.
+  const copied = () => useEditor.getState().keyClipboard;
+  const copyKey = () => {
+    const out: NonNullable<ReturnType<typeof copied>> = {};
+    for (const p of params) {
+      const k = keysOf(c, p).find((k) => k.at === at);
+      if (k) out[p] = { value: k.value, ease: k.ease };
+    }
+    useEditor.getState().set({ keyClipboard: out });
+  };
+  const pasteKey = async () => {
+    const clip = copied();
+    for (const p of params) {
+      const k = clip?.[p];
+      if (!k) continue;
+      // Speed keys are linear or hold (kerf_core::timemap); other eases become linear there.
+      const ease = p === "speed" && k.ease !== "hold" ? "linear" : k.ease;
+      await setKeys(seq, c, p, upsertKey(keysOf(c, p), at, k.value, ease));
+    }
+  };
+  const pasteItem = () => ({ label: "Keyframe einfügen", disabled: !params.some((p) => copied()?.[p]) || !inside, onSelect: () => void pasteKey() });
+  const pasteMenu = (e: React.MouseEvent) => {
+    if (!inside) return;
+    e.preventDefault();
+    openContextMenu(e, [pasteItem()]);
+  };
   const keyMenu = (e: React.MouseEvent) => {
-    if (!onKey) return;
+    if (!onKey) return pasteMenu(e);
     e.preventDefault();
     const current = keysOf(c, params[0]).find((k) => k.at === at)?.ease;
     // Speed ramps are linear in time or hold (kerf_core::timemap).
@@ -238,6 +264,9 @@ function KeyNav({ seq, clips, params, frame }: { seq: Sequence; clips: Clip[]; p
             },
           ]),
       { separator: true },
+      { label: "Keyframe kopieren", onSelect: copyKey },
+      pasteItem(),
+      { separator: true },
       { label: "Keyframe löschen", danger: true, onSelect: () => void toggleKey() },
     ]);
   };
@@ -252,7 +281,7 @@ function KeyNav({ seq, clips, params, frame }: { seq: Sequence; clips: Clip[]; p
           <button
             className={cx(btn, onKey && "text-signal hover:text-signal")}
             aria-label={onKey ? "Keyframe entfernen" : "Keyframe hinzufügen"}
-            title={onKey ? "Keyframe entfernen (Rechtsklick: Interpolation)" : "Keyframe hinzufügen"}
+            title={onKey ? "Keyframe entfernen (Rechtsklick: Interpolation, Kopieren)" : "Keyframe hinzufügen (Rechtsklick: Einfügen)"}
             disabled={!inside}
             onClick={() => void toggleKey()}
             onContextMenu={keyMenu}
@@ -267,9 +296,10 @@ function KeyNav({ seq, clips, params, frame }: { seq: Sequence; clips: Clip[]; p
       <button
         className={cx(btn, keyed && "text-signal hover:text-signal")}
         aria-label={keyed ? "Animation beenden" : "Animieren"}
-        title={keyed ? "Animation beenden (Wert am Playhead bleibt)" : "Animieren: Keyframe am Playhead setzen"}
+        title={keyed ? "Animation beenden (Wert am Playhead bleibt)" : "Animieren: Keyframe am Playhead setzen (Rechtsklick: kopierten Keyframe einfügen)"}
         aria-pressed={keyed}
         onClick={() => void toggleWatch()}
+        onContextMenu={pasteMenu}
       >
         <Timer size={12} />
       </button>

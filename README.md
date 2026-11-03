@@ -108,7 +108,9 @@ Alle Tastaturbefehle sind unter *Bearbeiten → Tastaturbefehle …* (`Strg+Alt+
 
 **Quellmonitor:** Doppelklick auf ein Medium öffnet es im Tab *Quelle*. Dort In/Out setzen und mit `,` / `.` an den Playhead der Timeline einfügen oder überschreiben (Dreipunktschnitt; ist in der Timeline In/Out gesetzt, gilt deren In-Point).
 
-**Keyframes:** Im Inspector neben einer animierbaren Eigenschaft (Bewegung, Deckkraft, Lautstärke, Geschwindigkeit, Farbkorrektur) auf die Raute klicken. Steht der Playhead auf einem Keyframe, wählt ein Rechtsklick auf die Raute die Interpolation (linear, Ease-In/-Out, Halten oder eine eigene Kurve im Kurveneditor). Die Pfeile daneben springen zum vorherigen und nächsten Keyframe.
+**Keyframes:** Im Inspector neben einer animierbaren Eigenschaft (Bewegung, Deckkraft, Lautstärke, Geschwindigkeit, Farbkorrektur) auf die Raute klicken. Steht der Playhead auf einem Keyframe, wählt ein Rechtsklick auf die Raute die Interpolation (linear, Ease-In/-Out, Halten oder eine eigene Kurve im Kurveneditor). Die Pfeile daneben springen zum vorherigen und nächsten Keyframe. Über das Rechtsklick-Menü der Raute lässt sich ein Keyframe kopieren und am Playhead einfügen, auch in einem anderen Clip.
+
+**Lautstärke in der Timeline:** Auf Audioclips liegt die Lautstärke als Linie über der Wellenform. Ziehen ändert sie (Umschalt: fein), Strg+Klick setzt oder entfernt einen Keyframe, die Punkte lassen sich einzeln ziehen. Der Rechtsklick auf die Linie oder einen Punkt kopiert, fügt ein oder löscht.
 
 **Drag & Drop:** Dateien und Ordner aus dem Explorer ins Fenster ziehen importiert sie. Medien aus dem Browser in die Timeline ziehen überschreibt, mit gedrückter `Strg`-Taste wird eingefügt.
 
