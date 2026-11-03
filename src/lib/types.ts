@@ -239,7 +239,22 @@ export type AudioEffect = { id: Uuid; enabled: boolean } & AudioEffectKind;
 export type ChannelMap = "stereo" | "mono" | "left" | "right" | "swap";
 
 /** Wipes name the direction the edge moves; crossfade is the audio kind. */
-export type TransitionKind = "dissolve" | "dipBlack" | "dipWhite" | "wipeLeft" | "wipeRight" | "wipeUp" | "wipeDown" | "crossfade";
+export type TransitionKind =
+  | "dissolve"
+  | "dipBlack"
+  | "dipWhite"
+  | "wipeLeft"
+  | "wipeRight"
+  | "wipeUp"
+  | "wipeDown"
+  | "crossfade"
+  | "irisRound"
+  | "irisBox"
+  | "clock"
+  | "barnDoorH"
+  | "barnDoorV"
+  | "wipeDiagonal"
+  | "blinds";
 export type TransitionAlign = "center" | "start" | "end";
 export interface Transition {
   kind: TransitionKind;

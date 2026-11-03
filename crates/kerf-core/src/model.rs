@@ -534,11 +534,45 @@ pub enum TransitionKind {
     WipeDown,
     /// Audio: linear fade out and in at the same time.
     Crossfade,
+    // Mask transitions: the incoming side shows where the mask is set; see
+    // `TransitionKind::mask` for the exact shapes (preview and export).
+    /// Circle growing from the centre to the corners.
+    IrisRound,
+    /// Rectangle growing from the centre (frame aspect).
+    IrisBox,
+    /// Clock hand sweeping clockwise from 12 o'clock.
+    Clock,
+    /// Opens from a vertical centre line to the left and right edges.
+    BarnDoorH,
+    /// Opens from a horizontal centre line to the top and bottom edges.
+    BarnDoorV,
+    /// Diagonal edge moving from the top left to the bottom right.
+    WipeDiagonal,
+    /// Ten horizontal bands, each filling from its top edge.
+    Blinds,
 }
 
 impl TransitionKind {
     pub fn is_audio(self) -> bool {
         self == TransitionKind::Crossfade
+    }
+
+    /// For mask transitions: the condition (FFmpeg expression over pixel
+    /// `X`, `Y`, frame size `W`, `H` and progress `PRG` in 0..1) under which a
+    /// pixel shows the incoming side. Pixel centres are at +0.5. Mirrored by
+    /// `maskTransition` in src/engine/compositor.ts.
+    pub fn mask(self) -> Option<&'static str> {
+        use TransitionKind as K;
+        Some(match self {
+            K::IrisRound => "lte(pow(X+0.5-W/2,2)+pow(Y+0.5-H/2,2),pow(PRG*hypot(W,H)/2,2))",
+            K::IrisBox => "lte(abs(X+0.5-W/2),PRG*W/2)*lte(abs(Y+0.5-H/2),PRG*H/2)",
+            K::Clock => "lt(if(lt(atan2(X+0.5-W/2,H/2-Y-0.5),0),atan2(X+0.5-W/2,H/2-Y-0.5)+2*PI,atan2(X+0.5-W/2,H/2-Y-0.5)),PRG*2*PI)",
+            K::BarnDoorH => "lte(abs(X+0.5-W/2),PRG*W/2)",
+            K::BarnDoorV => "lte(abs(Y+0.5-H/2),PRG*H/2)",
+            K::WipeDiagonal => "lte((X+0.5)/W+(Y+0.5)/H,2*PRG)",
+            K::Blinds => "lt(mod(Y+0.5,H/10),PRG*H/10)",
+            _ => return None,
+        })
     }
 }
 

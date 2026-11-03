@@ -83,8 +83,28 @@ uniform float u_contrast;
 uniform float u_opacity;
 uniform float u_premul;
 uniform float u_unpremul;
+// Mask transitions (TransitionKind::mask in kerf-core): 0 = none.
+uniform int u_mask;
+uniform float u_prog;
+uniform vec3 u_frame; // width, height, 1 when window y counts from the top
 out vec4 outColor;
+const float PI = 3.14159265358979;
+bool shown() {
+  float W = u_frame.x, H = u_frame.y, P = u_prog;
+  float X = floor(gl_FragCoord.x);
+  float Y = u_frame.z > 0.5 ? floor(gl_FragCoord.y) : H - 1.0 - floor(gl_FragCoord.y);
+  float dx = X + 0.5 - W / 2.0, dy = Y + 0.5 - H / 2.0;
+  if (u_mask == 1) { float r = P * length(vec2(W, H)) / 2.0; return dx * dx + dy * dy <= r * r; }
+  if (u_mask == 2) return abs(dx) <= P * W / 2.0 && abs(dy) <= P * H / 2.0;
+  if (u_mask == 3) { float a = atan(dx, -dy); if (a < 0.0) a += 2.0 * PI; return a < P * 2.0 * PI; }
+  if (u_mask == 4) return abs(dx) <= P * W / 2.0;
+  if (u_mask == 5) return abs(dy) <= P * H / 2.0;
+  if (u_mask == 6) return (X + 0.5) / W + (Y + 0.5) / H <= 2.0 * P;
+  if (u_mask == 7) { float b = H / 10.0; return mod(Y + 0.5, b) < P * b; }
+  return true;
+}
 void main() {
+  if (u_mask > 0 && !shown()) discard;
   vec4 s = texture(u_tex, v_uv);
   if (u_unpremul > 0.5) s.rgb = s.a > 0.0 ? s.rgb / s.a : vec3(0.0);
   vec3 rgb = clamp(u_color * s.rgb, 0.0, 1.0);
@@ -94,6 +114,8 @@ void main() {
 }`;
 
 const FULL_QUAD = new Float32Array([2, 0, 0, 0, 2, 0, -1, -1, 1]);
+/** Mask transitions in the order of the shader's u_mask (1-based). */
+export const MASK_TRANSITIONS: TransitionKind[] = ["irisRound", "irisBox", "clock", "barnDoorH", "barnDoorV", "wipeDiagonal", "blinds"];
 const NO_CROP: [number, number, number, number] = [0, 0, 0, 0];
 
 export const SCOPE_W = 256;
@@ -122,7 +144,7 @@ export class Compositor {
     this.gl = gl;
     this.program = link(gl, VS, FS);
     this.loc = Object.fromEntries(
-      ["u_matrix", "u_crop", "u_tex", "u_color", "u_contrast", "u_opacity", "u_premul", "u_unpremul"].map((n) => [n, gl.getUniformLocation(this.program, n)]),
+      ["u_matrix", "u_crop", "u_tex", "u_color", "u_contrast", "u_opacity", "u_premul", "u_unpremul", "u_mask", "u_prog", "u_frame"].map((n) => [n, gl.getUniformLocation(this.program, n)]),
     );
     const vao = gl.createVertexArray()!;
     gl.bindVertexArray(vao);
@@ -170,6 +192,7 @@ export class Compositor {
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     gl.activeTexture(gl.TEXTURE0);
     gl.uniform1i(this.loc.u_tex, 0);
+    gl.uniform1i(this.loc.u_mask, 0);
   }
 
   /** `m` for the current target: flipped vertically inside a group. */
@@ -337,8 +360,16 @@ export class Compositor {
         gl.disable(gl.SCISSOR_TEST);
         break;
       }
-      default:
-        layer(cb, t.p);
+      default: {
+        const mask = MASK_TRANSITIONS.indexOf(t.kind) + 1;
+        if (mask > 0) {
+          gl.uniform1i(this.loc.u_mask, mask);
+          gl.uniform1f(this.loc.u_prog, t.p);
+          gl.uniform3f(this.loc.u_frame, width, height, this.flip ? 1 : 0);
+          layer(cb, 1);
+          gl.uniform1i(this.loc.u_mask, 0);
+        } else layer(cb, t.p);
+      }
     }
   }
 
