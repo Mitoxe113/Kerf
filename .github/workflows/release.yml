@@ -4,7 +4,9 @@ name: Release
 # it, with latest.json for the in-app updater, into a release. For a tag the
 # release is published once the build succeeded, which makes it the update
 # every installed Kerf finds; a manual run leaves a draft unless "publish" is
-# set, then publishing creates the tag v<version> on the built commit.
+# set. Publishing creates the tag v<version> on the built commit when it does
+# not exist yet (GitHub did not do that on its own when the first release was
+# published from a draft).
 #
 # The secrets TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 # (the updater key) sign the update package. Without them the release gets
@@ -21,7 +23,7 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: "Release nach erfolgreichem Build veröffentlichen (GitHub legt dabei das Tag an)"
+        description: "Release nach erfolgreichem Build veröffentlichen (legt dabei das Tag an)"
         type: boolean
         default: false
 
@@ -34,6 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       id: ${{ steps.draft.outputs.id }}
+      version: ${{ steps.draft.outputs.version }}
     steps:
       - uses: actions/checkout@v7
       - id: draft
@@ -53,8 +56,9 @@ jobs:
             head="$head"$'\n\n''Dieses Release enthält keine Update-Daten (`latest.json`), weil beim Build kein Updater-Schlüssel hinterlegt war. Die automatische Update-Prüfung findet es deshalb nicht; spätere Versionen mit Update-Daten findet sie.'
           fi
           body=$(printf '%s\n%s' "$head" "$notes")
-          # A rerun uploads into the existing draft and refreshes its notes.
-          id=$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate --jq "map(select(.draft and .tag_name == \"v$version\"))[0].id // empty" | head -1)
+          # A rerun uploads into the existing draft (or a release of this
+          # version that was published without a tag) and refreshes its notes.
+          id=$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate --jq "map(select(.name == \"Kerf $version\" and (.draft or (.tag_name | startswith(\"untagged-\")))))[0].id // empty" | head -1)
           if [ -z "$id" ]; then
             id=$(gh api "repos/$GITHUB_REPOSITORY/releases" -f tag_name="v$version" -f target_commitish="$GITHUB_SHA" \
               -f name="Kerf $version" -F draft=true -f body="$body" --jq .id)
@@ -62,6 +66,7 @@ jobs:
             gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$id" -f target_commitish="$GITHUB_SHA" -f body="$body" --jq .id > /dev/null
           fi
           echo "id=$id" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
   build:
     name: Windows
@@ -119,4 +124,14 @@ jobs:
     steps:
       - env:
           GH_TOKEN: ${{ github.token }}
-        run: gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/${{ needs.draft.outputs.id }}" -F draft=false -f make_latest=true --jq '.html_url'
+          TAG: v${{ needs.draft.outputs.version }}
+          ID: ${{ needs.draft.outputs.id }}
+        run: |
+          if sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq .object.sha 2>/dev/null); then
+            [ "$sha" = "$GITHUB_SHA" ] || echo "::warning::Tag $TAG zeigt auf $sha, gebaut wurde $GITHUB_SHA"
+          else
+            gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$TAG" -f sha="$GITHUB_SHA" --jq .ref
+          fi
+          url=$(gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$ID" -f tag_name="$TAG" -F draft=false -f make_latest=true --jq .html_url)
+          echo "$url"
+          case "$url" in */tag/"$TAG") ;; *) echo "::error::Release hat nicht das Tag $TAG: $url"; exit 1;; esac
