@@ -35,6 +35,8 @@ Beide stehen unter der SIL Open Font License 1.1 (<https://openfontlicense.org>)
 
 ## Rust-Crates (in der App enthalten)
 
+Direkt eingebunden für das Kreativ-Ökosystem: `rusqlite` 0.32 (MIT) mit gebündeltem **SQLite** (gemeinfrei) über `libsqlite3-sys` (MIT), `ttf-parser` 0.25 (MIT oder Apache-2.0), `sha2` 0.10 (MIT oder Apache-2.0), `reqwest` 0.13 (MIT oder Apache-2.0), `rustls` 0.23 (Apache-2.0, ISC oder MIT) mit `ring` 0.17 (Apache-2.0 und ISC), `url` 2 (MIT oder Apache-2.0), `keyring` 3.6 (MIT oder Apache-2.0; unter Linux mit `dbus-secret-service`, MIT oder Apache-2.0, und `dbus`, Apache-2.0/MIT).
+
 Kerf baut auf Tauri 2 und rund 450 weiteren Crates auf (je nach Zielplattform). Sie stehen fast alle unter MIT und/oder Apache-2.0, einige unter BSD-3-Clause, ISC, Zlib, Unicode-3.0, CC0/Unlicense oder MPL-2.0 (Dateiebene, unverändert genutzt). Alle sind mit der GPL-3.0 vereinbar. Die genaue Liste mit Versionen und Lizenzen erzeugt:
 
 ```bash
