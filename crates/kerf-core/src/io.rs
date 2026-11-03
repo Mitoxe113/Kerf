@@ -34,7 +34,15 @@ pub fn backup_path(path: &Path) -> PathBuf {
 
 /// Serialises and atomically writes `project` to `path`.
 pub fn save(project: &Project, path: &Path) -> Result<(), ProjectIoError> {
-    let json = serde_json::to_vec_pretty(project).map_err(|e| ProjectIoError::Corrupt(e.to_string()))?;
+    let json = match path.parent().filter(|_| project.portable_paths) {
+        Some(dir) => {
+            let mut copy = project.clone();
+            relativize(&mut copy, dir);
+            serde_json::to_vec_pretty(&copy)
+        }
+        None => serde_json::to_vec_pretty(project),
+    }
+    .map_err(|e| ProjectIoError::Corrupt(e.to_string()))?;
     write_atomic(path, &json, true)
 }
 
@@ -80,8 +88,46 @@ fn migrate(_value: &mut Value, _from: u32) {}
 pub fn load(path: &Path) -> Result<Project, ProjectIoError> {
     let bytes = fs::read(path)?;
     let mut project = from_json(&bytes)?;
+    if let Some(dir) = path.parent() {
+        resolve_paths(&mut project, dir);
+    }
     refresh_media_status(&mut project);
     Ok(project)
+}
+
+/// Every file path the project refers to (media and LUTs), for rewriting.
+pub fn for_each_path(project: &mut Project, mut f: impl FnMut(&mut std::path::PathBuf)) {
+    for m in project.media.iter_mut().filter(|m| m.title.is_none()) {
+        f(&mut m.path);
+    }
+    for seq in &mut project.sequences {
+        for clip in seq.tracks.iter_mut().flat_map(|t| t.clips.iter_mut()) {
+            for e in &mut clip.effects {
+                if let crate::model::EffectKind::Lut { path, .. } = &mut e.kind {
+                    f(path);
+                }
+            }
+        }
+    }
+}
+
+/// Makes relative paths (portable projects) absolute against `dir`.
+pub fn resolve_paths(project: &mut Project, dir: &Path) {
+    for_each_path(project, |p| {
+        if p.is_relative() && !p.as_os_str().is_empty() {
+            *p = dir.join(&*p);
+        }
+    });
+}
+
+/// Paths under `dir` written relative to it (forward slashes), for portable projects.
+fn relativize(project: &mut Project, dir: &Path) {
+    for_each_path(project, |p| {
+        if let Ok(rel) = p.strip_prefix(dir) {
+            let parts: Vec<String> = rel.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
+            *p = std::path::PathBuf::from(parts.join("/"));
+        }
+    });
 }
 
 /// Loads `path`; if it is damaged, falls back to its backup.

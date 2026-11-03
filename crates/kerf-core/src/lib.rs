@@ -9,6 +9,7 @@
 //! * [`history`] – undo/redo
 //! * [`io`]      – project file loading/saving with atomic writes and migration
 
+pub mod archive;
 pub mod assist;
 pub mod audio;
 pub mod error;

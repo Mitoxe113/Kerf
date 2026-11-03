@@ -34,6 +34,10 @@ pub struct Project {
     /// Camera angles recorded together (multicam groups).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub multicams: Vec<Multicam>,
+    /// Media and LUT paths inside the project's folder are saved relative to
+    /// it (set by archiving, so the folder can be moved as a whole).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub portable_paths: bool,
 }
 
 /// Camera angles of one take, in sync. Clips of the group show one angle
@@ -70,6 +74,7 @@ impl Project {
             active_sequence: seq.id,
             sequences: vec![seq],
             multicams: Vec::new(),
+            portable_paths: false,
         }
     }
 

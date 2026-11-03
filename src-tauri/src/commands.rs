@@ -93,7 +93,7 @@ pub fn project_state(state: State<'_, AppState>) -> ProjectState {
 }
 
 /// Grants the webview read access to media files and queues analysis where needed.
-fn activate_media(app: &AppHandle, state: &AppState, assets: &[MediaAsset]) {
+pub(crate) fn activate_media(app: &AppHandle, state: &AppState, assets: &[MediaAsset]) {
     let scope = app.asset_protocol_scope();
     for a in assets {
         let _ = scope.allow_file(&a.path);
@@ -203,10 +203,15 @@ pub fn edit(app: AppHandle, state: State<'_, AppState>, command: EditCommand) ->
     if outcome.changed {
         session.touch();
     }
-    if let EditCommand::RelinkMedia { media, .. } = &command {
-        if let Some(a) = session.project.media(*media).cloned() {
-            activate_media(&app, &state, &[a]);
-        }
+    // Relinked media is analysed again (also inside a batch).
+    let relinked: Vec<Uuid> = match &command {
+        EditCommand::RelinkMedia { media, .. } => vec![*media],
+        EditCommand::Batch { commands, .. } => commands.iter().filter_map(|c| if let EditCommand::RelinkMedia { media, .. } = c { Some(*media) } else { None }).collect(),
+        _ => Vec::new(),
+    };
+    let assets: Vec<MediaAsset> = relinked.iter().filter_map(|id| session.project.media(*id).cloned()).collect();
+    if !assets.is_empty() {
+        activate_media(&app, &state, &assets);
     }
     Ok(Delta::after(&s, outcome, Side::Undo))
 }
@@ -397,7 +402,7 @@ pub fn disk_free(path: String) -> Option<u64> {
 }
 
 #[cfg(windows)]
-fn free_space(dir: &Path) -> Option<u64> {
+pub(crate) fn free_space(dir: &Path) -> Option<u64> {
     use std::os::windows::ffi::OsStrExt;
     #[link(name = "kernel32")]
     extern "system" {
@@ -411,7 +416,7 @@ fn free_space(dir: &Path) -> Option<u64> {
 }
 
 #[cfg(not(windows))]
-fn free_space(dir: &Path) -> Option<u64> {
+pub(crate) fn free_space(dir: &Path) -> Option<u64> {
     let out = std::process::Command::new("df").arg("-Pk").arg(dir).output().ok()?;
     let text = String::from_utf8_lossy(&out.stdout);
     let kb: u64 = text.lines().nth(1)?.split_whitespace().nth(3)?.parse().ok()?;

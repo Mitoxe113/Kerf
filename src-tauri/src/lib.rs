@@ -6,6 +6,7 @@ mod export_jobs;
 mod library;
 mod media_library;
 mod media_jobs;
+mod project_tools;
 mod recovery;
 mod versions;
 mod state;
@@ -152,6 +153,12 @@ pub fn run() {
             assist::analyze,
             assist::analyze_cancel,
             assist::duck_plan,
+            project_tools::archive_plan,
+            project_tools::archive_write,
+            project_tools::relink_search,
+            project_tools::cache_info,
+            project_tools::cache_clear,
+            project_tools::media_metadata,
             commands::app_info,
             commands::project_state,
             commands::project_new,

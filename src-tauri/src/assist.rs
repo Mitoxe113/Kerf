@@ -31,10 +31,10 @@ fn cancels() -> &'static Mutex<HashMap<Uuid, Arc<AtomicBool>>> {
 }
 
 /// Registers a cancel flag for `job` for as long as the guard lives.
-struct Job(Uuid, Arc<AtomicBool>);
+pub(crate) struct Job(Uuid, pub(crate) Arc<AtomicBool>);
 
 impl Job {
-    fn new(id: Uuid) -> Self {
+    pub(crate) fn new(id: Uuid) -> Self {
         let flag = Arc::new(AtomicBool::new(false));
         lock(cancels()).insert(id, flag.clone());
         Self(id, flag)
