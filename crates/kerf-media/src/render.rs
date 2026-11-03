@@ -99,6 +99,9 @@ pub struct ExportSettings {
     /// Encode the picture in parts side by side (see [`part_ranges`]).
     #[serde(default)]
     pub segmented: bool,
+    /// Write the sequence's chapter markers into the file (MP4/MOV chapter track).
+    #[serde(default)]
+    pub chapters: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -1131,6 +1134,7 @@ pub fn plan_with(
             subtitles: SubtitleOutput::default(),
             loudness: None,
             audio_channels: 2,
+            chapters: false,
             ..s.clone()
         };
         nested.push(plan_one(&p, &inner, &settings, work_dir, &[], Pass::Nested)?);
@@ -1174,6 +1178,53 @@ fn cues_in(seq: &Sequence, t0: Frame, t1: Frame) -> Vec<Cue> {
         .filter(|c| c.end > t0 && c.start < t1)
         .map(|c| Cue { start: c.start.max(t0), end: c.end.min(t1), ..c.clone() })
         .collect()
+}
+
+/// Chapters of `[t0, t1)`: (start, end, title) in milliseconds from `t0`.
+/// A chapter runs until the next one or the end of the range; one that starts
+/// before `t0` but reaches into the range begins at 0.
+fn chapters_in(seq: &Sequence, t0: Frame, t1: Frame) -> Vec<(u64, u64, String)> {
+    let ms = |f: Frame| ((f - t0) as f64 * 1000.0 / seq.settings.fps.as_f64()).round().max(0.0) as u64;
+    let mut marks: Vec<&kerf_core::model::Marker> = seq.markers.iter().filter(|m| m.chapter).collect();
+    marks.sort_by_key(|m| m.frame);
+    // Unnamed chapters keep their number in the sequence, whatever range is exported.
+    let mut out = Vec::new();
+    for (i, m) in marks.iter().enumerate() {
+        let next = marks.get(i + 1).map(|n| n.frame);
+        // Of those at or before t0 only the last one is still running at t0.
+        if m.frame >= t1 || next.is_some_and(|n| n <= t0) {
+            continue;
+        }
+        let (start, end) = (ms(m.frame.max(t0)), ms(next.map_or(t1, |n| n.min(t1))));
+        if end > start {
+            let title = if m.name.trim().is_empty() { format!("Kapitel {}", i + 1) } else { m.name.trim().to_string() };
+            out.push((start, end, title));
+        }
+    }
+    out
+}
+
+/// An FFmpeg metadata file holding `chapters`.
+fn write_chapters(chapters: &[(u64, u64, String)]) -> String {
+    let escape = |t: &str| {
+        let mut o = String::new();
+        for c in t.chars() {
+            match c {
+                '=' | ';' | '#' | '\\' => {
+                    o.push('\\');
+                    o.push(c);
+                }
+                '\n' | '\r' => o.push(' '),
+                c => o.push(c),
+            }
+        }
+        o
+    };
+    let mut s = String::from(";FFMETADATA1\n");
+    for (start, end, title) in chapters {
+        s.push_str(&format!("[CHAPTER]\nTIMEBASE=1/1000\nSTART={start}\nEND={end}\ntitle={}\n", escape(title)));
+    }
+    s
 }
 
 /// FFmpeg muxer for an export file, by its extension.
@@ -1289,6 +1340,7 @@ fn segmented(
     let picture = ExportSettings {
         subtitles: SubtitleOutput { burn: s.subtitles.burn.clone(), blank: s.subtitles.blank.clone(), ..Default::default() },
         loudness: None,
+        chapters: false,
         ..s.clone()
     };
     let mut list = String::from("ffconcat version 1.0\n");
@@ -1353,6 +1405,14 @@ fn segmented(
         files.push((srt.clone(), write_subtitles(&cues, seq.settings.fps, t0, SubtitleFormat::Srt)));
         args.extend(["-f", "srt", "-i"].map(OsString::from));
         args.push(srt.into_os_string());
+    }
+    let chapters = if s.chapters { chapters_in(seq, t0, t1) } else { Vec::new() };
+    if !chapters.is_empty() {
+        let meta = work_dir.join(format!("chapters-{}.ffmeta", Uuid::new_v4()));
+        files.push((meta.clone(), write_chapters(&chapters)));
+        args.extend(["-f", "ffmetadata", "-i"].map(OsString::from));
+        args.push(meta.into_os_string());
+        args.extend(["-map_chapters".into(), format!("{}", 2 + embed as usize).into()]);
     }
     args.extend(["-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "copy"].map(OsString::from));
     if s.video_codec == VideoCodec::Hevc {
@@ -1716,6 +1776,19 @@ fn plan_one(
     } else {
         None
     };
+    let chaptered = if s.chapters && !intermediate && !picture {
+        let chapters = chapters_in(seq, t0, t1);
+        (!chapters.is_empty()).then(|| {
+            let meta = work_dir.join(format!("chapters-{}.ffmeta", uuid::Uuid::new_v4()));
+            files.push((meta.clone(), write_chapters(&chapters)));
+            args.extend(["-f", "ffmetadata", "-i"].map(OsString::from));
+            args.push(meta.into_os_string());
+            inputs += 1;
+            inputs - 1
+        })
+    } else {
+        None
+    };
     let sidecar = s.subtitles.sidecar.filter(|_| !cues.is_empty()).map(|f| {
         let ext = if f == SubtitleFormat::Srt { "srt" } else { "vtt" };
         (s.output.with_extension(ext), write_subtitles(&cues, sf, t0, f))
@@ -1775,6 +1848,9 @@ fn plan_one(
     if let Some(k) = embedded {
         args.extend(["-map".into(), format!("{k}:s:0").into()]);
         args.extend(["-c:s", "mov_text", "-metadata:s:s:0", "handler_name=Untertitel"].map(OsString::from));
+    }
+    if let Some(k) = chaptered {
+        args.extend(["-map_chapters".into(), format!("{k}").into()]);
     }
 
     let has = |e: &str| hw_encoders.iter().any(|x| x == e);
@@ -2382,6 +2458,7 @@ mod tests {
             title_sequences: Default::default(),
             loudness: None,
             segmented: false,
+            chapters: false,
         }
     }
 
@@ -2740,5 +2817,41 @@ mod tests {
         let list = &plan.files[0].1;
         assert_eq!(list.matches("duration 15
 ").count(), 4, "{list}");
+    }
+
+    #[test]
+    fn chapters_follow_the_exported_range() {
+        let (mut p, seq) = project_with_clip();
+        let q = p.sequence_mut(seq).unwrap();
+        let fps = q.settings.fps.as_f64();
+        let mark = |frame, name: &str, chapter| kerf_core::model::Marker { frame, name: name.into(), chapter, ..q.markers.first().cloned().unwrap_or_else(|| serde_json::from_str(r#"{"id":"00000000-0000-0000-0000-000000000000","frame":0,"name":"","note":"","color":"signal"}"#).unwrap()) };
+        let markers = vec![mark(0, "Intro", true), mark(250, "", true), mark(300, "kein Kapitel", false), mark(500, "Ende = a;b#c\\d\nx", true)];
+        q.markers = markers;
+        let ms = |f: f64| (f * 1000.0 / fps).round() as u64;
+        let all = chapters_in(q, 0, 750);
+        assert_eq!(all, vec![(0, ms(250.0), "Intro".to_string()), (ms(250.0), ms(500.0), "Kapitel 2".to_string()), (ms(500.0), ms(750.0), "Ende = a;b#c\\d\nx".to_string())]);
+        // A range starting inside chapter 2 begins with it at 0 and drops the first.
+        let part = chapters_in(q, 300, 600);
+        assert_eq!(part, vec![(0, ms(200.0), "Kapitel 2".to_string()), (ms(200.0), ms(300.0), "Ende = a;b#c\\d\nx".to_string())]);
+        assert!(chapters_in(q, 800, 900).iter().all(|c| c.2 == "Ende = a;b#c\\d\nx"));
+        let meta = write_chapters(&all);
+        assert!(meta.starts_with(";FFMETADATA1\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\n"), "{meta}");
+        assert!(meta.contains("title=Ende \\= a\\;b\\#c\\\\d x\n"), "{meta}");
+
+        // Only when asked for, and only in the final file (not in segmented parts).
+        let text = |a: &[OsString]| a.iter().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>().join(" ");
+        let plain = plan_with(&p, p.sequence(seq).unwrap(), &settings(), Path::new("C:/tmp"), &[], Some(1)).unwrap();
+        assert!(!text(&plain.args).contains("-map_chapters"));
+        let s = ExportSettings { chapters: true, ..settings() };
+        let one = plan_with(&p, p.sequence(seq).unwrap(), &s, Path::new("C:/tmp"), &[], Some(1)).unwrap();
+        let args = text(&one.args);
+        assert!(args.contains("-f ffmetadata -i") && args.contains("-map_chapters 1 "), "{args}");
+        assert!(one.files.iter().any(|(_, body)| body.starts_with(";FFMETADATA1")));
+        let q = p.sequence_mut(seq).unwrap();
+        (q.in_point, q.out_point) = (Some(0), Some(1500));
+        let s = ExportSettings { chapters: true, segmented: true, use_in_out: true, ..settings() };
+        let parts = plan_with(&p, p.sequence(seq).unwrap(), &s, Path::new("C:/tmp"), &[], Some(2)).unwrap();
+        assert!(!parts.parts.is_empty() && parts.parts.iter().all(|j| !text(&j.args).contains("chapters")));
+        assert!(text(&parts.args).contains("-map_chapters 2 "), "{}", text(&parts.args));
     }
 }

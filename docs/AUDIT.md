@@ -90,3 +90,36 @@ Die in Phase 3 gefundenen Fehler sind bereits behoben (siehe STATUS).
 | Tastenkürzel nicht teilbar | ✅ Profile, JSON-Import/-Export |
 | Export: ein FFmpeg-Eingang pro Clipabschnitt | ⬜ unverändert (native Pipeline, Phase 10) |
 | Kein Erweiterungspunkt für Effekte | ⬜ offen; Keyframe-System ist als Grundlage für animierbare Effektparameter angelegt |
+
+# Audit Phase 10: Werkzeuge und Projektverwaltung
+
+Bestandsaufnahme vor der Umsetzung (3. November 2026) und was daraus wurde. Grundsätze: keine Funktion ohne technische Umsetzung, kein zweites System neben einem vorhandenen, kein Versand von Medien an Dienste, keine Änderung ohne Freigabe durch den Nutzer.
+
+## Vorhanden vor Phase 10 (wiederverwendet, nicht dupliziert)
+
+- Multicam mit Ton-Synchronisation, verschachtelte Sequenzen, Geschwindigkeitsrampen, Ripple/Roll/Slip/Slide, Undo über Projekt-Schnappschüsse
+- Audio-Effekte (EQ, Kompressor, Gate, Limiter), Loudness-Normalisierung, LUFS-Anzeige
+- Primäre Farbkorrektur, Kurven, LUTs; segmentierter Export, Hardware-Encoder, H.264/HEVC/ProRes
+- Autosave und Wiederherstellung, Proxys, Wellenformen, Medien neu verknüpfen (einzeln), Befehlspalette mit unscharfer Suche, andockbare Panels
+
+## Umgesetzt
+
+Siehe [STATUS.md](STATUS.md#schnittassistenten-und-projektverwaltung): Szenen, Stille, Beats, Momente, Ducking, Marker-Kategorien und Kapitel (auch im Export), Projektprüfung, Relink-Suche, Archiv, portable Pfade, Cache-Verwaltung, Metadaten.
+
+## Nicht umgesetzt (mit Grund)
+
+| Bereich | Grund |
+| --- | --- |
+| Transkription, automatische Untertitel, Übersetzung | Braucht ein lokales Sprachmodell (z. B. Whisper) samt Modelldateien und Lizenzprüfung; nicht eingebunden. Ein Cloud-Dienst kommt ohne ausdrückliche Zustimmung nicht in Frage. |
+| Smart Reframe, Tracking, KI-Masken | Braucht Objekterkennung bzw. Tracking; nicht eingebunden. |
+| Einstellungsebenen, Compound Clips, Spurgruppen | Änderung am Render-Graph und am Projektmodell, größer als in diesem Durchgang sicher machbar. Verschachtelte Sequenzen decken einen Teil ab. |
+| Rauschunterdrückung, Stems, weitere Audio-Effekte | Nicht begonnen. |
+| Sekundäre Farbkorrektur, Qualifier, Power Windows, HDR | Nicht begonnen; HDR bewusst nicht als reine Oberfläche. |
+| Render-Warteschlange, Stapel-Export, AV1/DNxHR | Nicht begonnen. |
+| Überwachte Ordner, Plugins, Makros, Skripte | Nicht begonnen; Plugins nur mit Sicherheitsmodell. |
+| Universelle Suche, visuelle Zwischenablage, Referenzmonitor, Brand Kits, Versionsvergleich, Timeline-Assistent | Nicht begonnen. |
+| Projektprüfung: Übersteuerung im Ton, schwarze Bilder | Bräuchte eine Analyse des fertigen Mixes bzw. Bildes; nicht umgesetzt. |
+
+## Prüfstand
+
+Automatische Tests in Rust (inkl. echtem FFmpeg für Erkennung und Kapitel) und Vitest; Oberflächen in Headless-Chromium mit simuliertem Backend gerendert. In der laufenden Tauri-App wurde nichts davon bedient.

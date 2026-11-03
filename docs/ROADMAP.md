@@ -43,6 +43,14 @@ Zuverlässigkeit (Deltas, geteilte Undo-Schnappschüsse, Autosave, Versionen, Wi
 - ◐ Stockmedien: Pexels, GIPHY, Freesound, Openverse mit geprüften Downloads, Bibliothek und Lizenzbericht; **noch nicht live mit echten Schlüsseln geprüft**
 - ☐ Pixabay, Freesound-Originale (OAuth2), Online-Schriften, Plugin-Grundlage, keyframebare Effektparameter, Push/Slide-Übergänge
 
+## Werkzeuge und Projektverwaltung ◐
+
+- ✅ Szenen, Stille, Beats und Momente lokal erkennen, prüfen und als ein Undo-Schritt übernehmen; Ducking als Lautstärke-Keyframes
+- ✅ Marker mit Kategorie, Bereich und Kapitel, Marker-Panel, Kapitel im Export
+- ✅ Projektprüfung, Relink-Suche, Projekt archivieren, portable Pfade, Cache-Verwaltung, Metadaten
+- ☐ Transkription und automatische Untertitel (lokales Sprachmodell nötig), Smart Reframe
+- ☐ Render-Warteschlange, Einstellungsebenen, Compound Clips, überwachte Ordner, Plugins und Makros
+
 ## Als Nächstes
 
 1. **Stockmedien live prüfen:** mit eigenen Schlüsseln für Pexels, GIPHY und Freesound sowie anonym für Openverse je eine Suche und einen Download in der App durchspielen; Pexels-Video-Hosts und GIPHY-Logo-Vorgaben gegen die Anbieterdokumentation prüfen.
@@ -50,10 +58,11 @@ Zuverlässigkeit (Deltas, geteilte Undo-Schnappschüsse, Autosave, Versionen, Wi
 3. **Code-Signierung:** Zertifikate für Windows (Authenticode) und macOS (Developer ID, Notarisierung) besorgen und als Secrets hinterlegen; der Release-Workflow ist dafür vorbereitet.
 4. **macOS und Linux von Hand prüfen:** Dateizuordnung (unter macOS über `RunEvent::Opened`), Drag & Drop, Dialoge, Wiedergabe in WKWebView bzw. WebKitGTK (andere Codecs als WebView2).
 5. **Keyframes:** Keyframe-Editor in der Timeline (Gummiband für Lautstärke), Keyframes einzeln kopieren und einfügen.
-6. **Effekte:** Masken (Rechteck, Ellipse, Freiform, animierbar), Rauschunterdrückung (`afftdn` im Export, Gegenstück in der Vorschau).
+6. **Assistenten in der App durchspielen:** Szenen, Stille, Beats, Ducking, Archiv, Relink und Cache mit echten Projekten in der Tauri-App bedienen; Kapitel in einem Abspieler prüfen.
+7. **Effekte:** Masken (Rechteck, Ellipse, Freiform, animierbar), Rauschunterdrückung (`afftdn` im Export, Gegenstück in der Vorschau).
 
 ## Später
 
-- Medienverwaltung: Smart Bins, Metadaten-Editor, Projekt archivieren (Medien sammeln), Cache-Verwaltung
+- Medienverwaltung: Smart Bins, Metadaten-Editor, überwachte Ordner
 - Farbmanagement: wählbare Matrix für ungetaggte Quellen, HDR-Metadaten
 - Native Render-Pipeline (wgpu), falls der segmentierte Export bei sehr langen Timelines nicht reicht
