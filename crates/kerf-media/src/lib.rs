@@ -11,6 +11,9 @@
 
 pub mod analysis;
 pub mod error;
+#[cfg(test)]
+mod exprtest;
+pub mod fx;
 pub mod probe;
 pub mod render;
 pub mod tools;

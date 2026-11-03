@@ -258,6 +258,14 @@ export class PlaybackEngine {
     return this.seq ? sequenceDuration(this.seq) : 0;
   }
 
+  /** Before/after: shows every clip without its effects while true (preview only). */
+  compareBypass = false;
+
+  setCompareBypass(on: boolean) {
+    this.compareBypass = on;
+    this.requestRender();
+  }
+
   /** Live, uncommitted property changes (inspector drags, monitor handles). */
   setOverride(clip: Uuid, patch: Partial<Clip> | ClipPatch | null) {
     if (patch) this.overrides.set(clip, { ...this.overrides.get(clip), ...patch });
@@ -853,7 +861,7 @@ export class PlaybackEngine {
     const opacity = a.opacity * fadeGain(c, frame);
     if (t.scale <= 0 || opacity <= 0) return null;
     const p = place(t, sw, sh, W, H);
-    const effects = activeEffects(c.effects);
+    const effects = activeEffects(c.effects, c.fxBypass || this.compareBypass);
     // Effects run at the fitted size (scale 1) in canvas pixels.
     const fxScale = s.px;
     return {
@@ -867,6 +875,7 @@ export class PlaybackEngine {
       effects,
       work: t.scale > 0 ? [(p.width / t.scale) * fxScale, (p.height / t.scale) * fxScale] : undefined,
       fxScale,
+      fxFrame: frame - c.start,
     };
   }
 

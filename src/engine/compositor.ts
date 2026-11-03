@@ -43,6 +43,8 @@ export interface Layer {
   work?: [number, number];
   /** Canvas pixels per sequence pixel (scales effect radii). */
   fxScale?: number;
+  /** Clip-local frame index (grain and glitch change with it). */
+  fxFrame?: number;
 }
 
 /** Two clips of one track mixed by a transition. */
@@ -222,7 +224,7 @@ export class Compositor {
       gl.viewport(0, 0, w, h);
       gl.disable(gl.BLEND);
       this.quad(FULL_QUAD, l.crop, l.color, 1, false, unpremul);
-      const out = this.fx.apply(first, l.effects, l.fxScale ?? 1);
+      const out = this.fx.apply(first, l.effects, l.fxScale ?? 1, l.fxFrame ?? 0);
       this.bindMain(target, width, height);
       gl.bindTexture(gl.TEXTURE_2D, out.tex);
       this.quad(this.placed(l.matrix), NO_CROP, IDENTITY_COLOR, l.opacity, true);

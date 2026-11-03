@@ -81,6 +81,8 @@ pub struct ClipPatch {
     pub label: Option<LabelColor>,
     pub channels: Option<ChannelMap>,
     pub reverse: Option<bool>,
+    /// Skips the effect stack without changing it.
+    pub fx_bypass: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -1872,7 +1874,7 @@ fn set_effects(seq: &mut Sequence, clips: &[Uuid], effects: &[Effect]) -> Result
     let mut clean = Vec::with_capacity(effects.len());
     for e in effects {
         let kind = e.kind.sanitized().ok_or_else(|| EditError::Invalid("effect parameter".into()))?;
-        clean.push(Effect { id: e.id, enabled: e.enabled, kind });
+        clean.push(Effect { id: e.id, enabled: e.enabled, name: e.name.chars().filter(|c| !c.is_control()).take(80).collect(), kind });
     }
     let mut at = Vec::with_capacity(clips.len());
     for id in clips {
@@ -2172,6 +2174,9 @@ fn update_clips(seq: &mut Sequence, media: &[MediaAsset], ids: &[Uuid], p: &Clip
         if let Some(r) = p.reverse {
             // Same source range and length, played the other way.
             c.reverse = r;
+        }
+        if let Some(b) = p.fx_bypass {
+            c.fx_bypass = b;
         }
         if let Some(v) = p.fade_in {
             c.fade_in = v;
@@ -2839,7 +2844,7 @@ mod tests {
         let mut fx = Fx::new(4.0, true);
         let ids = fx.place(0, None, None, PlaceMode::Overwrite);
         let (v, a) = (ids[0], ids[1]);
-        let effect = |kind| Effect { id: Uuid::new_v4(), enabled: true, kind };
+        let effect = |kind| Effect { id: Uuid::new_v4(), enabled: true, name: String::new(), kind };
         let stack = vec![
             effect(EffectKind::Blur { radius: 900.0 }),
             effect(EffectKind::Curves { master: vec![[0.7, 0.9], [0.2, 0.1], [0.2, 0.15], [1.0, 1.0]], red: vec![[0.0, 0.0], [1.0, 1.0]], green: vec![], blue: vec![] }),

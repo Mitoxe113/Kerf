@@ -1,0 +1,248 @@
+[
+  {
+    "id": "brightnessContrast",
+    "max": 0,
+    "mean": 0,
+    "over2": 0
+  },
+  {
+    "id": "levels",
+    "max": 0,
+    "mean": 0,
+    "over2": 0
+  },
+  {
+    "id": "tone",
+    "max": 0,
+    "mean": 0,
+    "over2": 0
+  },
+  {
+    "id": "colorBalance",
+    "max": 0,
+    "mean": 0,
+    "over2": 0
+  },
+  {
+    "id": "invert",
+    "max": 0,
+    "mean": 0,
+    "over2": 0
+  },
+  {
+    "id": "posterize",
+    "max": 0,
+    "mean": 0,
+    "over2": 0
+  },
+  {
+    "id": "solarize",
+    "max": 0,
+    "mean": 0,
+    "over2": 0
+  },
+  {
+    "id": "blackWhite",
+    "max": 0,
+    "mean": 0,
+    "over2": 0
+  },
+  {
+    "id": "sepia",
+    "max": 0,
+    "mean": 0,
+    "over2": 0
+  },
+  {
+    "id": "colorize",
+    "max": 0,
+    "mean": 0,
+    "over2": 0
+  },
+  {
+    "id": "hueShift",
+    "max": 0,
+    "mean": 0,
+    "over2": 0
+  },
+  {
+    "id": "vibrance",
+    "max": 1,
+    "mean": 0.053,
+    "over2": 0
+  },
+  {
+    "id": "hslSecondary",
+    "max": 1,
+    "mean": 0.053,
+    "over2": 0
+  },
+  {
+    "id": "lumaKey",
+    "max": 1,
+    "mean": 0.037,
+    "over2": 0
+  },
+  {
+    "id": "boxBlur",
+    "max": 2,
+    "mean": 0.124,
+    "over2": 0
+  },
+  {
+    "id": "directionalBlur",
+    "max": 1,
+    "mean": 0.052,
+    "over2": 0
+  },
+  {
+    "id": "radialBlur",
+    "max": 1,
+    "mean": 0.063,
+    "over2": 0
+  },
+  {
+    "id": "zoomBlur",
+    "max": 1,
+    "mean": 0.063,
+    "over2": 0
+  },
+  {
+    "id": "tiltShift",
+    "max": 19,
+    "mean": 0.189,
+    "over2": 0.94
+  },
+  {
+    "id": "softFocus",
+    "max": 12,
+    "mean": 0.153,
+    "over2": 0.12
+  },
+  {
+    "id": "glow",
+    "max": 24,
+    "mean": 0.252,
+    "over2": 1.71
+  },
+  {
+    "id": "chromaticAberration",
+    "max": 1,
+    "mean": 0.053,
+    "over2": 0
+  },
+  {
+    "id": "wave",
+    "max": 1,
+    "mean": 0.225,
+    "over2": 0
+  },
+  {
+    "id": "twirl",
+    "max": 3,
+    "mean": 0.255,
+    "over2": 0
+  },
+  {
+    "id": "bulge",
+    "max": 1,
+    "mean": 0.196,
+    "over2": 0
+  },
+  {
+    "id": "lensDistortion",
+    "max": 1,
+    "mean": 0.345,
+    "over2": 0
+  },
+  {
+    "id": "kaleidoscope",
+    "max": 2,
+    "mean": 0.266,
+    "over2": 0
+  },
+  {
+    "id": "mirror",
+    "max": 1,
+    "mean": 0.053,
+    "over2": 0
+  },
+  {
+    "id": "pixelate",
+    "max": 1,
+    "mean": 0.257,
+    "over2": 0
+  },
+  {
+    "id": "scanlines",
+    "max": 1,
+    "mean": 0.053,
+    "over2": 0
+  },
+  {
+    "id": "filmGrain",
+    "max": 1,
+    "mean": 0.053,
+    "over2": 0
+  },
+  {
+    "id": "glitch",
+    "max": 1,
+    "mean": 0.053,
+    "over2": 0
+  },
+  {
+    "id": "edgeDetect",
+    "max": 1,
+    "mean": 0.053,
+    "over2": 0
+  },
+  {
+    "id": "matte",
+    "max": 2,
+    "mean": 0.059,
+    "over2": 0
+  },
+  {
+    "id": "flip",
+    "max": 0,
+    "mean": 0,
+    "over2": 0
+  },
+  {
+    "id": "shapeMask",
+    "max": 1,
+    "mean": 0.001,
+    "over2": 0
+  },
+  {
+    "id": "border",
+    "max": 1,
+    "mean": 0.053,
+    "over2": 0
+  },
+  {
+    "id": "stroke",
+    "max": 2,
+    "mean": 0.132,
+    "over2": 0
+  },
+  {
+    "id": "dropShadow",
+    "max": 65,
+    "mean": 0.203,
+    "over2": 0.98
+  },
+  {
+    "id": "dropShadowHard",
+    "max": 2,
+    "mean": 0.109,
+    "over2": 0
+  },
+  {
+    "id": "blur (existing)",
+    "max": 19,
+    "mean": 0.386,
+    "over2": 2.71
+  }
+]

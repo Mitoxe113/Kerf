@@ -217,6 +217,8 @@ export interface Clip {
   reverse?: boolean;
   /** Multicam group whose angles the clip can switch between. */
   multicam?: Uuid | null;
+  /** Skips the whole effect stack without changing it. */
+  fxBypass?: boolean;
 }
 
 export type EqShape = "highPass" | "lowShelf" | "peak" | "highShelf" | "lowPass";
@@ -254,8 +256,9 @@ export type EffectKind =
   | { type: "lut"; path: string; intensity: number }
   | { type: "chromaKey"; color: Rgb; similarity: number; blend: number; spill: number }
   | { type: "colorWheels"; lift: Rgb; gamma: Rgb; gain: Rgb }
-  | { type: "curves"; master: CurvePoint[]; red: CurvePoint[]; green: CurvePoint[]; blue: CurvePoint[] };
-export type Effect = { id: Uuid; enabled: boolean } & EffectKind;
+  | { type: "curves"; master: CurvePoint[]; red: CurvePoint[]; green: CurvePoint[]; blue: CurvePoint[] }
+  | { type: "fx"; fx: string; params: Record<string, number> };
+export type Effect = { id: Uuid; enabled: boolean; name?: string } & EffectKind;
 
 export type ColorParam = "exposure" | "contrast" | "saturation" | "temperature" | "tint";
 export type KeyParam = "x" | "y" | "scale" | "rotation" | "opacity" | "volume" | "speed" | ColorParam;
@@ -397,7 +400,7 @@ export type Edge = "start" | "end";
 export type PlaceMode = "overwrite" | "insert";
 
 export type ClipPatch = Partial<
-  Pick<Clip, "name" | "enabled" | "transform" | "opacity" | "volumeDb" | "pan" | "speed" | "fadeIn" | "fadeOut" | "color" | "label" | "channels" | "reverse">
+  Pick<Clip, "name" | "enabled" | "transform" | "opacity" | "volumeDb" | "pan" | "speed" | "fadeIn" | "fadeOut" | "color" | "label" | "channels" | "reverse" | "fxBypass">
 >;
 export type TrackPatch = Partial<Pick<Track, "name" | "muted" | "solo" | "locked" | "hidden" | "volumeDb" | "color" | "height" | "effects" | "mono">>;
 export type MediaPatch = Partial<Pick<MediaAsset, "favorite" | "label" | "tags" | "note">>;

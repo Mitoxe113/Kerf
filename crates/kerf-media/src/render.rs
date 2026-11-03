@@ -564,10 +564,16 @@ fn perspective(clip: &Clip, head: Frame, cw: f64, ch: f64, fit: f64, w: f64, h: 
 /// Gaussian like the preview's.
 const GBLUR_STEPS: u32 = 4;
 
+/// The FFmpeg filters for one effect, as the export writes them (used by the
+/// preview/export parity check, `scripts/fx-parity.mjs`).
+pub fn effect_chain(e: &EffectKind, rate: f64, frame0: i64) -> String {
+    effect_filters(e, 0, 0, rate, frame0).join(",")
+}
+
 /// FFmpeg filters for one effect on an RGBA stream. Branches (split/blend)
 /// use labels unique per clip `k` and effect `j`; a `;` inside a chain is
 /// valid filtergraph syntax.
-fn effect_filters(e: &EffectKind, k: usize, j: usize) -> Vec<String> {
+fn effect_filters(e: &EffectKind, k: usize, j: usize, rate: f64, frame0: i64) -> Vec<String> {
     let l = |s: &str| format!("fx{k}e{j}{s}");
     let (a, b, c) = (l("a"), l("b"), l("c"));
     match e {
@@ -630,6 +636,7 @@ fn effect_filters(e: &EffectKind, k: usize, j: usize) -> Vec<String> {
                 .collect();
             vec![format!("curves=interp=pchip:{}", parts.join(":"))]
         }
+        EffectKind::Fx { fx, params } => crate::fx::filters(fx, params, k, j, rate, frame0),
     }
 }
 
@@ -1559,7 +1566,7 @@ fn plan_one(
                 f.push(format!("{name}={}", opts.join(":")));
             }
             for (j, e) in effects.iter().enumerate() {
-                f.extend(effect_filters(e, k, j));
+                f.extend(effect_filters(e, k, j, sf.as_f64(), seg.head));
             }
             if !effects.is_empty() {
                 if clip.opacity < 1.0 || dynamic {
