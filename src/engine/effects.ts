@@ -13,6 +13,7 @@
 // canvas scale) in RGBA8 framebuffers with straight alpha, as FFmpeg does.
 
 import type { CurvePoint, Effect, EffectKind } from "../lib/types";
+import { FX_SHADERS, fxIsIdentity, fxMatrix, fxReader, glowFn, toneFns, toneTable, toneTexture } from "./fx";
 
 export const isIdentityEffect = (e: EffectKind): boolean => {
   switch (e.type) {
@@ -30,11 +31,13 @@ export const isIdentityEffect = (e: EffectKind): boolean => {
       return e.lift.every((v) => v === 0) && [...e.gamma, ...e.gain].every((v) => v === 1);
     case "curves":
       return [e.master, e.red, e.green, e.blue].every(curveIsIdentity);
+    case "fx":
+      return fxIsIdentity(e.fx, e.params);
   }
 };
 
 export const curveIsIdentity = (c: CurvePoint[]) => c.length < 2 || c.every(([x, y]) => Math.abs(x - y) < 1e-6);
-export const activeEffects = (effects: Effect[] | undefined) => (effects ?? []).filter((e) => e.enabled && !isIdentityEffect(e));
+export const activeEffects = (effects: Effect[] | undefined, bypass = false) => (bypass ? [] : (effects ?? []).filter((e) => e.enabled && !isIdentityEffect(e)));
 
 // --- curves (same algorithm as FFmpeg's vf_curves interp=pchip) ----------------------
 
@@ -154,6 +157,7 @@ out vec4 outColor;
 `;
 
 const FS: Record<string, string> = {
+  ...FX_SHADERS,
   blur: `${HEAD}
 uniform vec2 u_dir;
 uniform float u_sigma;
@@ -267,6 +271,7 @@ export class EffectPipeline {
   private pool: Target[] = [];
   private luts = new Map<string, { tex: WebGLTexture; cube: Cube } | "loading" | "failed">();
   private curves = new Map<string, WebGLTexture>();
+  private tables = new Map<string, WebGLTexture>();
 
   constructor(
     private gl: WebGL2RenderingContext,
@@ -335,6 +340,7 @@ export class EffectPipeline {
     gl.uniform1i(pr.loc("u_tex"), 0);
     gl.uniformMatrix3fv(pr.loc("u_matrix"), false, FULL_QUAD);
     gl.uniform4f(pr.loc("u_crop"), 0, 0, 0, 0);
+    gl.uniform2f(pr.loc("u_size"), dst.w, dst.h);
     setup(pr);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
@@ -397,12 +403,322 @@ export class EffectPipeline {
     return t;
   }
 
+  private tableTex(key: string, make: () => Uint8Array): WebGLTexture {
+    let t = this.tables.get(key);
+    if (!t) {
+      const gl = this.gl;
+      t = gl.createTexture()!;
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 256, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, make());
+      for (const [k, v] of [
+        [gl.TEXTURE_MIN_FILTER, gl.NEAREST],
+        [gl.TEXTURE_MAG_FILTER, gl.NEAREST],
+        [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE],
+        [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE],
+      ])
+        gl.texParameteri(gl.TEXTURE_2D, k, v);
+      if (this.tables.size > 64) {
+        for (const old of this.tables.values()) gl.deleteTexture(old);
+        this.tables.clear();
+      }
+      this.tables.set(key, t);
+    }
+    return t;
+  }
+
+  /** Gaussian blur of `src` (not consumed) into a new target, as the blur effect. */
+  private gauss(src: Target, sigma: number, program = "blur"): Target {
+    const gl = this.gl;
+    const h = this.acquire(src.w, src.h);
+    this.pass(program, src.tex, h, (pr) => {
+      gl.uniform2f(pr.loc("u_dir"), 1 / src.w, 0);
+      gl.uniform1f(pr.loc("u_sigma"), sigma);
+    });
+    const v = this.acquire(src.w, src.h);
+    this.pass(program, h.tex, v, (pr) => {
+      gl.uniform2f(pr.loc("u_dir"), 0, 1 / src.h);
+      gl.uniform1f(pr.loc("u_sigma"), sigma);
+    });
+    this.release(h);
+    return v;
+  }
+
+  /** Runs one catalogue effect on `input` (consumed); returns the result. */
+  private runFx(e: Extract<EffectKind, { type: "fx" }>, input: Target, scale: number, frame: number): Target {
+    const gl = this.gl;
+    const p = fxReader(e.fx, e.params);
+    const { w, h } = input;
+    let cur = input;
+    const step = (name: string, setup: (pr: Program) => void, src: Target = cur) => {
+      const out = this.acquire(w, h);
+      this.pass(name, src.tex, out, (pr) => {
+        gl.uniform1f(pr.loc("u_scale"), scale);
+        setup(pr);
+      });
+      return out;
+    };
+    const then = (name: string, setup: (pr: Program) => void) => {
+      const out = step(name, setup);
+      this.release(cur);
+      cur = out;
+    };
+    const f = (pr: Program, n: string, v: number) => gl.uniform1f(pr.loc(n), v);
+    const bind = (pr: Program, n: string, unit: number, tex: WebGLTexture) => {
+      gl.activeTexture(gl.TEXTURE0 + unit);
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.uniform1i(pr.loc(n), unit);
+      gl.activeTexture(gl.TEXTURE0);
+    };
+    const center = (pr: Program) => gl.uniform2f(pr.loc("u_c"), p.get("centerX") * w, p.get("centerY") * h);
+    const tones = toneFns(e.fx, e.params);
+    if (tones) {
+      const t = this.tableTex(`${e.fx}:${JSON.stringify(e.params)}`, () => toneTexture(tones.map(toneTable) as [Uint8Array, Uint8Array, Uint8Array]));
+      then("table", (pr) => bind(pr, "u_table", 1, t));
+      return cur;
+    }
+    const m = fxMatrix(e.fx, e.params);
+    if (m) {
+      // Column-major: column c holds the coefficients of input channel c.
+      const cm = new Float32Array([m[0][0], m[1][0], m[2][0], m[0][1], m[1][1], m[2][1], m[0][2], m[1][2], m[2][2]]);
+      then("matrix", (pr) => gl.uniformMatrix3fv(pr.loc("u_m"), false, cm));
+      return cur;
+    }
+    const fr = ((Math.round(frame) % 65521) + 65521) % 65521;
+    switch (e.fx) {
+      case "vibrance":
+        then("vibrance", (pr) => f(pr, "u_amount", p.get("amount")));
+        break;
+      case "hslSecondary":
+        then("hslSecondary", (pr) => {
+          f(pr, "u_hue", p.get("hue"));
+          f(pr, "u_range", p.get("range"));
+          f(pr, "u_soft", Math.max(p.get("softness"), 0.001));
+          f(pr, "u_shift", (p.get("shift") * Math.PI) / 180);
+          f(pr, "u_sat", p.get("saturation"));
+          f(pr, "u_light", p.get("lightness"));
+        });
+        break;
+      case "lumaKey":
+        then("lumaKey", (pr) => {
+          f(pr, "u_threshold", p.get("threshold"));
+          f(pr, "u_softness", p.get("softness"));
+          f(pr, "u_invert", p.get("invert"));
+        });
+        break;
+      case "boxBlur": {
+        const r = Math.min(60, Math.round(p.get("radius") * scale));
+        then("box", (pr) => {
+          gl.uniform2f(pr.loc("u_dir"), 1, 0);
+          gl.uniform1i(pr.loc("u_r"), r);
+          f(pr, "u_last", 0);
+        });
+        then("box", (pr) => {
+          gl.uniform2f(pr.loc("u_dir"), 0, 1);
+          gl.uniform1i(pr.loc("u_r"), r);
+          f(pr, "u_last", 1);
+        });
+        break;
+      }
+      case "directionalBlur": {
+        const th = (p.get("angle") * Math.PI) / 180;
+        const len = p.get("length") * scale;
+        then("taps", (pr) => {
+          gl.uniform1i(pr.loc("u_mode"), 0);
+          gl.uniform2f(pr.loc("u_a"), Math.cos(th) * len, Math.sin(th) * len);
+        });
+        break;
+      }
+      case "radialBlur":
+      case "zoomBlur":
+        then("taps", (pr) => {
+          gl.uniform1i(pr.loc("u_mode"), e.fx === "radialBlur" ? 1 : 2);
+          gl.uniform2f(pr.loc("u_a"), e.fx === "radialBlur" ? (p.get("angle") * Math.PI) / 180 : p.get("amount"), 0);
+          center(pr);
+        });
+        break;
+      case "tiltShift":
+      case "softFocus":
+      case "glow": {
+        let src = cur;
+        let bright: Target | null = null;
+        if (e.fx === "glow") {
+          const t = this.tableTex(`glow:${p.get("threshold")}`, () => {
+            const g = toneTable(glowFn(p.get("threshold")));
+            return toneTexture([g, g, g]);
+          });
+          bright = step("table", (pr) => bind(pr, "u_table", 1, t));
+          src = bright;
+        }
+        const blurred = this.gauss(src, p.get("radius") * scale);
+        if (bright) this.release(bright);
+        then("blend2", (pr) => {
+          bind(pr, "u_b", 1, blurred.tex);
+          gl.uniform1i(pr.loc("u_mode"), e.fx === "glow" ? 0 : e.fx === "softFocus" ? 1 : 2);
+          f(pr, "u_k", e.fx === "glow" ? p.get("intensity") : p.get("amount"));
+          f(pr, "u_focus", p.get("focus"));
+          f(pr, "u_width", p.get("width"));
+          f(pr, "u_feather", p.get("feather"));
+        });
+        this.release(blurred);
+        break;
+      }
+      case "chromaticAberration": {
+        const d = Math.round(p.get("amount") * scale);
+        then("rgbShift", (pr) => gl.uniform2i(pr.loc("u_d"), p.on("vertical") ? 0 : d, p.on("vertical") ? d : 0));
+        break;
+      }
+      case "wave":
+        then("wave", (pr) => {
+          f(pr, "u_amp", p.get("amplitude") * scale);
+          f(pr, "u_k", (2 * Math.PI) / (p.get("wavelength") * scale));
+          f(pr, "u_phase", (p.get("phase") * Math.PI) / 180);
+          f(pr, "u_vertical", p.get("vertical"));
+        });
+        break;
+      case "twirl":
+        then("twirl", (pr) => {
+          center(pr);
+          f(pr, "u_radius", p.get("radius"));
+          f(pr, "u_angle", (p.get("angle") * Math.PI) / 180);
+        });
+        break;
+      case "bulge":
+        then("bulge", (pr) => {
+          center(pr);
+          f(pr, "u_radius", p.get("radius"));
+          f(pr, "u_e", Math.pow(2, p.get("amount")));
+        });
+        break;
+      case "lensDistortion":
+        then("lens", (pr) => f(pr, "u_k", p.get("amount") * 0.5));
+        break;
+      case "kaleidoscope":
+        then("kaleidoscope", (pr) => {
+          f(pr, "u_seg", (2 * Math.PI) / p.get("segments"));
+          f(pr, "u_rot", (p.get("angle") * Math.PI) / 180);
+        });
+        break;
+      case "mirror":
+        then("mirror", (pr) => gl.uniform1i(pr.loc("u_mode"), p.get("mode")));
+        break;
+      case "pixelate":
+        then("pixelate", (pr) => f(pr, "u_s", Math.max(1, p.get("size") * scale)));
+        break;
+      case "scanlines":
+        then("scanlines", (pr) => {
+          f(pr, "u_spacing", Math.max(1, p.get("spacing") * scale));
+          f(pr, "u_dark", p.get("darkness"));
+        });
+        break;
+      case "filmGrain":
+        then("grain", (pr) => {
+          f(pr, "u_amount", p.get("amount") * 255);
+          f(pr, "u_s", Math.max(1, p.get("size") * scale));
+          f(pr, "u_color", p.get("color"));
+          gl.uniform1ui(pr.loc("u_frame"), fr);
+        });
+        break;
+      case "glitch":
+        then("glitch", (pr) => {
+          f(pr, "u_amount", p.get("amount"));
+          f(pr, "u_shift", p.get("shift") * scale);
+          f(pr, "u_block", Math.max(1, p.get("block") * scale));
+          f(pr, "u_split", p.get("split") * scale);
+          gl.uniform1ui(pr.loc("u_frame"), fr);
+          gl.uniform1ui(pr.loc("u_seed"), Math.round(p.get("seed")) * 7 + 101);
+        });
+        break;
+      case "edgeDetect":
+        then("edges", (pr) => {
+          f(pr, "u_amount", p.get("amount"));
+          f(pr, "u_invert", p.get("invert"));
+        });
+        break;
+      case "shapeMask":
+        then("shapeMask", (pr) => {
+          center(pr);
+          gl.uniform2f(pr.loc("u_half"), (p.get("width") * w) / 2, (p.get("height") * h) / 2);
+          f(pr, "u_ellipse", p.get("shape"));
+          f(pr, "u_feather", p.get("feather") * scale);
+          f(pr, "u_invert", p.get("invert"));
+        });
+        break;
+      case "border":
+        then("border", (pr) => {
+          f(pr, "u_width", p.get("width") * scale);
+          gl.uniform3f(pr.loc("u_color"), ...(p.rgb("color").map((v) => Math.round(v * 255)) as [number, number, number]));
+        });
+        break;
+      case "flip":
+        then("flip", (pr) => gl.uniform2f(pr.loc("u_flip"), p.get("horizontal"), p.get("vertical")));
+        break;
+      case "matte": {
+        const n = Math.round(p.get("choke") * scale);
+        for (let i = 0; i < Math.abs(n); i++) then("morph", (pr) => f(pr, "u_max", n < 0 ? 1 : 0));
+        if (p.get("feather") > 0) {
+          const b = this.gauss(cur, p.get("feather") * scale, "alphaBlur");
+          this.release(cur);
+          cur = b;
+        }
+        break;
+      }
+      case "stroke":
+      case "dropShadow": {
+        const color = p.rgb("color").map((v) => Math.round(v * 255)) as [number, number, number];
+        let base: Target;
+        if (e.fx === "stroke") {
+          let grown = step("morph", (pr) => f(pr, "u_max", 1));
+          for (let i = 1; i < Math.round(p.get("width") * scale); i++) {
+            const g = step("morph", (pr) => f(pr, "u_max", 1), grown);
+            this.release(grown);
+            grown = g;
+          }
+          base = step(
+            "solid",
+            (pr) => {
+              gl.uniform3f(pr.loc("u_color"), ...color);
+              gl.uniform2f(pr.loc("u_d"), 0, 0);
+              f(pr, "u_op", 1);
+              f(pr, "u_exact", 1);
+            },
+            grown,
+          );
+          this.release(grown);
+        } else {
+          const th = (p.get("angle") * Math.PI) / 180;
+          const dist = p.get("distance");
+          base = step("solid", (pr) => {
+            gl.uniform3f(pr.loc("u_color"), ...color);
+            gl.uniform2f(pr.loc("u_d"), Math.round(dist * Math.cos(th)) * scale, Math.round(dist * Math.sin(th)) * scale);
+            f(pr, "u_op", p.get("opacity"));
+            f(pr, "u_exact", 0);
+          });
+          if (p.get("softness") > 0) {
+            const b = this.gauss(base, p.get("softness") * scale, "alphaBlur");
+            this.release(base);
+            base = b;
+          }
+        }
+        const out = step(
+          "over",
+          (pr) => bind(pr, "u_top", 1, cur.tex),
+          base,
+        );
+        this.release(base);
+        this.release(cur);
+        cur = out;
+        break;
+      }
+    }
+    return cur;
+  }
+
   /**
    * Applies `effects` to the frame in `input` (a pooled target, consumed).
    * `scale` is target pixels per sequence pixel. Returns the result target;
    * the caller releases it.
    */
-  apply(input: Target, effects: EffectKind[], scale: number): Target {
+  apply(input: Target, effects: EffectKind[], scale: number, frame = 0): Target {
     const gl = this.gl;
     gl.disable(gl.BLEND);
     let cur = input;
@@ -491,6 +807,11 @@ export class EffectPipeline {
           swap(out);
           break;
         }
+        case "fx": {
+          const out = this.runFx(e, cur, scale, frame);
+          cur = out;
+          break;
+        }
         case "curves": {
           const t = this.curveTex(e);
           const out = next();
@@ -519,6 +840,8 @@ export class EffectPipeline {
     this.luts.clear();
     for (const t of this.curves.values()) gl.deleteTexture(t);
     this.curves.clear();
+    for (const t of this.tables.values()) gl.deleteTexture(t);
+    this.tables.clear();
     for (const p of this.programs.values()) gl.deleteProgram(p.p);
     this.programs.clear();
   }

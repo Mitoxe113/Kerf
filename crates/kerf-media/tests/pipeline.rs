@@ -477,7 +477,7 @@ fn effect_stack_renders() {
     })
     .unwrap();
     let v = out.created[0];
-    let fx = |kind| Effect { id: Uuid::new_v4(), enabled: true, kind };
+    let fx = |kind| Effect { id: Uuid::new_v4(), enabled: true, name: String::new(), kind };
     let effects = vec![
         fx(EffectKind::ChromaKey { color: [0.0, 1.0, 0.0], similarity: 0.12, blend: 0.05, spill: 0.5 }),
         fx(EffectKind::Lut { path: cube, intensity: 0.5 }),
@@ -514,6 +514,63 @@ fn effect_stack_renders() {
     assert!(res.is_ok(), "{res:?}\n{log}");
     let luma = mean_luma(&tools, &file, 0.5);
     assert!(luma > 10.0 && luma < 240.0, "a picture came out: {luma}");
+}
+
+/// Every catalogue effect (kerf_core::fx) with its defaults renders in a real
+/// export, each in its own clip so the stack stays readable in the log.
+#[test]
+fn catalog_effects_render() {
+    let Some(tools) = tools() else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("bars.mp4");
+    ffmpeg(&tools, &["-f", "lavfi", "-i", "testsrc2=s=160x90:r=25:d=2", "-c:v", "libx264", "-preset", "ultrafast", "-y", &src.to_string_lossy()]);
+    let asset = import(&tools, &src, &dir.path().join("cache"));
+    let mut p = Project::new("catalog", 0);
+    let id = asset.id;
+    p.media.push(asset);
+    let seq = p.active_sequence;
+    let settings = SequenceSettings { width: 160, height: 90, fps: Rational::new(25, 1), sample_rate: 48_000 };
+    kerf_core::ops::apply(&mut p, &EditCommand::UpdateSequenceSettings { sequence: seq, settings }).unwrap();
+    let effects: Vec<_> = kerf_core::fx::CATALOG
+        .iter()
+        .filter(|d| !kerf_core::fx::is_identity(d.id, &kerf_core::fx::defaults(d)))
+        .collect();
+    // Two frames per effect, one clip each.
+    for (i, d) in effects.iter().enumerate() {
+        let out = kerf_core::ops::apply(&mut p, &EditCommand::PlaceMedia {
+            sequence: seq, media: id, video_track: None, audio_track: None, at: 2 * i as i64,
+            mode: PlaceMode::Overwrite, source_in: Some(0), source_out: Some(2), match_sequence: false,
+        })
+        .unwrap();
+        let fx = Effect { id: Uuid::new_v4(), enabled: true, name: String::new(), kind: EffectKind::Fx { fx: d.id.to_string(), params: kerf_core::fx::defaults(d) } };
+        kerf_core::ops::apply(&mut p, &EditCommand::SetEffects { sequence: seq, clips: vec![out.created[0]], effects: vec![fx] }).unwrap();
+    }
+    let file = dir.path().join("catalog.mp4");
+    let export = ExportSettings {
+        output: file.clone(),
+        video_codec: VideoCodec::H264,
+        hardware: false,
+        width: 160,
+        height: 90,
+        fps: Rational::new(25, 1),
+        rate: RateControl::Quality { crf: 18 },
+        audio_codec: AudioCodec::Aac,
+        audio_bitrate_kbps: 128,
+        sample_rate: 48_000,
+        audio_channels: 2,
+        use_in_out: false,
+        subtitles: Default::default(),
+        title_files: Default::default(),
+        loudness: None,
+        segmented: false,
+    };
+    let plan = render::plan(&p, p.sequence(seq).unwrap(), &export, dir.path(), &[]).unwrap();
+    let mut log = String::new();
+    let res = render::render_logged(&tools, &plan, &AtomicBool::new(false), |_| {}, &mut log);
+    assert!(res.is_ok(), "{res:?}\n{log}");
+    let (_, info) = probe::probe(&tools, &file).unwrap();
+    let frames = (info.duration * 25.0).round() as usize;
+    assert_eq!(frames, 2 * effects.len(), "{info:?}");
 }
 
 #[test]

@@ -727,6 +727,9 @@ pub struct Clip {
     /// Multicam group whose angles this clip can switch between.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub multicam: Option<Uuid>,
+    /// Skips the whole effect stack without changing it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub fx_bypass: bool,
 }
 
 fn is_false(v: &bool) -> bool {
@@ -760,12 +763,13 @@ impl Clip {
             channels: ChannelMap::Stereo,
             reverse: false,
             multicam: None,
+            fx_bypass: false,
         }
     }
 
     /// Enabled effects, in processing order.
     pub fn active_effects(&self) -> impl Iterator<Item = &Effect> {
-        self.effects.iter().filter(|e| e.enabled && !e.kind.is_identity())
+        self.effects.iter().filter(|e| !self.fx_bypass && e.enabled && !e.kind.is_identity())
     }
 
     pub fn end(&self) -> Frame {
@@ -1065,6 +1069,9 @@ pub struct Effect {
     pub id: Uuid,
     #[serde(default = "yes")]
     pub enabled: bool,
+    /// User-given name; empty = the effect's catalogue label.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
     #[serde(flatten)]
     pub kind: EffectKind,
 }
@@ -1090,6 +1097,13 @@ pub enum EffectKind {
     /// Monotone cubic (PCHIP) tone curves: each channel's curve, then the
     /// master curve. An empty list is the identity.
     Curves { master: Vec<CurvePoint>, red: Vec<CurvePoint>, green: Vec<CurvePoint>, blue: Vec<CurvePoint> },
+    /// An effect from the catalogue (`crate::fx::CATALOG`) by id, with its
+    /// parameters by key.
+    Fx {
+        fx: String,
+        #[serde(default)]
+        params: BTreeMap<String, f32>,
+    },
 }
 
 impl EffectKind {
@@ -1103,6 +1117,7 @@ impl EffectKind {
             EffectKind::ChromaKey { .. } => false,
             EffectKind::ColorWheels { lift, gamma, gain } => lift.iter().all(|v| *v == 0.0) && gamma.iter().chain(gain).all(|v| *v == 1.0),
             EffectKind::Curves { master, red, green, blue } => [master, red, green, blue].iter().all(|c| curve_is_identity(c)),
+            EffectKind::Fx { fx, params } => crate::fx::is_identity(fx, params),
         }
     }
 
@@ -1136,6 +1151,10 @@ impl EffectKind {
                 green: clean_curve(green)?,
                 blue: clean_curve(blue)?,
             },
+            EffectKind::Fx { fx, params } => {
+                let def = crate::fx::def(fx)?;
+                EffectKind::Fx { fx: fx.clone(), params: crate::fx::sanitize(def, params)? }
+            }
         })
     }
 }

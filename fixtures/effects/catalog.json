@@ -1,0 +1,1344 @@
+[
+  {
+    "id": "brightnessContrast",
+    "version": 1,
+    "category": "color",
+    "label": "Helligkeit und Kontrast",
+    "description": "Hebt oder senkt alle Tonwerte und spreizt sie um das mittlere Grau.",
+    "params": [
+      {
+        "id": "brightness",
+        "label": "Helligkeit",
+        "min": -1.0,
+        "max": 1.0,
+        "default": 0.0,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      },
+      {
+        "id": "contrast",
+        "label": "Kontrast",
+        "min": -1.0,
+        "max": 1.0,
+        "default": 0.0,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      }
+    ],
+    "heavy": false
+  },
+  {
+    "id": "levels",
+    "version": 1,
+    "category": "color",
+    "label": "Tonwerte",
+    "description": "Eingangs-Schwarz und -Weiß, Gamma und Ausgangsbereich je Kanal gleich.",
+    "params": [
+      {
+        "id": "inBlack",
+        "label": "Eingang Schwarz",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.0,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      },
+      {
+        "id": "inWhite",
+        "label": "Eingang Weiß",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 1.0,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      },
+      {
+        "id": "gamma",
+        "label": "Gamma",
+        "min": 0.1,
+        "max": 5.0,
+        "default": 1.0,
+        "kind": "float",
+        "unit": "",
+        "scale": 1.0
+      },
+      {
+        "id": "outBlack",
+        "label": "Ausgang Schwarz",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.0,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      },
+      {
+        "id": "outWhite",
+        "label": "Ausgang Weiß",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 1.0,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      }
+    ],
+    "heavy": false
+  },
+  {
+    "id": "tone",
+    "version": 1,
+    "category": "color",
+    "label": "Lichter und Tiefen",
+    "description": "Hebt oder senkt Tiefen, Lichter, Schwarz- und Weißbereich getrennt.",
+    "params": [
+      {
+        "id": "shadows",
+        "label": "Tiefen",
+        "min": -1.0,
+        "max": 1.0,
+        "default": 0.0,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      },
+      {
+        "id": "highlights",
+        "label": "Lichter",
+        "min": -1.0,
+        "max": 1.0,
+        "default": 0.0,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      },
+      {
+        "id": "blacks",
+        "label": "Schwarz",
+        "min": -1.0,
+        "max": 1.0,
+        "default": 0.0,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      },
+      {
+        "id": "whites",
+        "label": "Weiß",
+        "min": -1.0,
+        "max": 1.0,
+        "default": 0.0,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      }
+    ],
+    "heavy": false
+  },
+  {
+    "id": "colorBalance",
+    "version": 1,
+    "category": "color",
+    "label": "Farbbalance",
+    "description": "Verschiebt Rot, Grün und Blau getrennt in Tiefen, Mitten und Lichtern.",
+    "params": [
+      {
+        "id": "shadowsR",
+        "label": "Tiefen Rot",
+        "min": -1.0,
+        "max": 1.0,
+        "default": 0.0,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      },
+      {
+        "id": "shadowsG",
+        "label": "Tiefen Grün",
+        "min": -1.0,
+        "max": 1.0,
+        "default": 0.0,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      },
+      {
+        "id": "shadowsB",
+        "label": "Tiefen Blau",
+        "min": -1.0,
+        "max": 1.0,
+        "default": 0.0,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      },
+      {
+        "id": "midR",
+        "label": "Mitten Rot",
+        "min": -1.0,
+        "max": 1.0,
+        "default": 0.0,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      },
+      {
+        "id": "midG",
+        "label": "Mitten Grün",
+        "min": -1.0,
+        "max": 1.0,
+        "default": 0.0,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      },
+      {
+        "id": "midB",
+        "label": "Mitten Blau",
+        "min": -1.0,
+        "max": 1.0,
+        "default": 0.0,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      },
+      {
+        "id": "highR",
+        "label": "Lichter Rot",
+        "min": -1.0,
+        "max": 1.0,
+        "default": 0.0,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      },
+      {
+        "id": "highG",
+        "label": "Lichter Grün",
+        "min": -1.0,
+        "max": 1.0,
+        "default": 0.0,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      },
+      {
+        "id": "highB",
+        "label": "Lichter Blau",
+        "min": -1.0,
+        "max": 1.0,
+        "default": 0.0,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      }
+    ],
+    "heavy": false
+  },
+  {
+    "id": "vibrance",
+    "version": 1,
+    "category": "color",
+    "label": "Dynamik",
+    "description": "Sättigt schwach gesättigte Farben stärker als kräftige.",
+    "params": [
+      {
+        "id": "amount",
+        "label": "Stärke",
+        "min": -1.0,
+        "max": 1.0,
+        "default": 0.3,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      }
+    ],
+    "heavy": true
+  },
+  {
+    "id": "hueShift",
+    "version": 1,
+    "category": "color",
+    "label": "Farbton drehen",
+    "description": "Dreht alle Farbtöne um die Grauachse.",
+    "params": [
+      {
+        "id": "angle",
+        "label": "Winkel",
+        "min": -180.0,
+        "max": 180.0,
+        "default": 0.0,
+        "kind": "angle"
+      }
+    ],
+    "heavy": false
+  },
+  {
+    "id": "hslSecondary",
+    "version": 1,
+    "category": "color",
+    "label": "HSL-Sekundärkorrektur",
+    "description": "Ändert Farbton, Sättigung und Helligkeit nur in einem gewählten Farbtonbereich (selektive Farbe).",
+    "params": [
+      {
+        "id": "hue",
+        "label": "Farbton",
+        "min": 0.0,
+        "max": 360.0,
+        "default": 120.0,
+        "kind": "angle"
+      },
+      {
+        "id": "range",
+        "label": "Bereich",
+        "min": 1.0,
+        "max": 180.0,
+        "default": 30.0,
+        "kind": "angle"
+      },
+      {
+        "id": "softness",
+        "label": "Weichheit",
+        "min": 0.0,
+        "max": 180.0,
+        "default": 20.0,
+        "kind": "angle"
+      },
+      {
+        "id": "shift",
+        "label": "Farbton verschieben",
+        "min": -180.0,
+        "max": 180.0,
+        "default": 0.0,
+        "kind": "angle"
+      },
+      {
+        "id": "saturation",
+        "label": "Sättigung",
+        "min": -1.0,
+        "max": 1.0,
+        "default": 0.0,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      },
+      {
+        "id": "lightness",
+        "label": "Helligkeit",
+        "min": -1.0,
+        "max": 1.0,
+        "default": 0.0,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      }
+    ],
+    "heavy": true
+  },
+  {
+    "id": "blackWhite",
+    "version": 1,
+    "category": "color",
+    "label": "Schwarzweiß",
+    "description": "Entsättigt nach Rec.709-Luma.",
+    "params": [
+      {
+        "id": "amount",
+        "label": "Stärke",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 1.0,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      }
+    ],
+    "heavy": false
+  },
+  {
+    "id": "sepia",
+    "version": 1,
+    "category": "color",
+    "label": "Sepia",
+    "description": "Warmer, bräunlicher Altbild-Ton.",
+    "params": [
+      {
+        "id": "amount",
+        "label": "Stärke",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 1.0,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      }
+    ],
+    "heavy": false
+  },
+  {
+    "id": "colorize",
+    "version": 1,
+    "category": "color",
+    "label": "Einfärben",
+    "description": "Ersetzt die Farbe durch einen Farbton, die Helligkeit bleibt.",
+    "params": [
+      {
+        "id": "hue",
+        "label": "Farbton",
+        "min": 0.0,
+        "max": 360.0,
+        "default": 30.0,
+        "kind": "angle"
+      },
+      {
+        "id": "saturation",
+        "label": "Sättigung",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.6,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      },
+      {
+        "id": "amount",
+        "label": "Stärke",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 1.0,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      }
+    ],
+    "heavy": false
+  },
+  {
+    "id": "invert",
+    "version": 1,
+    "category": "color",
+    "label": "Umkehren",
+    "description": "Negativ der Farben.",
+    "params": [
+      {
+        "id": "amount",
+        "label": "Stärke",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 1.0,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      }
+    ],
+    "heavy": false
+  },
+  {
+    "id": "posterize",
+    "version": 1,
+    "category": "color",
+    "label": "Tontrennung",
+    "description": "Reduziert jeden Kanal auf wenige Stufen.",
+    "params": [
+      {
+        "id": "levels",
+        "label": "Stufen",
+        "min": 2.0,
+        "max": 32.0,
+        "default": 5.0,
+        "kind": "int"
+      }
+    ],
+    "heavy": false
+  },
+  {
+    "id": "solarize",
+    "version": 1,
+    "category": "color",
+    "label": "Solarisation",
+    "description": "Kehrt Tonwerte oberhalb der Schwelle um.",
+    "params": [
+      {
+        "id": "threshold",
+        "label": "Schwelle",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.5,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      }
+    ],
+    "heavy": false
+  },
+  {
+    "id": "boxBlur",
+    "version": 1,
+    "category": "blur",
+    "label": "Rechteck-Weichzeichner",
+    "description": "Mittelwert über ein Quadrat, waagrecht und senkrecht getrennt.",
+    "params": [
+      {
+        "id": "radius",
+        "label": "Radius",
+        "min": 0.0,
+        "max": 60.0,
+        "default": 4.0,
+        "kind": "int"
+      }
+    ],
+    "heavy": false
+  },
+  {
+    "id": "directionalBlur",
+    "version": 1,
+    "category": "blur",
+    "label": "Richtungs-Weichzeichner",
+    "description": "Bewegungsunschärfe entlang eines Winkels.",
+    "params": [
+      {
+        "id": "angle",
+        "label": "Winkel",
+        "min": -180.0,
+        "max": 180.0,
+        "default": 0.0,
+        "kind": "angle"
+      },
+      {
+        "id": "length",
+        "label": "Länge",
+        "min": 0.0,
+        "max": 200.0,
+        "default": 20.0,
+        "kind": "float",
+        "unit": " px",
+        "scale": 1.0
+      }
+    ],
+    "heavy": true
+  },
+  {
+    "id": "radialBlur",
+    "version": 1,
+    "category": "blur",
+    "label": "Kreisförmiger Weichzeichner",
+    "description": "Dreht die Unschärfe um einen Mittelpunkt.",
+    "params": [
+      {
+        "id": "angle",
+        "label": "Winkel",
+        "min": 0.0,
+        "max": 45.0,
+        "default": 6.0,
+        "kind": "angle"
+      },
+      {
+        "id": "center",
+        "label": "Mittelpunkt",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.5,
+        "kind": "point"
+      }
+    ],
+    "heavy": true
+  },
+  {
+    "id": "zoomBlur",
+    "version": 1,
+    "category": "blur",
+    "label": "Zoom-Weichzeichner",
+    "description": "Unschärfe strahlenförmig vom Mittelpunkt.",
+    "params": [
+      {
+        "id": "amount",
+        "label": "Stärke",
+        "min": 0.0,
+        "max": 0.5,
+        "default": 0.1,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      },
+      {
+        "id": "center",
+        "label": "Mittelpunkt",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.5,
+        "kind": "point"
+      }
+    ],
+    "heavy": true
+  },
+  {
+    "id": "tiltShift",
+    "version": 1,
+    "category": "blur",
+    "label": "Tilt-Shift",
+    "description": "Scharfer waagrechter Streifen, darüber und darunter Gauß-Unschärfe.",
+    "params": [
+      {
+        "id": "focus",
+        "label": "Fokuslage",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.5,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      },
+      {
+        "id": "width",
+        "label": "Scharfer Bereich",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.25,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      },
+      {
+        "id": "feather",
+        "label": "Übergang",
+        "min": 0.01,
+        "max": 1.0,
+        "default": 0.2,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      },
+      {
+        "id": "radius",
+        "label": "Radius",
+        "min": 0.0,
+        "max": 60.0,
+        "default": 8.0,
+        "kind": "float",
+        "unit": " px",
+        "scale": 1.0
+      }
+    ],
+    "heavy": false
+  },
+  {
+    "id": "softFocus",
+    "version": 1,
+    "category": "blur",
+    "label": "Weichzeichnen (Soft Focus)",
+    "description": "Hellt mit einer weichgezeichneten Kopie auf (Aufhellen-Mischung).",
+    "params": [
+      {
+        "id": "amount",
+        "label": "Stärke",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.5,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      },
+      {
+        "id": "radius",
+        "label": "Radius",
+        "min": 0.5,
+        "max": 60.0,
+        "default": 10.0,
+        "kind": "float",
+        "unit": " px",
+        "scale": 1.0
+      }
+    ],
+    "heavy": false
+  },
+  {
+    "id": "glow",
+    "version": 1,
+    "category": "light",
+    "label": "Leuchten",
+    "description": "Helle Bereiche über der Schwelle werden weichgezeichnet und addiert (auch Bloom).",
+    "params": [
+      {
+        "id": "threshold",
+        "label": "Schwelle",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.6,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      },
+      {
+        "id": "radius",
+        "label": "Radius",
+        "min": 0.5,
+        "max": 80.0,
+        "default": 12.0,
+        "kind": "float",
+        "unit": " px",
+        "scale": 1.0
+      },
+      {
+        "id": "intensity",
+        "label": "Intensität",
+        "min": 0.0,
+        "max": 3.0,
+        "default": 1.0,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      }
+    ],
+    "heavy": false
+  },
+  {
+    "id": "chromaticAberration",
+    "version": 1,
+    "category": "light",
+    "label": "Chromatische Aberration",
+    "description": "Verschiebt Rot und Blau gegeneinander (RGB-Versatz).",
+    "params": [
+      {
+        "id": "amount",
+        "label": "Versatz",
+        "min": -30.0,
+        "max": 30.0,
+        "default": 4.0,
+        "kind": "int"
+      },
+      {
+        "id": "vertical",
+        "label": "Senkrecht",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.0,
+        "kind": "toggle"
+      }
+    ],
+    "heavy": false
+  },
+  {
+    "id": "wave",
+    "version": 1,
+    "category": "distort",
+    "label": "Welle",
+    "description": "Sinusförmige Verschiebung der Zeilen oder Spalten.",
+    "params": [
+      {
+        "id": "amplitude",
+        "label": "Amplitude",
+        "min": 0.0,
+        "max": 200.0,
+        "default": 12.0,
+        "kind": "float",
+        "unit": " px",
+        "scale": 1.0
+      },
+      {
+        "id": "wavelength",
+        "label": "Wellenlänge",
+        "min": 4.0,
+        "max": 2000.0,
+        "default": 120.0,
+        "kind": "float",
+        "unit": " px",
+        "scale": 1.0
+      },
+      {
+        "id": "phase",
+        "label": "Phase",
+        "min": -180.0,
+        "max": 180.0,
+        "default": 0.0,
+        "kind": "angle"
+      },
+      {
+        "id": "vertical",
+        "label": "Senkrecht",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.0,
+        "kind": "toggle"
+      }
+    ],
+    "heavy": true
+  },
+  {
+    "id": "twirl",
+    "version": 1,
+    "category": "distort",
+    "label": "Strudel",
+    "description": "Dreht das Bild zur Mitte hin stärker.",
+    "params": [
+      {
+        "id": "angle",
+        "label": "Winkel",
+        "min": -720.0,
+        "max": 720.0,
+        "default": 120.0,
+        "kind": "angle"
+      },
+      {
+        "id": "radius",
+        "label": "Radius",
+        "min": 0.05,
+        "max": 1.0,
+        "default": 0.5,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      },
+      {
+        "id": "center",
+        "label": "Mittelpunkt",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.5,
+        "kind": "point"
+      }
+    ],
+    "heavy": true
+  },
+  {
+    "id": "bulge",
+    "version": 1,
+    "category": "distort",
+    "label": "Wölben und Kneifen",
+    "description": "Positiv wölbt nach außen, negativ kneift nach innen.",
+    "params": [
+      {
+        "id": "amount",
+        "label": "Stärke",
+        "min": -1.0,
+        "max": 1.0,
+        "default": 0.5,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      },
+      {
+        "id": "radius",
+        "label": "Radius",
+        "min": 0.05,
+        "max": 1.0,
+        "default": 0.4,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      },
+      {
+        "id": "center",
+        "label": "Mittelpunkt",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.5,
+        "kind": "point"
+      }
+    ],
+    "heavy": true
+  },
+  {
+    "id": "lensDistortion",
+    "version": 1,
+    "category": "distort",
+    "label": "Objektivverzerrung",
+    "description": "Tonne (positiv, Fischauge) oder Kissen (negativ).",
+    "params": [
+      {
+        "id": "amount",
+        "label": "Stärke",
+        "min": -1.0,
+        "max": 1.0,
+        "default": 0.3,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      }
+    ],
+    "heavy": true
+  },
+  {
+    "id": "kaleidoscope",
+    "version": 1,
+    "category": "distort",
+    "label": "Kaleidoskop",
+    "description": "Spiegelt Kreissegmente um die Mitte.",
+    "params": [
+      {
+        "id": "segments",
+        "label": "Segmente",
+        "min": 2.0,
+        "max": 16.0,
+        "default": 6.0,
+        "kind": "int"
+      },
+      {
+        "id": "angle",
+        "label": "Drehung",
+        "min": -180.0,
+        "max": 180.0,
+        "default": 0.0,
+        "kind": "angle"
+      }
+    ],
+    "heavy": true
+  },
+  {
+    "id": "mirror",
+    "version": 1,
+    "category": "distort",
+    "label": "Spiegeln",
+    "description": "Spiegelt eine Bildhälfte auf die andere.",
+    "params": [
+      {
+        "id": "mode",
+        "label": "Richtung",
+        "min": 0.0,
+        "max": 3.0,
+        "default": 0.0,
+        "kind": "choice",
+        "options": [
+          "Links nach rechts",
+          "Rechts nach links",
+          "Oben nach unten",
+          "Unten nach oben"
+        ]
+      }
+    ],
+    "heavy": true
+  },
+  {
+    "id": "pixelate",
+    "version": 1,
+    "category": "stylize",
+    "label": "Verpixeln (Mosaik)",
+    "description": "Blöcke in der Farbe ihrer Mitte.",
+    "params": [
+      {
+        "id": "size",
+        "label": "Blockgröße",
+        "min": 2.0,
+        "max": 200.0,
+        "default": 16.0,
+        "kind": "int"
+      }
+    ],
+    "heavy": true
+  },
+  {
+    "id": "scanlines",
+    "version": 1,
+    "category": "stylize",
+    "label": "Zeilenraster",
+    "description": "Abgedunkelte Zeilen wie auf einem Röhrenmonitor.",
+    "params": [
+      {
+        "id": "spacing",
+        "label": "Abstand",
+        "min": 2.0,
+        "max": 40.0,
+        "default": 4.0,
+        "kind": "int"
+      },
+      {
+        "id": "darkness",
+        "label": "Abdunkeln",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.4,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      }
+    ],
+    "heavy": true
+  },
+  {
+    "id": "filmGrain",
+    "version": 1,
+    "category": "stylize",
+    "label": "Filmkorn",
+    "description": "Korn, das sich mit jedem Bild ändert; Muster in Vorschau und Export identisch.",
+    "params": [
+      {
+        "id": "amount",
+        "label": "Stärke",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.15,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      },
+      {
+        "id": "size",
+        "label": "Korngröße",
+        "min": 1.0,
+        "max": 8.0,
+        "default": 1.0,
+        "kind": "int"
+      },
+      {
+        "id": "color",
+        "label": "Farbiges Korn",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.0,
+        "kind": "toggle"
+      }
+    ],
+    "heavy": true
+  },
+  {
+    "id": "glitch",
+    "version": 1,
+    "category": "stylize",
+    "label": "Glitch",
+    "description": "Zufällig verschobene Bildstreifen mit RGB-Versatz, wechselt mit jedem Bild.",
+    "params": [
+      {
+        "id": "amount",
+        "label": "Häufigkeit",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.3,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      },
+      {
+        "id": "shift",
+        "label": "Verschiebung",
+        "min": 0.0,
+        "max": 400.0,
+        "default": 60.0,
+        "kind": "float",
+        "unit": " px",
+        "scale": 1.0
+      },
+      {
+        "id": "block",
+        "label": "Streifenhöhe",
+        "min": 2.0,
+        "max": 200.0,
+        "default": 24.0,
+        "kind": "int"
+      },
+      {
+        "id": "split",
+        "label": "RGB-Versatz",
+        "min": 0.0,
+        "max": 40.0,
+        "default": 6.0,
+        "kind": "int"
+      },
+      {
+        "id": "seed",
+        "label": "Variante",
+        "min": 0.0,
+        "max": 999.0,
+        "default": 1.0,
+        "kind": "int"
+      }
+    ],
+    "heavy": true
+  },
+  {
+    "id": "edgeDetect",
+    "version": 1,
+    "category": "stylize",
+    "label": "Kanten finden",
+    "description": "Sobel-Kanten der Helligkeit, hell auf dunkel.",
+    "params": [
+      {
+        "id": "amount",
+        "label": "Verstärkung",
+        "min": 0.1,
+        "max": 8.0,
+        "default": 1.0,
+        "kind": "float",
+        "unit": "",
+        "scale": 1.0
+      },
+      {
+        "id": "invert",
+        "label": "Dunkel auf hell",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.0,
+        "kind": "toggle"
+      }
+    ],
+    "heavy": true
+  },
+  {
+    "id": "lumaKey",
+    "version": 1,
+    "category": "keying",
+    "label": "Luma-Key",
+    "description": "Macht dunkle (oder helle) Bereiche transparent.",
+    "params": [
+      {
+        "id": "threshold",
+        "label": "Schwelle",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.1,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      },
+      {
+        "id": "softness",
+        "label": "Weichheit",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.1,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      },
+      {
+        "id": "invert",
+        "label": "Helles entfernen",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.0,
+        "kind": "toggle"
+      }
+    ],
+    "heavy": true
+  },
+  {
+    "id": "matte",
+    "version": 1,
+    "category": "keying",
+    "label": "Maske bereinigen",
+    "description": "Schrumpft (positiv) oder erweitert (negativ) die Alphamaske und macht ihre Kante weich.",
+    "params": [
+      {
+        "id": "choke",
+        "label": "Schrumpfen",
+        "min": -20.0,
+        "max": 20.0,
+        "default": 0.0,
+        "kind": "int"
+      },
+      {
+        "id": "feather",
+        "label": "Weiche Kante",
+        "min": 0.0,
+        "max": 40.0,
+        "default": 0.0,
+        "kind": "float",
+        "unit": " px",
+        "scale": 1.0
+      }
+    ],
+    "heavy": false
+  },
+  {
+    "id": "flip",
+    "version": 1,
+    "category": "transform",
+    "label": "Spiegeln (Achse)",
+    "description": "Kippt das Bild waagrecht und/oder senkrecht.",
+    "params": [
+      {
+        "id": "horizontal",
+        "label": "Waagrecht",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 1.0,
+        "kind": "toggle"
+      },
+      {
+        "id": "vertical",
+        "label": "Senkrecht",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.0,
+        "kind": "toggle"
+      }
+    ],
+    "heavy": false
+  },
+  {
+    "id": "shapeMask",
+    "version": 1,
+    "category": "transform",
+    "label": "Formmaske",
+    "description": "Rechteck- oder Ellipsenmaske mit weicher Kante, auch umgekehrt.",
+    "params": [
+      {
+        "id": "shape",
+        "label": "Form",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 1.0,
+        "kind": "choice",
+        "options": [
+          "Rechteck",
+          "Ellipse"
+        ]
+      },
+      {
+        "id": "center",
+        "label": "Mittelpunkt",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.5,
+        "kind": "point"
+      },
+      {
+        "id": "width",
+        "label": "Breite",
+        "min": 0.01,
+        "max": 1.0,
+        "default": 0.6,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      },
+      {
+        "id": "height",
+        "label": "Höhe",
+        "min": 0.01,
+        "max": 1.0,
+        "default": 0.6,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      },
+      {
+        "id": "feather",
+        "label": "Weiche Kante",
+        "min": 0.0,
+        "max": 400.0,
+        "default": 20.0,
+        "kind": "float",
+        "unit": " px",
+        "scale": 1.0
+      },
+      {
+        "id": "invert",
+        "label": "Umkehren",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.0,
+        "kind": "toggle"
+      }
+    ],
+    "heavy": true
+  },
+  {
+    "id": "border",
+    "version": 1,
+    "category": "transform",
+    "label": "Rahmen",
+    "description": "Farbiger Rand innerhalb der Clipfläche.",
+    "params": [
+      {
+        "id": "width",
+        "label": "Breite",
+        "min": 0.0,
+        "max": 200.0,
+        "default": 12.0,
+        "kind": "int"
+      },
+      {
+        "id": "color",
+        "label": "Farbe",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 1.0,
+        "kind": "color"
+      }
+    ],
+    "heavy": true
+  },
+  {
+    "id": "stroke",
+    "version": 1,
+    "category": "transform",
+    "label": "Kontur",
+    "description": "Farbige Kontur um die nicht transparenten Bereiche (z. B. Titel, freigestellte Personen).",
+    "params": [
+      {
+        "id": "width",
+        "label": "Breite",
+        "min": 1.0,
+        "max": 30.0,
+        "default": 4.0,
+        "kind": "int"
+      },
+      {
+        "id": "color",
+        "label": "Farbe",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.0,
+        "kind": "color"
+      }
+    ],
+    "heavy": false
+  },
+  {
+    "id": "dropShadow",
+    "version": 1,
+    "category": "transform",
+    "label": "Schlagschatten",
+    "description": "Weicher Schatten der Alphaform, versetzt unter dem Bild (innerhalb der Clipfläche).",
+    "params": [
+      {
+        "id": "distance",
+        "label": "Abstand",
+        "min": 0.0,
+        "max": 200.0,
+        "default": 12.0,
+        "kind": "int"
+      },
+      {
+        "id": "angle",
+        "label": "Richtung",
+        "min": -180.0,
+        "max": 180.0,
+        "default": 45.0,
+        "kind": "angle"
+      },
+      {
+        "id": "softness",
+        "label": "Weichheit",
+        "min": 0.0,
+        "max": 60.0,
+        "default": 8.0,
+        "kind": "float",
+        "unit": " px",
+        "scale": 1.0
+      },
+      {
+        "id": "opacity",
+        "label": "Deckkraft",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.6,
+        "kind": "float",
+        "unit": " %",
+        "scale": 100.0
+      },
+      {
+        "id": "color",
+        "label": "Farbe",
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.0,
+        "kind": "color"
+      }
+    ],
+    "heavy": true
+  }
+]

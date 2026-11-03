@@ -11,6 +11,7 @@
 
 pub mod audio;
 pub mod error;
+pub mod fx;
 pub mod history;
 pub mod io;
 pub mod model;
