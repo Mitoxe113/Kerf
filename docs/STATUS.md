@@ -31,7 +31,9 @@ Diese Liste ist absichtlich nüchtern. „Fertig“ heißt: implementiert, durch
 | Sauberes Beenden ohne offene Aufträge, Neustart ohne Wiederherstellungsdialog, Öffnen über „Zuletzt geöffnet“ | bestanden |
 | Programmmonitor zeigt Videobilder | **nicht bestanden unter Linux**: WebKitGTK spielt Medien über Tauris `asset:`-Protokoll nicht ab (`MediaError 4`, GStreamer `FormatError`), auch mit `gstreamer1.0-libav`; mit `file://` dekodiert derselbe Browser die Datei. Titel und Effekt-Vorschaubilder erscheinen. Unter Windows (WebView2, Medien über `http://asset.localhost`) ist die Wiedergabe laut Abschnitt *Fertig und verifiziert* in früheren Durchläufen in der laufenden App geprüft; in dieser Runde ließ sich Windows nicht bedienen. |
 
-**CI-Lauf für Commit `3e80735`:** Tests unter Windows (inkl. 16 Pipeline-Tests mit aktuellem FFmpeg) und der Windows-Installer grün.
+**CI-Lauf für Commit `c749c22` (Tag `v0.1.0`):** Tests unter Windows grün, darunter 16 von 16 Pipeline-Tests mit aktuellem FFmpeg, 30 Unit-Tests von kerf-media und 13 von kerf-library; der unsignierte CI-Installer baut.
+
+**Veröffentlicht:** [Kerf 0.1.0](https://github.com/Mitoxe113/Kerf/releases/tag/v0.1.0), Tag `v0.1.0` auf Commit `c749c22`, gebaut vom Release-Workflow (manueller Lauf mit *publish*). Einziges Asset: `Kerf_0.1.0_x64-setup.exe` (6.071.370 Byte, SHA-256 `53b0bd0fc20fc7c4ff15286b251c5dacc962655d64e000e17170b75b8c8d2536`), ein NSIS-Installer. Nicht Authenticode-signiert (kein Zertifikat hinterlegt, das Security-Verzeichnis der Datei ist leer). Ohne Update-Daten: Der Updater-Schlüssel war nicht als Secret hinterlegt, deshalb gibt es kein Update-Paket und kein `latest.json` (die App meldet bei manueller Prüfung „Keine Updates gefunden“). Der veröffentlichte Installer selbst wurde in dieser Umgebung nicht unter Windows ausgeführt.
 
 ## Schnittassistenten und Projektverwaltung
 
@@ -167,7 +169,7 @@ Dieser Abschnitt hat einen anderen Prüfstand als „Fertig und verifiziert“: 
 - **Windows-Installer (NSIS)** auf diesem System installiert, aktualisiert und deinstalliert: Installation pro Benutzer ohne Adminrechte, Startmenü-Eintrag, Dateizuordnung. Die Deinstallation entfernt Programm, Startmenü-Eintrag, Uninstall-Eintrag und Dateityp und stellt eine vorher vorhandene Zuordnung von `.kerf` wieder her; Benutzerdaten (Wiederherstellung, Versionen) bleiben erhalten.
 - **Automatische Updates** über GitHub-Releases, signiert mit einem eigenen Updater-Schlüssel (minisign). Ende-zu-Ende geprüft mit zwei signierten Builds (0.1.0 → 0.1.1) gegen einen lokalen Update-Server: Prüfung beim Start, Dialog mit Version, Datum und Hinweisen, Download, Signaturprüfung, Installation im passiven Modus, Neustart als 0.1.1. Ist beim Start schon ein Dialog offen (z. B. Wiederherstellung), erscheint das Angebot, sobald er geschlossen ist. Abschaltbar in den Einstellungen, *Hilfe › Nach Updates suchen …* prüft von Hand.
 - **CI auf GitHub Actions** unter Windows: Typprüfung, Frontend-Tests, Clippy, alle Rust-Tests einschließlich der Pipeline-Tests mit echtem FFmpeg (ein fehlendes FFmpeg lässt den Lauf scheitern statt Tests zu überspringen) und der unsignierte Installer als Artefakt.
-- **Release-Workflow:** Ein Tag `v…` baut den Windows-Installer mit Updater-Signatur und `latest.json` und veröffentlicht das Release nach erfolgreichem Build; Code-Signing ist vorbereitet und greift, sobald ein Zertifikat als Secret hinterlegt ist.
+- **Release-Workflow:** Ein Tag `v…` oder ein manueller Lauf mit *publish* baut den Windows-Installer und veröffentlicht das Release nach erfolgreichem Build; fehlt das Tag, legt er es auf dem gebauten Commit an. Update-Paket und `latest.json` entstehen nur mit hinterlegtem Updater-Schlüssel, Code-Signing nur mit hinterlegtem Zertifikat. So entstand 0.1.0 (siehe *Release 0.1.0*).
 - **Lizenz:** GPL-3.0-or-later, Drittanbieter-Hinweise in [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
 
 ## Performance
@@ -211,8 +213,8 @@ Alle Tests laufen in der CI unter Windows.
 
 - **Explorer-Drop und native Dateidialoge** wurden nicht mit echten Betriebssystem-Eingaben ferngesteuert (die Bildschirmsteuerung wurde für diesen Test nicht freigegeben). Geprüft sind der Drop-Handler mit Tauris Drop-Ereignis und die Aktionen hinter den Dialogen mit festen Pfaden.
 - **Nur Windows:** macOS und Linux werden nicht gebaut und nicht getestet. Unter Linux spielte der Programmmonitor im Test keine Videos ab (siehe *Release 0.1.0*).
-- **Code-Signing:** Ohne hinterlegtes Zertifikat ist der Windows-Installer unsigniert (SmartScreen-Hinweis beim ersten Start). Update-Pakete sind davon unabhängig mit dem Updater-Schlüssel signiert.
-- **Updates über GitHub** sind erst mit dem ersten veröffentlichten Release wirksam; der Weg über einen lokalen Server ist geprüft, der über GitHub selbst noch nicht.
+- **Code-Signing:** Der Installer von 0.1.0 ist nicht Authenticode-signiert (SmartScreen-Hinweis beim ersten Start). Die Update-Funktion installiert unabhängig davon nur Pakete mit gültiger Updater-Signatur.
+- **Updates über GitHub:** 0.1.0 enthält keine Update-Daten. Wirksam wird der Weg erst mit einem späteren Release, das mit dem zum öffentlichen Schlüssel in `tauri.conf.json` passenden privaten Schlüssel gebaut wurde. Geprüft ist er gegen einen lokalen Server, über GitHub noch nicht.
 - **Export:** weiterhin ein FFmpeg-Eingang pro Clipabschnitt. Segmentiertes Rendern verteilt die Arbeit, beschleunigt aber nur aufwendige Timelines; eine eigene GPU-Pipeline gibt es nicht (bewusst: FFmpeg segmentiert statt wgpu).
 - **Ripple** betrifft die bearbeitete und verknüpfte Spuren; *Einfügen*, Extract und Standbild verschieben alle nicht gesperrten Spuren.
 - **Keyframes:** kein Keyframe-Editor in der Timeline (Gummiband), Keyframes lassen sich nicht einzeln kopieren.

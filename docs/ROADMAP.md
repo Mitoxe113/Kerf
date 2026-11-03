@@ -54,7 +54,7 @@ Zuverlässigkeit (Deltas, geteilte Undo-Schnappschüsse, Autosave, Versionen, Wi
 ## Als Nächstes
 
 1. **Stockmedien live prüfen:** mit eigenen Schlüsseln für Pexels, GIPHY und Freesound sowie anonym für Openverse je eine Suche und einen Download in der App durchspielen; Pexels-Video-Hosts und GIPHY-Logo-Vorgaben gegen die Anbieterdokumentation prüfen.
-2. **Erstes Release:** Updater-Schlüssel als Secrets hinterlegen, Version taggen, Entwurf prüfen und veröffentlichen. Danach den Update-Weg über GitHub einmal mit einer installierten Vorversion durchspielen.
+2. **Updates über GitHub einschalten:** 0.1.0 ist ohne Update-Daten veröffentlicht. Den privaten Updater-Schlüssel (passend zum öffentlichen in `tauri.conf.json`) und sein Passwort als Secrets `TAURI_SIGNING_PRIVATE_KEY` und `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` hinterlegen, dann bekommt 0.1.1 ein `latest.json`. Den Weg 0.1.0 → 0.1.1 über GitHub einmal mit einer installierten 0.1.0 durchspielen.
 3. **Code-Signierung:** Ein Authenticode-Zertifikat für Windows besorgen und als Secret hinterlegen; der Release-Workflow ist dafür vorbereitet. Bis dahin warnt SmartScreen beim Installer.
 4. **macOS und Linux (derzeit nicht geplant):** Vor einer Rückkehr müsste unter Linux die Wiedergabe über das `asset:`-Protokoll in WebKitGTK gelöst werden (siehe STATUS, *Release 0.1.0*); unter macOS Dateizuordnung über `RunEvent::Opened`, Dialoge und Wiedergabe in WKWebView prüfen.
 5. **Keyframes:** Keyframe-Editor in der Timeline (Gummiband für Lautstärke), Keyframes einzeln kopieren und einfügen.
