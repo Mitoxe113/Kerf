@@ -30,6 +30,7 @@ import { activeSequence, useProject } from "./state/project";
 import { ContextMenuHost } from "./ui/primitives";
 import { AssistantPanel } from "./panels/Assistant";
 import { MarkersPanel } from "./panels/Markers";
+import { ProjectPanel } from "./panels/ProjectPanel";
 
 const PANELS: Record<PanelId, React.ReactNode> = {
   media: <MediaBrowser />,
@@ -48,6 +49,7 @@ const PANELS: Record<PanelId, React.ReactNode> = {
   stock: <StockBrowser />,
   assist: <AssistantPanel />,
   markers: <MarkersPanel />,
+  project: <ProjectPanel />,
 };
 
 /** Keeps the playback engine in sync with the document and view settings. */

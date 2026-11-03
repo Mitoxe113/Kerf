@@ -904,3 +904,18 @@ export interface DuckPlan {
   skipped: string[];
   unreadable: string[];
 }
+
+// --- project management ---------------------------------------------------------
+
+export interface ArchiveOptions { includeUnused: boolean }
+export interface ArchivePlan { files: { source: string; target: string; bytes: number }[]; missing: string[]; fonts: string[]; totalBytes: number; unused: number }
+export interface ArchiveReport { projectFile: string; copied: number; bytes: number; missing: string[]; fonts: string[]; verified: boolean }
+export interface ArchiveProgress { job: Uuid; done: number; total: number }
+
+export type MatchKind = "nameAndSize" | "name" | "stem";
+export interface RelinkCandidate { path: string; kind: MatchKind; size: number; sameDuration: boolean | null }
+export interface RelinkSuggestion { media: Uuid; name: string; oldPath: string; candidates: RelinkCandidate[] }
+export interface RelinkSearch { suggestions: RelinkSuggestion[]; scanned: number; truncated: boolean }
+
+export type CacheKind = "proxies" | "thumbnails" | "waveforms" | "other";
+export interface CacheInfo { root: string; kinds: { kind: CacheKind; bytes: number; files: number; unusedBytes: number }[]; totalBytes: number; freeBytes: number | null }

@@ -5,7 +5,7 @@ import { create } from "zustand";
 import type { KeyParam, PasteItem, Rgb, Uuid } from "../lib/types";
 
 export type ToolId = "select" | "razor" | "ripple" | "roll" | "slip" | "slide" | "hand" | "zoom";
-export type PanelId = "media" | "monitor" | "inspector" | "timeline" | "meters" | "scopes" | "export" | "mixer" | "history" | "source" | "subtitles" | "multicam" | "effects" | "stock" | "assist" | "markers";
+export type PanelId = "media" | "monitor" | "inspector" | "timeline" | "meters" | "scopes" | "export" | "mixer" | "history" | "source" | "subtitles" | "multicam" | "effects" | "stock" | "assist" | "markers" | "project";
 export type WorkspaceId = "edit" | "media" | "color" | "audio" | "export";
 
 export interface LayoutNode {
@@ -94,6 +94,7 @@ export const PANEL_LABELS: Record<PanelId, string> = {
   stock: "Stockmedien",
   assist: "Assistent",
   markers: "Marker",
+  project: "Projekt",
 };
 
 export interface CustomWorkspace {

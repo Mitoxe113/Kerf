@@ -5,6 +5,13 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AnalysisProgress,
+  ArchiveOptions,
+  ArchivePlan,
+  ArchiveProgress,
+  ArchiveReport,
+  CacheInfo,
+  CacheKind,
+  RelinkSearch,
   AnalysisRequest,
   AnalysisResult,
   AnalysisTarget,
@@ -87,6 +94,12 @@ export const api = {
   analyzeCancel: (job: Uuid) => invoke<void>("analyze_cancel", { job }),
   duckPlan: (job: Uuid, sequence: Uuid, triggers: Uuid[], targets: Uuid[], speech: SilenceOptions, duck: DuckOptions) =>
     invoke<DuckPlan>("duck_plan", { job, sequence, triggers, targets, speech, duck }),
+  archivePlan: (options: ArchiveOptions) => invoke<ArchivePlan>("archive_plan", { options }),
+  archiveWrite: (job: Uuid, dest: string, options: ArchiveOptions) => invoke<ArchiveReport>("archive_write", { job, dest, options }),
+  relinkSearch: (media: Uuid[], dirs: string[]) => invoke<RelinkSearch>("relink_search", { media, dirs }),
+  cacheInfo: () => invoke<CacheInfo>("cache_info"),
+  cacheClear: (kinds: CacheKind[], includeOpen: boolean) => invoke<number>("cache_clear", { kinds, includeOpen }),
+  mediaMetadata: (media: Uuid) => invoke<Record<string, unknown>>("media_metadata", { media }),
   syncAngles: (media: Uuid[]) => invoke<(number | null)[]>("sync_angles", { media }),
   freezeFrame: (sequence: Uuid, clip: Uuid, frame: number, seconds: number) => serial(() => invoke<Delta>("freeze_frame", { sequence, clip, frame, seconds })),
   undo: () => serial(() => invoke<Delta | null>("undo")),
@@ -164,6 +177,7 @@ export interface MediaJobEvent {
 
 export const events = {
   mediaUpdated: (cb: (a: MediaAsset) => void): Promise<UnlistenFn> => listen<MediaAsset>("media-updated", (e) => whenIdle(() => cb(e.payload))),
+  archiveProgress: (cb: (p: ArchiveProgress) => void): Promise<UnlistenFn> => listen<ArchiveProgress>("archive-progress", (e) => cb(e.payload)),
   analysisProgress: (cb: (p: AnalysisProgress) => void): Promise<UnlistenFn> => listen<AnalysisProgress>("analysis-progress", (e) => cb(e.payload)),
   mediaJob: (cb: (e: MediaJobEvent) => void): Promise<UnlistenFn> => listen<MediaJobEvent>("media-job", (e) => cb(e.payload)),
   exportUpdated: (cb: (j: ExportJob) => void): Promise<UnlistenFn> => listen<ExportJob>("export-updated", (e) => cb(e.payload)),
