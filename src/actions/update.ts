@@ -16,8 +16,8 @@ export const pendingUpdate = () => pending;
 
 /**
  * Looks for a newer version and offers it. `quiet` (the check at start)
- * says nothing when there is none or the check fails, and only mentions an
- * update when a dialog is already open.
+ * says nothing when there is none or the check fails, and waits with the
+ * offer until a dialog that is already open (recovery, …) is closed.
  */
 export async function checkForUpdate(quiet: boolean) {
   let update: Update | null;
@@ -35,8 +35,13 @@ export async function checkForUpdate(quiet: boolean) {
     return;
   }
   pending = update;
-  if (quiet && useEditor.getState().dialog) toast.info(`Kerf ${update.version} ist verfügbar`, "Hilfe › Nach Updates suchen …");
-  else useEditor.getState().set({ dialog: { kind: "update" } });
+  const offer = () => useEditor.getState().set({ dialog: { kind: "update" } });
+  if (!quiet || !useEditor.getState().dialog) return offer();
+  const off = useEditor.subscribe((s) => {
+    if (s.dialog) return;
+    off();
+    offer();
+  });
 }
 
 /**
