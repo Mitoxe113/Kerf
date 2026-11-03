@@ -3,7 +3,8 @@ name: Release
 # A tag v1.2.3 (or a manual run) builds the signed Windows installer and puts
 # it, with latest.json for the in-app updater, into a release. For a tag the
 # release is published once the build succeeded, which makes it the update
-# every installed Kerf finds; a manual run leaves a draft.
+# every installed Kerf finds; a manual run leaves a draft unless "publish" is
+# set, then publishing creates the tag v<version> on the built commit.
 #
 # Needs the secrets TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 # (the updater key); without them the build fails and nothing is published.
@@ -16,6 +17,11 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      publish:
+        description: "Release nach erfolgreichem Build veröffentlichen (GitHub legt dabei das Tag an)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -85,7 +91,7 @@ jobs:
   publish:
     name: Publish release
     needs: [draft, build]
-    if: github.ref_type == 'tag'
+    if: github.ref_type == 'tag' || inputs.publish
     runs-on: ubuntu-latest
     steps:
       - env:
