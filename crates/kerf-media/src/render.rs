@@ -359,6 +359,11 @@ fn transition_chains(
             chains.push(format!("[dip{n}][dc{n}]overlay=eof_action=pass:format=rgb[mix{n}]"));
             return format!("mix{n}");
         }
+        k if k.mask().is_some() => {
+            // P = T / d: frame k of the transition at k / len, as in the preview.
+            let cond = k.mask().unwrap_or("0").replace("PRG", &format!("(T/{})", num(d)));
+            format!("{},format=gray,geq=lum='255*({cond})'", src("black"))
+        }
         TransitionKind::Dissolve | TransitionKind::Crossfade => {
             format!("{},format=rgb24,fade=t=in:st=0:d={},extractplanes=r", src("white"), num(d))
         }

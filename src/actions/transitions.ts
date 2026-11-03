@@ -16,6 +16,13 @@ export const TRANSITIONS: { value: TransitionKind; label: string; short: string 
   { value: "wipeRight", label: "Wischen nach rechts", short: "Wisch →" },
   { value: "wipeUp", label: "Wischen nach oben", short: "Wisch ↑" },
   { value: "wipeDown", label: "Wischen nach unten", short: "Wisch ↓" },
+  { value: "irisRound", label: "Iris rund", short: "Iris ○" },
+  { value: "irisBox", label: "Iris eckig", short: "Iris □" },
+  { value: "clock", label: "Uhrzeiger", short: "Uhr" },
+  { value: "barnDoorH", label: "Tür horizontal öffnen", short: "Tür ↔" },
+  { value: "barnDoorV", label: "Tür vertikal öffnen", short: "Tür ↕" },
+  { value: "wipeDiagonal", label: "Wischen diagonal", short: "Wisch ↘" },
+  { value: "blinds", label: "Jalousie", short: "Jalousie" },
   { value: "crossfade", label: "Kreuzblende", short: "Kreuzblende" },
 ];
 

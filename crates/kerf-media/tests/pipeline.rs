@@ -762,6 +762,20 @@ fn transitions_render() {
     let (l, r) = (half_luma(&tools, &f, 1.7, true), half_luma(&tools, &f, 1.7, false));
     assert!(l < w - 30.0 && (r - w).abs() < 8.0, "a quarter in: {l:.1} {r:.1}");
 
+    // Mask transitions, half way (p = 0.5).
+    let f = render(&mut p, TransitionKind::Clock, None);
+    let (l, r) = (half_luma(&tools, &f, 2.0, true), half_luma(&tools, &f, 2.0, false));
+    near(l, w, "clock: left half still old");
+    near(r, g, "clock: right half swept");
+    let f = render(&mut p, TransitionKind::IrisRound, None);
+    near(region_luma(&tools, &f, 2.0, (120, 68, 80, 45)), g, "iris: centre is new");
+    near(region_luma(&tools, &f, 2.0, (0, 0, 20, 11)), w, "iris: corner is old");
+    let f = render(&mut p, TransitionKind::Blinds, None);
+    near(mean_luma(&tools, &f, 2.0), (w + g) / 2.0, "blinds: half of every band");
+    let f = render(&mut p, TransitionKind::BarnDoorH, None);
+    near(region_luma(&tools, &f, 2.0, (120, 0, 80, 180)), g, "barn door: middle open");
+    near(region_luma(&tools, &f, 2.0, (0, 0, 40, 180)), w, "barn door: edge closed");
+
     // The outgoing clip ends with its media (slipped to the last frames): its last
     // frame holds, also when the range starts after the cut. A fade-out on it that
     // began before the range is continued, not restarted.
