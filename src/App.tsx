@@ -7,6 +7,8 @@ import { checkForUpdate } from "./actions/update";
 import { engine } from "./engine/playback";
 import { loadFonts } from "./state/fonts";
 import { api, events } from "./lib/ipc";
+import { missingPreviewCodecs, previewCodecRemedy, previewCodecs } from "./lib/preview";
+import { toast } from "./state/toasts";
 import { ExportPanel } from "./panels/ExportPanel";
 import { StockBrowser } from "./panels/StockBrowser";
 import { HistoryPanel } from "./panels/History";
@@ -93,6 +95,12 @@ export function App() {
     const st = useProject.getState();
     void api.projectState().then(st.applyState);
     void api.appInfo().then(st.setAppInfo);
+    const missing = missingPreviewCodecs(previewCodecs());
+    if (missing.length) {
+      const text = `Die Vorschau kann ${missing.join(" und ")} nicht abspielen und bleibt bei solchen Medien schwarz. ${previewCodecRemedy(navigator.userAgent)}`;
+      void api.logFrontend("warn", text);
+      toast.error("Vorschau eingeschränkt", text);
+    }
     // Imported fonts must be registered before titles are drawn for the preview or export.
     void loadFonts();
     void api.exportJobs().then(st.setExports);

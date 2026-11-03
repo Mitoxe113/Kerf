@@ -649,6 +649,9 @@ export interface ExportQc {
 export interface AppInfo {
   version: string;
   ffmpeg: string | null;
+  /** The installed FFmpeg is older than `ffmpegMin`; exports fail with it. */
+  ffmpegTooOld: boolean;
+  ffmpegMin: number;
   hwEncoders: string[] | null;
   cacheDir: string;
   build: string;

@@ -1,5 +1,10 @@
 {
   "bundle": {
-    "targets": ["deb", "appimage"]
+    "targets": ["deb", "appimage"],
+    "linux": {
+      "deb": {
+        "depends": ["gstreamer1.0-libav", "gstreamer1.0-plugins-good"]
+      }
+    }
   }
 }

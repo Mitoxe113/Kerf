@@ -4,6 +4,23 @@ use std::process::{Command, Output, Stdio};
 
 use crate::MediaError;
 
+/// Oldest FFmpeg release Kerf works with: the export passes its filter graph
+/// with `-/filter_complex`, which FFmpeg 7.0 introduced.
+pub const MIN_FFMPEG_MAJOR: u32 = 7;
+
+/// Major release from the first line of `ffmpeg -version`, e.g.
+/// "ffmpeg version 6.1.1-3ubuntu5 …" → 6, "ffmpeg version n7.0.2" → 7.
+/// `None` for git snapshots ("N-112233-g…") and anything unrecognised.
+pub fn ffmpeg_major(version_line: &str) -> Option<u32> {
+    let v = version_line.split_whitespace().skip_while(|w| *w != "version").nth(1)?;
+    let v = v.strip_prefix('n').unwrap_or(v);
+    let digits: String = v.chars().take_while(char::is_ascii_digit).collect();
+    if digits.is_empty() || !v[digits.len()..].starts_with('.') {
+        return None;
+    }
+    digits.parse().ok()
+}
+
 /// Paths of the FFmpeg executables.
 #[derive(Clone, Debug)]
 pub struct Tools {
@@ -82,6 +99,14 @@ impl Tools {
         Ok(String::from_utf8_lossy(&out.stdout).lines().next().unwrap_or_default().to_string())
     }
 
+    /// The version of the installed FFmpeg when it is a release older than
+    /// [`MIN_FFMPEG_MAJOR`]. Git snapshots and unparsable versions count as new enough.
+    pub fn too_old(&self) -> Option<String> {
+        let line = self.version().ok()?;
+        let version = line.split_whitespace().skip_while(|w| *w != "version").nth(1)?.to_string();
+        (ffmpeg_major(&line)? < MIN_FFMPEG_MAJOR).then_some(version)
+    }
+
     /// Encoders that actually work on this machine (a 1-frame test encode
     /// each), so the export dialog never offers a codec that cannot run.
     pub fn working_hw_encoders(&self) -> Vec<String> {
@@ -128,4 +153,21 @@ pub(crate) fn run(mut cmd: Command, what: &'static str) -> Result<Output, MediaE
 
 pub(crate) fn path_arg(p: &Path) -> &OsStr {
     p.as_os_str()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ffmpeg_major;
+
+    #[test]
+    fn major_version_from_real_version_lines() {
+        assert_eq!(ffmpeg_major("ffmpeg version 6.1.1-3ubuntu5 Copyright (c) 2000-2023 the FFmpeg developers"), Some(6));
+        assert_eq!(ffmpeg_major("ffmpeg version 7.1-full_build-www.gyan.dev Copyright (c) 2000-2024"), Some(7));
+        assert_eq!(ffmpeg_major("ffmpeg version n7.0.2 Copyright (c) 2000-2024"), Some(7));
+        assert_eq!(ffmpeg_major("ffmpeg version 4.4.2-0ubuntu0.22.04.1 Copyright"), Some(4));
+        // Git snapshots and date builds carry no release number.
+        assert_eq!(ffmpeg_major("ffmpeg version N-118000-g1a2b3c4d5e-20241231 Copyright"), None);
+        assert_eq!(ffmpeg_major("ffmpeg version 2024-10-10-git-abc Copyright"), None);
+        assert_eq!(ffmpeg_major(""), None);
+    }
 }

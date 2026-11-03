@@ -58,8 +58,9 @@ Zuverlässigkeit (Deltas, geteilte Undo-Schnappschüsse, Autosave, Versionen, Wi
 3. **Code-Signierung:** Zertifikate für Windows (Authenticode) und macOS (Developer ID, Notarisierung) besorgen und als Secrets hinterlegen; der Release-Workflow ist dafür vorbereitet.
 4. **macOS und Linux von Hand prüfen:** Dateizuordnung (unter macOS über `RunEvent::Opened`), Drag & Drop, Dialoge, Wiedergabe in WKWebView bzw. WebKitGTK (andere Codecs als WebView2).
 5. **Keyframes:** Keyframe-Editor in der Timeline (Gummiband für Lautstärke), Keyframes einzeln kopieren und einfügen.
-6. **Assistenten in der App durchspielen:** Szenen, Stille, Beats, Ducking, Archiv, Relink und Cache mit echten Projekten in der Tauri-App bedienen; Kapitel in einem Abspieler prüfen.
-7. **Effekte:** Masken (Rechteck, Ellipse, Freiform, animierbar), Rauschunterdrückung (`afftdn` im Export, Gegenstück in der Vorschau).
+6. **`ttf-parser` ersetzen:** Die Crate ist laut RUSTSEC-2026-0192 nicht mehr gepflegt und liest importierte (also fremde) Schriftdateien; als Nachfolger nennt das Advisory `skrifa`.
+7. **Assistenten in der App durchspielen:** Szenen, Stille, Beats, Ducking, Archiv, Relink und Cache mit echten Projekten in der Tauri-App bedienen; Kapitel in einem Abspieler prüfen.
+8. **Effekte:** Masken (Rechteck, Ellipse, Freiform, animierbar), Rauschunterdrückung (`afftdn` im Export, Gegenstück in der Vorschau).
 
 ## Später
 

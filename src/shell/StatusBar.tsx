@@ -1,5 +1,6 @@
 import { CheckCircle2, Cpu, Info, Loader2, XCircle } from "lucide-react";
 import { formatRate } from "../lib/time";
+import { missingPreviewCodecs, previewCodecRemedy, previewCodecs } from "../lib/preview";
 import { useEditor } from "../state/editor";
 import { useActiveSequence, useProject } from "../state/project";
 import { useToasts } from "../state/toasts";
@@ -16,12 +17,26 @@ export function StatusBar() {
   const proxies = Object.values(proxyJobs);
   const running = exports.find((j) => j.status === "running");
   const queued = exports.filter((j) => j.status === "queued").length;
+  const missing = missingPreviewCodecs(previewCodecs());
   return (
     <footer className="flex h-6 shrink-0 items-center gap-4 border-t border-line bg-ground px-3 text-[10.5px] text-fg-3">
-      <span className={cx("flex items-center gap-1.5", !info?.ffmpeg && "text-danger")} title={info?.ffmpeg ?? undefined}>
-        <span className={cx("h-1.5 w-1.5 rounded-full", info?.ffmpeg ? "bg-signal" : "bg-danger")} />
-        {info?.ffmpeg ? `FFmpeg ${info.ffmpeg.match(/version (\S+)/)?.[1]?.split("-")[0] ?? ""}` : "FFmpeg fehlt"}
+      <span
+        className={cx("flex items-center gap-1.5", !info?.ffmpeg && "text-danger", info?.ffmpegTooOld && "text-warn")}
+        title={
+          info?.ffmpegTooOld
+            ? `${info.ffmpeg}\nKerf braucht FFmpeg ${info.ffmpegMin} oder neuer; Exporte schlagen mit dieser Version fehl.`
+            : (info?.ffmpeg ?? undefined)
+        }
+      >
+        <span className={cx("h-1.5 w-1.5 rounded-full", !info?.ffmpeg ? "bg-danger" : info.ffmpegTooOld ? "bg-warn" : "bg-signal")} />
+        {info?.ffmpeg ? `FFmpeg ${info.ffmpeg.match(/version (\S+)/)?.[1]?.split("-")[0] ?? ""}${info.ffmpegTooOld ? " (zu alt)" : ""}` : "FFmpeg fehlt"}
       </span>
+      {missing.length > 0 && (
+        <span className="flex items-center gap-1.5 text-warn" title={`Die Vorschau kann ${missing.join(" und ")} nicht abspielen. ${previewCodecRemedy(navigator.userAgent)} Der Export ist nicht betroffen.`}>
+          <span className="h-1.5 w-1.5 rounded-full bg-warn" />
+          Vorschau ohne {missing.join("/")}
+        </span>
+      )}
       {info?.hwEncoders && info.hwEncoders.length > 0 && (
         <span className="flex items-center gap-1">
           <Cpu size={11} /> {info.hwEncoders.some((e) => e.includes("nvenc")) ? "NVENC" : info.hwEncoders.some((e) => e.includes("qsv")) ? "Quick Sync" : "AMF"}

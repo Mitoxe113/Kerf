@@ -249,7 +249,13 @@ fn run_job(app: &AppHandle, id: Uuid) {
             Err(e) => {
                 log::error!("export {id} failed: {e}");
                 j.status = ExportStatus::Failed;
-                j.error = Some(e.to_string());
+                j.error = Some(match tools.too_old() {
+                    Some(v) => format!(
+                        "{e}\n\nDas installierte FFmpeg ist zu alt ({v}). Kerf braucht FFmpeg {} oder neuer.",
+                        kerf_media::tools::MIN_FFMPEG_MAJOR
+                    ),
+                    None => e.to_string(),
+                });
             }
         }
     });

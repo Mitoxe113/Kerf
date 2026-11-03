@@ -508,6 +508,12 @@ export function ExportPanel() {
               Auf dem Ziellaufwerk ist voraussichtlich nicht genug Platz.
             </div>
           )}
+          {appInfo?.ffmpegTooOld && (
+            <div className="flex items-start gap-1.5 text-[10.5px] leading-snug text-warn">
+              <TriangleAlert size={12} className="mt-px shrink-0" />
+              Das installierte FFmpeg ist älter als Version {appInfo.ffmpegMin}. Kerf übergibt den Filtergraphen mit einer Option, die es erst ab FFmpeg 7 gibt; mit dieser Version schlägt der Export fehl.
+            </div>
+          )}
           <Button variant="primary" className="w-full" disabled={seconds <= 0 || !appInfo?.ffmpeg} onClick={() => void start()}>
             {appInfo?.ffmpeg ? "Zur Render-Warteschlange hinzufügen" : "FFmpeg nicht gefunden"}
           </Button>

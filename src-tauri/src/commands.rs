@@ -67,6 +67,9 @@ pub(crate) type CmdResult<T> = Result<T, CommandError>;
 pub struct AppInfo {
     pub version: String,
     pub ffmpeg: Option<String>,
+    /// The installed FFmpeg is older than Kerf supports (exports fail).
+    pub ffmpeg_too_old: bool,
+    pub ffmpeg_min: u32,
     pub hw_encoders: Option<Vec<String>>,
     pub cache_dir: PathBuf,
     /// Commit the binary was built from, and whether it is a debug build.
@@ -85,9 +88,12 @@ pub fn take_launch_file(state: State<'_, AppState>) -> Option<PathBuf> {
 
 #[tauri::command]
 pub fn app_info(app: AppHandle, state: State<'_, AppState>) -> AppInfo {
+    let ffmpeg = state.media.tools.as_ref().and_then(|t| t.version().ok());
     AppInfo {
         version: app.package_info().version.to_string(),
-        ffmpeg: state.media.tools.as_ref().and_then(|t| t.version().ok()),
+        ffmpeg_too_old: ffmpeg.as_deref().and_then(kerf_media::tools::ffmpeg_major).is_some_and(|m| m < kerf_media::tools::MIN_FFMPEG_MAJOR),
+        ffmpeg_min: kerf_media::tools::MIN_FFMPEG_MAJOR,
+        ffmpeg,
         hw_encoders: lock(&state.media.hw_encoders).clone(),
         cache_dir: state.paths.cache.clone(),
         build: env!("KERF_COMMIT").to_string(),
