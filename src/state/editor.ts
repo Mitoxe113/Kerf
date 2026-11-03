@@ -124,6 +124,7 @@ export type Dialog =
   | { kind: "sequenceSettings"; sequence: Uuid }
   | { kind: "shortcuts" }
   | { kind: "about" }
+  | { kind: "update" }
   | { kind: "recovery" }
   | { kind: "versions" }
   | { kind: "normalize"; clips: Uuid[] }
@@ -185,6 +186,8 @@ interface EditorStore {
   autosaveSeconds: number;
   /** Saved versions kept per project (0 = none). */
   keepVersions: number;
+  /** Look for a new version when Kerf starts. */
+  checkUpdates: boolean;
   /** The program output window is open (not persisted). */
   outputWindow: boolean;
   /** Pixels per sequence pixel the output window shows (0 = none); the monitor renders at least that many. */
@@ -216,6 +219,7 @@ const PERSISTED = [
   "mediaSort",
   "autosaveSeconds",
   "keepVersions",
+  "checkUpdates",
 ] as const;
 
 function loadPrefs(): Partial<EditorStore> {
@@ -262,6 +266,7 @@ export const useEditor = create<EditorStore>((set, get) => ({
   renameMedia: null,
   autosaveSeconds: 30,
   keepVersions: 20,
+  checkUpdates: true,
   outputWindow: false,
   outputScale: 0,
   showStartScreen: true,

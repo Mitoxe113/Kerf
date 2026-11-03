@@ -2,6 +2,7 @@
 // shortcut editor all read from here, so every visible command is wired.
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { checkForUpdate } from "./update";
 import { toggleOutputWindow } from "../shell/OutputWindow";
 import { switchAngle } from "./multicam";
 import { engine } from "../engine/playback";
@@ -187,6 +188,7 @@ const base: Action[] = [
   { id: "win.save", group: "Fenster", label: "Arbeitsbereich speichern unter …", keys: [], run: () => ed().set({ dialog: { kind: "saveWorkspace" } }) },
 
   // Hilfe
+  { id: "help.update", group: "Hilfe", label: "Nach Updates suchen …", keys: [], run: () => checkForUpdate(false) },
   { id: "help.about", group: "Hilfe", label: "Über Kerf", keys: [], run: () => ed().set({ dialog: { kind: "about" } }) },
 ];
 

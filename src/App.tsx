@@ -3,6 +3,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect } from "react";
 import { installKeyboard } from "./actions/keymap";
 import { guardUnsaved, importMedia, openProject } from "./actions/project";
+import { checkForUpdate } from "./actions/update";
 import { engine } from "./engine/playback";
 import { api, events } from "./lib/ipc";
 import { ExportPanel } from "./panels/ExportPanel";
@@ -87,6 +88,8 @@ export function App() {
     });
     // Launched by double-clicking a project file.
     void api.takeLaunchFile().then((path) => path && void openProject(path));
+    // A little after start, so the check does not compete with loading the project.
+    const updates = !import.meta.env.DEV && useEditor.getState().checkUpdates ? window.setTimeout(() => void checkForUpdate(true), 8000) : 0;
 
     const unlisten = [
       events.mediaUpdated((a) => useProject.getState().applyMedia(a)),
@@ -121,6 +124,7 @@ export function App() {
     window.addEventListener("contextmenu", noMenu);
 
     return () => {
+      window.clearTimeout(updates);
       cleanups.forEach((c) => c());
       unlisten.forEach((p) => void p.then((u) => u()));
       window.removeEventListener("keydown", exitFullscreen);

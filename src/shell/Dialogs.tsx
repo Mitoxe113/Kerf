@@ -12,7 +12,8 @@ import { AddAudioEffect, AudioEffectsEditor } from "../panels/AudioEffects";
 import { currentLayout, useEditor, type Dialog } from "../state/editor";
 import { activeSequence, edit, reportError, useProject } from "../state/project";
 import { toast } from "../state/toasts";
-import { Button, cx, Field, Kbd, Modal, NumberField, Segmented, Select, TextInput, Toggle } from "../ui/primitives";
+import { Button, cx, Field, Kbd, Modal, NumberField, Progress, Segmented, Select, TextInput, Toggle } from "../ui/primitives";
+import { installUpdate, pendingUpdate } from "../actions/update";
 import { Logo } from "./TitleBar";
 import { CommandPalette } from "./CommandPalette";
 import { Preferences } from "./Preferences";
@@ -626,6 +627,52 @@ function SaveWorkspace({ onClose }: { onClose: () => void }) {
   );
 }
 
+function UpdateDialog({ onClose }: { onClose: () => void }) {
+  const update = pendingUpdate();
+  // undefined: not started; null: running, size unknown; 0..1: downloaded part.
+  const [progress, setProgress] = useState<number | null | undefined>(undefined);
+  const [error, setError] = useState<string | null>(null);
+  if (!update) return null;
+  const busy = progress !== undefined;
+  const run = async () => {
+    setError(null);
+    try {
+      if (!(await installUpdate(setProgress))) setProgress(undefined);
+    } catch (e) {
+      setError(String(e));
+      setProgress(undefined);
+    }
+  };
+  const date = update.date ? new Date(update.date.replace(" ", "T").replace(/ .*$/, "")) : null;
+  return (
+    <Modal
+      title="Update verfügbar"
+      onClose={busy ? () => undefined : onClose}
+      footer={
+        <>
+          <Button onClick={onClose} disabled={busy}>
+            Später
+          </Button>
+          <Button variant="primary" onClick={() => void run()} disabled={busy}>
+            {busy ? "Wird installiert …" : "Jetzt installieren"}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-2 text-sm">
+        <div>
+          <span className="font-semibold">Kerf {update.version}</span> <span className="text-fg-3">(installiert: {update.currentVersion})</span>
+          {date && !Number.isNaN(date.getTime()) && <span className="text-fg-3"> · {date.toLocaleDateString("de-DE")}</span>}
+        </div>
+        {update.body && <pre className="max-h-60 overflow-auto whitespace-pre-wrap rounded-sm bg-ground p-2 font-sans text-xs text-fg-2">{update.body}</pre>}
+        {busy && <Progress value={progress ?? undefined} indeterminate={progress === null} />}
+        {error && <div className="text-xs text-danger">{error}</div>}
+        <p className="text-xs text-fg-4">Ungespeicherte Änderungen werden vorher abgefragt. Kerf startet danach neu.</p>
+      </div>
+    </Modal>
+  );
+}
+
 function About({ onClose }: { onClose: () => void }) {
   const info = useProject((s) => s.appInfo);
   return (
@@ -717,6 +764,8 @@ export function Dialogs() {
       return <SaveWorkspace onClose={close} />;
     case "about":
       return <About onClose={close} />;
+    case "update":
+      return <UpdateDialog onClose={close} />;
     case "prompt":
       return <PromptDialog key={dialog.title} dialog={dialog} onClose={close} />;
     case "confirm": {

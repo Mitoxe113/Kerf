@@ -51,6 +51,16 @@
         "mimeType": "application/x-kerf-project"
       }
     ],
-    "shortDescription": "Professional video editor"
+    "shortDescription": "Professional video editor",
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDhFMjhGMUY2NTlBNDkyMUQKUldRZGtxUlo5dkVvam12OGRyeGRaRDFYYUdFUlBXQVArM243Q1pKR0h5ZitmYnpFNUxrenV2YlIK",
+      "endpoints": ["https://github.com/Mitoxe113/Kerf/releases/latest/download/latest.json"],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

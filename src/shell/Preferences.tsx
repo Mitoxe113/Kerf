@@ -5,6 +5,7 @@
 import { FolderOpen } from "lucide-react";
 import type { ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { checkForUpdate } from "../actions/update";
 import { api } from "../lib/ipc";
 import { useEditor } from "../state/editor";
 import { useProject } from "../state/project";
@@ -35,6 +36,7 @@ export function Preferences({ onClose }: { onClose: () => void }) {
       snapping: s.snapping,
       linkedSelection: s.linkedSelection,
       trackSize: s.trackSize,
+      checkUpdates: s.checkUpdates,
       set: s.set,
     })),
   );
@@ -104,6 +106,16 @@ export function Preferences({ onClose }: { onClose: () => void }) {
               ]}
             />
           </Field>
+        </Group>
+
+        <Group title="Updates">
+          <Field label="Beim Start">
+            <Toggle label="Beim Start nach Updates suchen" checked={p.checkUpdates} onChange={(v) => p.set({ checkUpdates: v })} />
+            <Button size="sm" onClick={() => void checkForUpdate(false)}>
+              Jetzt suchen
+            </Button>
+          </Field>
+          <Note>Fragt die Release-Seite von Kerf auf GitHub ab. Installiert wird nur auf Nachfrage; Updates sind signiert und werden vor der Installation geprüft.</Note>
         </Group>
 
         <Group title="Tastatur">
