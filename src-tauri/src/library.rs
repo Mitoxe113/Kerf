@@ -94,3 +94,35 @@ pub fn recent_list(state: State<AppState>, kind: String) -> CmdResult<Vec<String
 pub fn recent_touch(state: State<AppState>, kind: String, key: String) -> CmdResult<()> {
     with(&state, |l| l.touch_recent(&kind, &key, now_ms()))
 }
+
+// ---- fonts ----
+
+static SYSTEM_FONTS: std::sync::Mutex<Option<Vec<kerf_library::fonts::FontFace>>> = std::sync::Mutex::new(None);
+
+/// System fonts (scanned once, again with `refresh`) and imported fonts.
+#[tauri::command(async)]
+pub fn font_list(state: State<AppState>, refresh: bool) -> CmdResult<Vec<kerf_library::fonts::FontFace>> {
+    use kerf_library::fonts;
+    let mut sys = lock(&SYSTEM_FONTS);
+    if refresh || sys.is_none() {
+        *sys = Some(fonts::scan(&fonts::system_dirs(), "system", 20_000));
+    }
+    let mut out = fonts::scan(std::slice::from_ref(&state.paths.fonts), "imported", 5_000);
+    out.extend(sys.clone().unwrap_or_default());
+    Ok(out)
+}
+
+/// Copies font files into Kerf's font folder (not installed system-wide).
+#[tauri::command(async)]
+pub fn font_import(state: State<AppState>, paths: Vec<String>) -> CmdResult<Vec<kerf_library::fonts::FontFace>> {
+    let mut out = Vec::new();
+    for p in paths {
+        out.extend(kerf_library::fonts::import(std::path::Path::new(&p), &state.paths.fonts)?);
+    }
+    Ok(out)
+}
+
+#[tauri::command(async)]
+pub fn font_remove(state: State<AppState>, path: String) -> CmdResult<()> {
+    Ok(kerf_library::fonts::remove(std::path::Path::new(&path), &state.paths.fonts)?)
+}

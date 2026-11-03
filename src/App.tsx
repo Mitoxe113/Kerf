@@ -5,6 +5,7 @@ import { installKeyboard } from "./actions/keymap";
 import { guardUnsaved, importMedia, openProject } from "./actions/project";
 import { checkForUpdate } from "./actions/update";
 import { engine } from "./engine/playback";
+import { loadFonts } from "./state/fonts";
 import { api, events } from "./lib/ipc";
 import { ExportPanel } from "./panels/ExportPanel";
 import { HistoryPanel } from "./panels/History";
@@ -84,6 +85,8 @@ export function App() {
     const st = useProject.getState();
     void api.projectState().then(st.applyState);
     void api.appInfo().then(st.setAppInfo);
+    // Imported fonts must be registered before titles are drawn for the preview or export.
+    void loadFonts();
     void api.exportJobs().then(st.setExports);
     void api.recoveryList().then((list) => {
       if (list.length) useEditor.getState().set({ dialog: { kind: "recovery" } });

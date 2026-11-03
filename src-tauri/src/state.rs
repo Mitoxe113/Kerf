@@ -74,6 +74,10 @@ pub struct AppPaths {
     /// Freeze frames of projects that have not been saved yet.
     pub stills: PathBuf,
     pub work: PathBuf,
+    /// Fonts the user imported (loaded by Kerf only, never installed system-wide).
+    pub fonts: PathBuf,
+    /// Downloaded and imported creative assets.
+    pub assets: PathBuf,
 }
 
 /// User preferences the engine needs (sent by the UI at startup and on change).

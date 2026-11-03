@@ -15,3 +15,5 @@ serde_json.workspace = true
 uuid.workspace = true
 thiserror.workspace = true
 rusqlite = { version = "0.32", features = ["bundled"] }
+ttf-parser = "0.25"
+sha2 = "0.10"
