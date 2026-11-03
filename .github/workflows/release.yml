@@ -3,7 +3,14 @@ name: Release
 # A tag v1.2.3 (or a manual run) builds signed installers for all platforms
 # and puts them, with latest.json for the in-app updater, into a draft
 # release. Publishing the draft makes it the update every Kerf finds.
-# Needs the secrets TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD.
+#
+# Needs the secrets TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+# (the updater key). Optional, for code signing:
+#   Windows: WINDOWS_CERTIFICATE (base64 .pfx), WINDOWS_CERTIFICATE_PASSWORD
+#   macOS:   APPLE_CERTIFICATE (base64 .p12), APPLE_CERTIFICATE_PASSWORD,
+#            APPLE_SIGNING_IDENTITY, and for notarization APPLE_ID,
+#            APPLE_PASSWORD (app-specific), APPLE_TEAM_ID
+# Without them the installers are unsigned (SmartScreen / Gatekeeper warn).
 # No build caches here: what gets signed is built from scratch.
 
 on:
@@ -15,8 +22,34 @@ permissions:
   contents: write
 
 jobs:
+  draft:
+    name: Draft release
+    runs-on: ubuntu-latest
+    outputs:
+      id: ${{ steps.draft.outputs.id }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME passt nicht zur Version $version in tauri.conf.json"
+            exit 1
+          fi
+          # One draft for all platforms; a rerun uploads into the existing one.
+          id=$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate --jq "map(select(.draft and .tag_name == \"v$version\"))[0].id // empty" | head -1)
+          if [ -z "$id" ]; then
+            id=$(gh api "repos/$GITHUB_REPOSITORY/releases" -f tag_name="v$version" -f target_commitish="$GITHUB_SHA" \
+              -f name="Kerf $version" -F draft=true --jq .id \
+              -f body="Installer für Windows, macOS und Linux. Kerf braucht ein installiertes FFmpeg (siehe README).")
+          fi
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
   build:
     name: ${{ matrix.name }}
+    needs: draft
     strategy:
       fail-fast: false
       matrix:
@@ -38,6 +71,32 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev patchelf
+      - name: Code signing (when certificates are set up)
+        shell: bash
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ "$RUNNER_OS" = Windows ] && [ -n "$WINDOWS_CERTIFICATE" ]; then
+            echo "$WINDOWS_CERTIFICATE" | base64 -d > "$RUNNER_TEMP/cert.pfx"
+            thumbprint=$(pwsh -NoProfile -Command '(Import-PfxCertificate -FilePath "$env:RUNNER_TEMP\cert.pfx" -CertStoreLocation Cert:\CurrentUser\My -Password (ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force)).Thumbprint')
+            rm "$RUNNER_TEMP/cert.pfx"
+            printf '{"bundle":{"windows":{"certificateThumbprint":"%s","digestAlgorithm":"sha256","timestampUrl":"http://timestamp.digicert.com"}}}' "$thumbprint" > "$RUNNER_TEMP/signing.json"
+            echo "SIGNING_ARGS=--config $RUNNER_TEMP/signing.json" >> "$GITHUB_ENV"
+          fi
+          # The Tauri CLI signs (and notarizes) on its own when these are set.
+          if [ "$RUNNER_OS" = macOS ] && [ -n "$APPLE_CERTIFICATE" ]; then
+            for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+              [ -n "${!name}" ] && printf '%s<<EOF_%s\n%s\nEOF_%s\n' "$name" "$name" "${!name}" "$name" >> "$GITHUB_ENV"
+            done
+          fi
+          exit 0
       - run: npm ci
       - uses: tauri-apps/tauri-action@v1
         env:
@@ -45,9 +104,5 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: v__VERSION__
-          releaseName: Kerf __VERSION__
-          releaseBody: Installer für Windows, macOS und Linux. Kerf braucht ein installiertes FFmpeg (siehe README).
-          releaseDraft: true
-          prerelease: false
-          args: ${{ matrix.args }}
+          releaseId: ${{ needs.draft.outputs.id }}
+          args: ${{ matrix.args }} ${{ env.SIGNING_ARGS }}
