@@ -19,6 +19,8 @@ Kerf trennt strikt zwischen **Engine** (Rust) und **Oberfläche** (React). Die E
 └─────┬───────────────────────────────┬─────────────────────────────────────────────┘
       ▼                               ▼
   kerf-core (rein, ohne I/O-Abh.)   kerf-media (FFmpeg als externer Prozess)
+  kerf-library (SQLite: Presets, Favoriten, Assets; Schriften)
+  kerf-assets (Anbieter-APIs, geprüfte Downloads, Lizenzberichte)
 ```
 
 ## kerf-core
@@ -46,6 +48,21 @@ Kerf trennt strikt zwischen **Engine** (Rust) und **Oberfläche** (React). Die E
 - **Segmentierter Export** (`render::plan_with`): Das Bild wird in Teile zerlegt, deren Grenzen auf Bildern liegen, die Sequenz- und Ausgaberate gemeinsam haben (Schrittweite = Zähler von Sequenz-/Ausgaberate). Jeder Teil rendert nur seinen Bereich in eine `.mov`; parallel läuft ein Tondurchgang, der direkt im Zielcodec kodiert (samt Lautheitsmessung). Zum Schluss fügt der `concat`-Demuxer alles mit `-c copy` zusammen. Arbeiter: 1 bei Hardware-Encodern oder unter 4 Kernen, sonst `Kerne/4` (2 bis 4), bis zu doppelt so viele Teile wie Arbeiter, jeder mindestens 10 s lang (segmentiert wird also erst ab 20 s); nie bei CBR, weil die Ratensteuerung über die Teilgrenzen hinweg gelten muss.
 - **Prüfung nach dem Rendern:** Der Export-Worker analysiert die fertige Datei erneut (Probe + Lautheit) und hängt das Ergebnis als `qc` an den Auftrag. Das Frontend vergleicht es mit den Sollwerten (Dauer, Auflösung, Bildrate, Kanäle) und warnt bei True Peak über −1 dBTP. Jeder Lauf behält sein Protokoll (Befehlszeile, Filtergraph, FFmpeg-Warnungen, max. 400 Zeilen) und seinen Plan, damit er wiederholt werden kann. Hardware-Encoder (NVENC/QSV/AMF) werden mit einer echten 1-Frame-Testkodierung erkannt, nicht nur über die Encoder-Liste.
 
+## kerf-library
+
+- **SQLite** (`library.db` im App-Datenordner, `rusqlite` mit gebündeltem SQLite). Migrationen über `user_version`; eine Datenbank aus einer neueren Kerf-Version wird nicht angefasst (`TooNew`).
+- **Presets** (`effects`, `transition`, `textStyle`, `titleTemplate`): Die Daten werden beim Speichern und beim Import mit den Typen und Sanitizern aus `kerf-core` geprüft; unbekannte Effekt-IDs werden abgelehnt. Austausch als `.kerfpreset` (JSON mit `app`, `kind`, `version`).
+- **Favoriten und zuletzt verwendet** je Art (Effekt, Preset, Übergang, Schrift, Vorlage, Asset).
+- **Assets:** ein Eintrag je `(Anbieter, ID)` mit Lizenzfeldern, Datei, SHA-256 und Maßen; `commercial` ist `yes`, `no` oder `unknown` und wird nie von Kerf selbst hochgestuft. Sammlungen als n:m-Tabelle.
+- **Schriften** (`fonts.rs`): liest Familien, Schnitte, Achsen, Lizenztexte und OS/2-Einbettungsrechte mit `ttf-parser`. Systemordner werden nur gelesen; importierte Schriften landen inhaltsbenannt in Kerfs Schriftordner und werden nur von der WebView geladen.
+
+## kerf-assets
+
+- **Anbieter** (`Provider`): feste API-Basen, Medienarten, Datei-Hosts. Pro Anbieter ein Parser (`parse.rs`), dessen Feldnamen den offiziellen Clients folgen; Ergebnisse werden zu `RemoteAsset` mit `License`.
+- **Netz** (`net.rs`, `reqwest` mit `rustls`): eigene Weiterleitungsbehandlung (jeder Sprung wird gegen dieselben Regeln geprüft), Pause zwischen Anfragen je Anbieter, ein Wiederholungsversuch bei Verbindungsfehlern und 5xx, 429 als eigener Fehler. Downloads streamen in eine `.part`-Datei, prüfen Größe und die ersten Bytes gegen die Medienart und werden erst vollständig umbenannt.
+- **Berichte** (`report.rs`): TXT, CSV, HTML, JSON aus den Bibliothekseinträgen der Projektdateien.
+- In `src-tauri/src/media_library.rs` hält `MediaHub` die Suchergebnisse der Sitzung (Downloads beziehen sich nur auf diese), die Download-Warteschlange (zwei gleichzeitig, Ereignis `media-download`) und Sitzungsschlüssel; dauerhafte Schlüssel liegen im Schlüsselspeicher des Systems (`keyring`). Vorschaubilder lädt das Backend in den Cache, die CSP der WebView bleibt lokal.
+
 ## Vorschau = Export
 
 Die Echtzeit-Vorschau nutzt den Hardware-Decoder der WebView: pro Clip ein gepooltes `<video>`-Element über das Tauri-Asset-Protokoll (mit Range- und CORS-Unterstützung). Die Frames werden als Texturen in einen WebGL2-Compositor geladen. Der Compositor rechnet **dieselbe** Geometrie und Farbmathematik wie der Export-Filtergraph:
@@ -55,7 +72,8 @@ Die Echtzeit-Vorschau nutzt den Hardware-Decoder der WebView: pro Clip ein gepoo
 - In der App wurden Monitorbild und exportierter Frame bei denselben Timecodes verglichen: Die Geometrie ist deckungsgleich. Material ohne Farbraum-Tag liest der Export so, wie die WebView2 es dekodiert (ab 720 Zeilen BT.709, darunter BT.601, per `setparams`).
 - **Effekte** (`src/engine/effects.ts`): Jeder Effekt hat ein GLSL-Gegenstück zu seinem FFmpeg-Filter (separierbarer Gauß ⇔ `gblur`, `cos⁴`-Vignette ⇔ `vignette`, 3D-Textur trilinear ⇔ `lut3d`, U/V-Abstand nach BT.601 ⇔ `chromakey`, PCHIP-Tabellen ⇔ `curves`). Die Durchgänge laufen in RGBA8-Framebuffern mit geradem Alpha in der eingepassten Größe; erst die Platzierung multipliziert vor.
 - **Übergänge und verschachtelte Sequenzen** mischt der Compositor in eigenen Framebuffern so, wie der Export die Komposits mischt; eine innere Sequenz ist eine transparente Gruppen-Ebene mit eigener Bildrate.
-- **Titel** zeichnet `src/engine/text.ts` per Canvas2D; derselbe Code liefert die PNGs für den Export.
+- **Titel** zeichnet `src/engine/text.ts` per Canvas2D; derselbe Code liefert die PNGs für den Export. Animierte Titel werden je Quellbild gezeichnet und als PNG-Folge über eine `ffconcat`-Liste gelesen (gleiche Bilder werden zusammengefasst).
+- **Mischmodi und Masken-Übergänge:** Der Export legt einen Clip mit Mischmodus auf eine transparente Vollfläche und mischt per `blend` in `gbrp`; der Shader rechnet dieselbe 8-Bit-Ganzzahlformel gegen einen Akkumulations-Framebuffer. Masken-Übergänge kommen aus einer Formel (`TransitionKind::mask`), die der Export als `geq`-Bedingung und die Vorschau als GLSL nutzt.
 
 Die Wiedergabe läuft auf der Uhr des `AudioContext`. Videoelemente werden nachgeführt: Ab 0,12 s Abweichung springen sie hart auf die richtige Stelle, ab 0,02 s wird die Abspielrate sanft angepasst. Elemente der nächsten Clips werden 1,2 s vorher vorbereitet. Beim Scrubben im Pausezustand werden Seeks zusammengefasst und framegenau ausgeführt. Rückwärts- und schnelle J/K/L-Wiedergabe erfolgt über Seeks.
 

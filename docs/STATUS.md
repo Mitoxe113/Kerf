@@ -1,8 +1,51 @@
 # Status
 
-Stand: 3. November 2026 · Version 0.1.0 · nach Phase 8–10 (Titel, Effekte, Audio, Skalierung, Arbeitsumgebung) und der Release-Vorbereitung
+Stand: 3. November 2026 · Version 0.1.0 · nach Phase 8–10 (Titel, Effekte, Audio, Skalierung, Arbeitsumgebung), der Release-Vorbereitung und dem Kreativ-Ökosystem (Effekt-Browser, Typografie, Stockmedien)
 
 Diese Liste ist absichtlich nüchtern. „Fertig“ heißt: implementiert, durch Tests abgedeckt **und** in der laufenden App durchgespielt (echte Maus- und Tastaturereignisse über das WebView2-DevTools-Protokoll oder echte IPC-Aufrufe an die Engine). Alles andere ist als teilweise oder offen markiert. Die Ausgangslage vor Phase 7 steht in [AUDIT.md](AUDIT.md).
+
+## Kreativ-Ökosystem (Effekte, Typografie, Stockmedien)
+
+Dieser Abschnitt hat einen anderen Prüfstand als „Fertig und verifiziert“: Alles hier ist implementiert und durch automatische Tests abgedeckt, die Oberflächen wurden in Headless-Chromium mit simuliertem Backend gerendert. **In der laufenden Tauri-App bedient wurde davon nichts**, und **kein Medienanbieter wurde live angefragt** (siehe unten).
+
+### Implementiert und automatisch geprüft
+
+**Effekte**
+- **Effekt-Katalog mit 38 Effekten** (`kerf_core::fx`) in Farbe, Unschärfe, Licht, Verzerren, Stil, Keying und Form, jeweils als WebGL-Pass in der Vorschau und als FFmpeg-Filter im Export. `scripts/fx-parity.mjs`: 12 Effekte bitgenau, 26 mit höchstens 3 Stufen Abweichung.
+- **Panel „Effekte“:** Suche (deutsche Namen und englische IDs), Kategorien, Favoriten, zuletzt verwendet, eigene Presets; Vorschaubilder aus der echten Effekt-Pipeline an einem Testbild; Ziehen auf Timeline-Clips oder Doppelklick für die Auswahl (`addEffects`, ein Rückgängig-Schritt für mehrere Clips).
+- **Effekt-Stapel im Inspector:** Parameter aus dem Katalog, Umbenennen, Zurücksetzen, Duplizieren, Kopieren/Einfügen (`Strg+Alt+C/V`), Bypass je Clip, Vorher/Nachher (`Strg+Alt+B`), als Preset speichern. Presets liegen in `library.db` (SQLite, versionierte Migrationen) und lassen sich als `.kerfpreset` exportieren und geprüft importieren.
+- **Mischmodi je Clip** (Normal, Multiplizieren, Negativ multiplizieren, Ineinanderkopieren, Addieren, Aufhellen, Abdunkeln, Differenz): Vorschau und Export mit derselben 8-Bit-Ganzzahlrechnung, `scripts/transition-parity.mjs` misst 0 Abweichung je Modus.
+- **Masken-Übergänge** Iris rund und eckig, Uhrzeiger, Türen horizontal und vertikal, diagonal, Jalousie: eine Maskenformel für Shader und `geq`, 0 abweichende Pixel bei 10, 25, 50 und 80 % Fortschritt. Übergangs-Presets im Inspector.
+
+**Typografie**
+- **Schriften:** zwei mitgelieferte (OFL-1.1), Systemschriften (nur gelesen) und importierte Schriften. Import nur `.ttf`/`.otf`, geprüft durch Parsen, abgelegt in Kerfs eigenem Schriftordner (nach Inhalt benannt), **nicht systemweit installiert**; nur Kerfs WebView lädt sie per `@font-face`. Lizenz, Lizenz-URL, Gestalter und OS/2-Einbettungsrechte stammen aus der Schriftdatei und werden ohne rechtliche Bewertung angezeigt.
+- **Fehlende Schriften** werden nicht still ersetzt: Der Inspector warnt, und vor dem Export fragt ein Dialog, ob mit der Ersatzschrift gerendert werden soll.
+- **Textstil:** Laufweite, Schriftstärke 100 bis 900, Groß-/Kleinschreibung, Farbverlauf mit Winkel, Schattenfarbe, Deckkraft und Versatz (auch harter Schatten), Leuchten. Ältere Projekte laden unverändert (`serde(default)`).
+- **Textanimation** je Zeichen, Wort oder Zeile: Einblenden, Schieben aus vier Richtungen, Skalieren, Schreibmaschine, Auseinanderlaufen; Eingang und Ausgang mit Dauer, Versatz und Kurve. Der Export rendert animierte Titel als PNG-Folge mit demselben Zeichencode (`ffconcat`, unveränderte Bilder einmal gezeichnet); Pipeline-Test `animated_title_frames_render`.
+- **Titelvorlagen:** sieben eingebaute (Mitte, Bauchbinde, Oben, Kino, Schreibmaschine, Neon, Verlauf) und eigene, gespeichert als geprüfte `titleTemplate`-Presets.
+
+**Stockmedien**
+- **Anbieter:** Pexels (Fotos, Videos), GIPHY (GIFs, geladen als MP4), Freesound (HQ-MP3-Vorschau), Openverse (Bilder, Audio). Endpunkte, Parameter und Felder stammen aus den offiziellen Client-Bibliotheken der Anbieter (`pexels-javascript`, `giphy-js`, `freesound-python`) bzw. aus dem Quellcode der Openverse-API.
+- **API-Schlüssel** liegen im Schlüsselspeicher des Betriebssystems (`keyring`: Keychain, Windows-Anmeldeinformationsverwaltung, Secret Service) oder auf Wunsch nur für die Sitzung im Speicher. Die Oberfläche bekommt sie nie zurück.
+- **Downloads:** Das Frontend nennt nur Anbieter und Treffer-ID; die URL stammt aus der API-Antwort, die das Backend selbst geholt hat. Nur HTTPS, Datei-Hosts je Anbieter auf einer Allowlist (Openverse: Host der Quelle aus der Antwort), jede Weiterleitung wird neu geprüft, keine IP-Adressen oder lokalen Hosts, Größenlimits, Inhaltsprüfung über die ersten Bytes (Programme, Archive, HTML und SVG werden abgelehnt), Schreiben in eine `.part`-Datei und Umbenennen, Dateinamen nach Inhalt (kein doppelter Download), Abbruch, zwei gleichzeitig. Nichts Heruntergeladenes wird ausgeführt oder entpackt.
+- **Lizenzen:** Creative-Commons-Codes nach der Gruppierung der Openverse-API (kommerziell nur ohne „NC“, Bearbeitung nur ohne „ND“); GIPHY immer „unklar“ für kommerzielle Nutzung; unbekannte Lizenzen nie „erlaubt“. Filter „Nur kommerziell nutzbar“ (bei Openverse zusätzlich `license_type=commercial` an die API).
+- **Bibliothek** (SQLite): heruntergeladene Assets mit Lizenzdaten, Favoriten, Filter, Kennzeichnung fehlender Dateien, Löschen (Datei nur innerhalb von Kerfs Asset-Ordner).
+- **Projekt:** „Zum Projekt“ nutzt den normalen Medienimport, „Am Playhead einfügen“ wartet auf die Analyse und setzt per Insert. Vor dem Export ein Hinweis, wenn heruntergeladene Medien keine kommerzielle Erlaubnis haben oder Namensnennung verlangen.
+- **Lizenzbericht** des Projekts als HTML, TXT, CSV oder JSON: Lizenzangaben je Datei, Dateien ohne Daten als solche markiert, Liste der Namensnennungen. CSV gegen Formel-Injektion, HTML maskiert, nur http(s)-Links. Der Bericht ist ausdrücklich keine Rechtsberatung.
+
+### Nicht geprüft, teilweise oder offen
+
+- **Keine Live-Integration bestätigt.** In dieser Arbeitsumgebung lehnte der Netzwerk-Proxy `api.pexels.com`, `api.giphy.com` und `api.openverse.org` ab; `freesound.org` wurde nicht angefragt. Getestet ist alles gegen einen lokalen Mock-Server und gegen Beispielantworten im Format der offiziellen Clients. Kein Anbieter gilt deshalb als vollständig integriert, bis er mit echten Schlüsseln geprüft ist.
+- **Pixabay** ist nicht umgesetzt: Die Dokumentation war hier nicht erreichbar, und ohne sie werden keine Endpunkte angenommen.
+- **Freesound:** Mit API-Schlüssel sind nur die Vorschau-MP3s ladbar; Originaldateien brauchen OAuth2, das nicht umgesetzt ist.
+- **Pexels-Datei-Hosts:** Die Allowlist erlaubt nur `*.pexels.com`. Liefert die API Video-Links auf anderen Hosts, wird der Download abgelehnt; das ist ungeprüft. Die Einstufung „kommerziell erlaubt“ folgt der Pexels-Lizenz, deren Seite in dieser Sitzung nicht abrufbar war; inhaltliche Einschränkungen (Personen, Marken) kann Kerf nicht prüfen.
+- **GIPHY:** „Powered By GIPHY“ steht als Text unter den Treffern, nicht als offizielles Logo. Sticker und die Altersfreigabe als Einstellung fehlen (fest „g“).
+- **Openverse:** Die Audiodauer aus der API wird nicht übernommen (Einheit nicht aus dem Quellcode belegbar); Kerf misst sie nach dem Import.
+- **Linux:** Ohne laufenden Secret Service (GNOME Keyring, KWallet) lässt sich ein Schlüssel nur für die Sitzung merken.
+- **Downloads** werden nicht fortgesetzt und überleben keinen Neustart. Sammlungen gibt es im Backend, aber noch ohne Oberfläche. Stockmedien lassen sich nicht direkt in die Timeline ziehen (Umweg über die Projektmedien oder „Am Playhead einfügen“).
+- **Schriften:** Schriftsammlungen (`.ttc`/`.otc`) sind nicht importierbar; Systemschriften werden über ihren Namen von der WebView aufgelöst; Online-Schriften (z. B. Google Fonts) fehlen; variable Achsen außer der Stärke sind nicht einstellbar.
+- **Effekte:** Effektparameter sind nicht keyframebar; Punkt-Parameter haben keine Auswahl im Monitor; Mischmodi wirken nicht innerhalb von Übergängen; Schiebe-Übergänge (Push/Slide) fehlen; optischer Fluss ist nicht umgesetzt.
+- **Plugin-Grundlage** ist nicht umgesetzt.
 
 ## Fertig und verifiziert
 
@@ -97,12 +140,16 @@ Diese Liste ist absichtlich nüchtern. „Fertig“ heißt: implementiert, durch
 
 | Bereich | Anzahl | Was |
 | --- | --- | --- |
-| `kerf-core` Unit | 66 | Zeit/Timecode, alle Edit-Befehle, Zeitabbildung (Rampen, Rückwärts), Übergänge, verschachtelte Sequenzen, Multicam, Untertitel, Keyframes inkl. Bezier, Undo, Projektdatei |
+| `kerf-core` Unit | 73 | Zeit/Timecode, alle Edit-Befehle (inkl. `addEffects`), Zeitabbildung (Rampen, Rückwärts), Übergänge und Masken, verschachtelte Sequenzen, Multicam, Untertitel, Textstil und Animation, Keyframes inkl. Bezier, Undo, Projektdatei |
 | `kerf-core` Parität | 1 | Farbmatrix gegen gemeinsame Fixture |
-| `kerf-media` Unit | 19 | Probe-Parsing, Filtergraph, CBR/Mono/Letterbox, EBU-R128-Parser, Teilgrenzen und Plan des segmentierten Exports |
-| `kerf-media` Pipeline | 13 | Echtes FFmpeg: Schnitt → Render → Pixelprüfung, Abbruch, Keyframes, animierte Farbe, Effekt-Stapel, Lautheit, Untertitel (einbrennen, einbetten, Datei), Übergänge, Audio-Effekte und Loudnorm, Rückwärts und Rampen, verschachtelte Sequenzen, Multicam-Synchronisation, segmentiert = ein Stück |
-| App-Crate | 3 | Versionen, Projektdatei-Argument, Untertitel-Kodierung (UTF-8, Windows-1252) |
-| Frontend (Vitest) | 72 | Timecode, Timeline-Constraints, Keyframes/Easing/Bezier, Zeitabbildung, Effekte und Kurven, Audio-DSP gegen FFmpeg-Fixtures, Textsatz, Deltas, Docking, unscharfe Suche, Tastaturprofile |
+| `kerf-media` Unit | 23 | Probe-Parsing, Filtergraph, CBR/Mono/Letterbox, EBU-R128-Parser, Teilgrenzen und Plan des segmentierten Exports, Titel-Folgen |
+| `kerf-media` Pipeline | 16 | Echtes FFmpeg: Schnitt → Render → Pixelprüfung, Abbruch, Keyframes, animierte Farbe, Effekt-Stapel, Lautheit, Untertitel, Übergänge inkl. Masken, Mischmodi, animierte Titel, Audio-Effekte und Loudnorm, Rückwärts und Rampen, verschachtelte Sequenzen, Multicam-Synchronisation, segmentiert = ein Stück |
+| `kerf-library` | 13 | Migrationen, Presets (Prüfung, Export/Import), Favoriten, Recents, Titelvorlagen, Assets und Sammlungen, Schriften (Import, Ablehnung, Entfernen) |
+| `kerf-assets` | 10 | Anbieter-Parser, Lizenzzuordnung, URL-Regeln, Inhaltsprüfung, Berichte; Mock-Server: Suche, Schlüssel, Download, abgelehnte Inhalte und Weiterleitungen, Abbruch, 429 |
+| App-Crate | 4 | Versionen, Projektdatei-Argument, Untertitel-Kodierung, Datumsformat |
+| Frontend (Vitest) | 90 | Timecode, Timeline-Constraints, Keyframes/Easing/Bezier, Zeitabbildung, Effekte und Kurven, Audio-DSP gegen FFmpeg-Fixtures, Textsatz und Textanimation, Deltas, Docking, unscharfe Suche, Tastaturprofile |
+
+In dieser Arbeitsumgebung lief die Pipeline mit FFmpeg 6.1 über einen Adapter für `-/filter_complex`: 15 von 16 bestanden, `reverse_and_speed_ramps_render` scheitert dort schon vor diesen Änderungen. Maßgeblich ist die CI mit FFmpeg ≥ 7.
 
 Alle Rust-Tests laufen in der CI auf Windows, macOS und Linux.
 

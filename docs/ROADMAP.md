@@ -35,13 +35,22 @@ Zuverlässigkeit (Deltas, geteilte Undo-Schnappschüsse, Autosave, Versionen, Wi
 - Andockbare Panels, Programmausgabe in eigenem Fenster für einen zweiten Bildschirm
 - Installer getestet, automatische Updates (signiert, über GitHub-Releases), CI und Installer für Windows, macOS und Linux, Lizenz GPL-3.0-or-later
 
+## Kreativ-Ökosystem ◐
+
+- ✅ Effekt-Katalog (38 Effekte), Effekt-Browser, Presets, Favoriten, Kopieren/Einfügen, Bypass, Vorher/Nachher
+- ✅ Mischmodi je Clip, Masken-Übergänge, Übergangs-Presets
+- ✅ Schriften (System, importiert, mitgeliefert) mit Lizenzangaben aus der Datei, erweiterter Textstil, Textanimation, Titelvorlagen
+- ◐ Stockmedien: Pexels, GIPHY, Freesound, Openverse mit geprüften Downloads, Bibliothek und Lizenzbericht; **noch nicht live mit echten Schlüsseln geprüft**
+- ☐ Pixabay, Freesound-Originale (OAuth2), Online-Schriften, Plugin-Grundlage, keyframebare Effektparameter, Push/Slide-Übergänge
+
 ## Als Nächstes
 
-1. **Erstes Release:** Updater-Schlüssel als Secrets hinterlegen, Version taggen, Entwurf prüfen und veröffentlichen. Danach den Update-Weg über GitHub einmal mit einer installierten Vorversion durchspielen.
-2. **Code-Signierung:** Zertifikate für Windows (Authenticode) und macOS (Developer ID, Notarisierung) besorgen und als Secrets hinterlegen; der Release-Workflow ist dafür vorbereitet.
-3. **macOS und Linux von Hand prüfen:** Dateizuordnung (unter macOS über `RunEvent::Opened`), Drag & Drop, Dialoge, Wiedergabe in WKWebView bzw. WebKitGTK (andere Codecs als WebView2).
-4. **Keyframes:** Keyframe-Editor in der Timeline (Gummiband für Lautstärke), Keyframes einzeln kopieren und einfügen.
-5. **Effekte:** Masken (Rechteck, Ellipse, Freiform, animierbar), Rauschunterdrückung (`afftdn` im Export, Gegenstück in der Vorschau).
+1. **Stockmedien live prüfen:** mit eigenen Schlüsseln für Pexels, GIPHY und Freesound sowie anonym für Openverse je eine Suche und einen Download in der App durchspielen; Pexels-Video-Hosts und GIPHY-Logo-Vorgaben gegen die Anbieterdokumentation prüfen.
+2. **Erstes Release:** Updater-Schlüssel als Secrets hinterlegen, Version taggen, Entwurf prüfen und veröffentlichen. Danach den Update-Weg über GitHub einmal mit einer installierten Vorversion durchspielen.
+3. **Code-Signierung:** Zertifikate für Windows (Authenticode) und macOS (Developer ID, Notarisierung) besorgen und als Secrets hinterlegen; der Release-Workflow ist dafür vorbereitet.
+4. **macOS und Linux von Hand prüfen:** Dateizuordnung (unter macOS über `RunEvent::Opened`), Drag & Drop, Dialoge, Wiedergabe in WKWebView bzw. WebKitGTK (andere Codecs als WebView2).
+5. **Keyframes:** Keyframe-Editor in der Timeline (Gummiband für Lautstärke), Keyframes einzeln kopieren und einfügen.
+6. **Effekte:** Masken (Rechteck, Ellipse, Freiform, animierbar), Rauschunterdrückung (`afftdn` im Export, Gegenstück in der Vorschau).
 
 ## Später
 
