@@ -890,7 +890,7 @@ impl Clip {
     /// Timeline frames the clip's start can move earlier within a source of `len` frames.
     pub fn room_before(&self, len: Frame) -> Frame {
         if self.reverse {
-            self.frames_between(self.source_out() as f64, len as f64)
+            self.frames_after_end(len)
         } else {
             self.frames_between(0.0, self.source_in as f64)
         }
@@ -901,31 +901,65 @@ impl Clip {
         if self.reverse {
             self.frames_between(0.0, self.source_in as f64)
         } else {
-            self.frames_between(self.source_out() as f64, len as f64)
+            self.frames_after_end(len)
         }
+    }
+
+    /// Timeline frames between the exact end of the used source range and
+    /// source position `len`. Measured from the unrounded end: in slow motion
+    /// before a ramp, the rounding of `source_out` is worth several timeline
+    /// frames, which at the ramp's high speed would reach far past `len`.
+    pub fn frames_after_end(&self, len: Frame) -> Frame {
+        let w = self.warp();
+        let end = w.w(self.source_in as f64) + self.duration as f64;
+        ((w.w(len as f64) - end + 1e-9).floor() as Frame).max(0)
     }
 
     /// Moves the clip's edges to timeline frames `start..end`, keeping every
     /// remaining frame on the source frame it showed (trims, splits).
+    ///
+    /// Between source frames (slow motion) the range starts on the frame
+    /// shown there (rounded down): rounding up could push the end of a cut
+    /// part one frame past where the clip ended, or past the media.
     pub fn set_range(&mut self, start: Frame, end: Frame) {
         let edge = if self.reverse { end } else { start };
         let at = self.source_at((edge - self.start) as f64);
-        self.source_in = (at.round() as Frame).max(0);
+        self.source_in = ((at + 1e-6).floor() as Frame).max(0);
         self.start = start;
         self.duration = (end - start).max(1);
     }
 
-    /// Shifts the used source range by `frames` timeline frames (slip).
+    /// Shifts the used source range by `frames` timeline frames (slip),
+    /// rounded down like [`Clip::set_range`] so the end stays where the
+    /// limits computed by [`Clip::room_after`] allow.
     pub fn slip(&mut self, frames: Frame) {
         let w = self.warp();
         let at = w.s(w.w(self.source_in as f64) + frames as f64);
-        self.source_in = (at.round() as Frame).max(0);
+        self.source_in = ((at + 1e-6).floor() as Frame).max(0);
     }
 
     /// Duration that shows the source range `source_in..source_out` with the current speed.
     pub fn duration_for(&self, source_out: Frame) -> Frame {
         let w = self.warp();
         ((w.w(source_out as f64) - w.w(self.source_in as f64)).round() as Frame).max(1)
+    }
+
+    /// Longest duration (at least 1) from `source_in` whose frames all exist
+    /// in a source of `len` frames (see [`Clip::shown_frame`]). Forward, the
+    /// last frame only has to start before `len`, so the duration is rounded
+    /// like [`Clip::duration_for`]; reversed, the first frame shows the one
+    /// just below the end of the range, so the range must end at `len`.
+    pub fn max_duration_in(&self, len: Frame) -> Frame {
+        let w = self.warp();
+        let room = w.w(len as f64) - w.w(self.source_in as f64);
+        let d = if self.reverse { (room + 1e-9).floor() } else { room.round() };
+        (d as Frame).max(1)
+    }
+
+    /// True when every frame the clip shows exists in a source of `len` frames.
+    pub fn shows_only_media(&self, len: Frame) -> bool {
+        let (a, b) = (self.shown_frame(0), self.shown_frame(self.duration - 1));
+        a.min(b) >= 0 && a.max(b) < len
     }
 
     /// Keys of `param`, empty when it is not animated.

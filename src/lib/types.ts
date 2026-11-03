@@ -476,6 +476,8 @@ export interface PasteItem {
   clip: Clip;
   track: Uuid;
   kind: TrackKind;
+  /** Frame rate of the sequence the clip was copied from. */
+  rate?: Rational;
 }
 
 /** Every document mutation. Serialised with serde's `tag = "type"`. */

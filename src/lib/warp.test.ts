@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { framesBetween, localOf, paramAt, shownFrame, slippedIn, sourceAt, sourceOut, speedAt } from "./keys";
+import { framesAfterEnd, framesBetween, localOf, paramAt, shownFrame, slippedIn, sourceAt, sourceOut, speedAt } from "./keys";
 import type { Clip, Keyframe } from "./types";
 import { Warp } from "./warp";
 
@@ -50,6 +50,17 @@ describe("warped clips", () => {
     // Slipping moves the content as on a forward clip.
     expect(slippedIn(c, 5)).toBe(25);
     expect(slippedIn(c, -30)).toBe(0);
+  });
+
+  it("measures the room after a clip from the unrounded end (Clip::frames_after_end)", () => {
+    // 0.5x into a 3x ramp: the rounded source out (300) hides half a frame of slow motion.
+    const c = clip({ sourceIn: 0, duration: 100, keys: { speed: [key(0, 0.5), key(50, 0.5), key(60, 3)] } });
+    const w = new Warp(c.keys.speed!, 1);
+    expect(framesAfterEnd(c, 400)).toBe(Math.floor(w.w(400) - 100 + 1e-9));
+    expect(framesAfterEnd(clip({ sourceIn: 0, duration: 50 }), 50)).toBe(0);
+    expect(framesAfterEnd(clip({ sourceIn: 0, duration: 50 }), 80)).toBe(30);
+    // Slow motion slips onto the frame shown there, rounded down like Clip::slip.
+    expect(slippedIn(clip({ sourceIn: 10, duration: 50, speed: 0.4 }), 4)).toBe(11); // 11.6
   });
 
   it("interpolates other keys over the clip's local time", () => {

@@ -664,10 +664,13 @@ fn bt601_limited(c: [f32; 3]) -> (u8, u8, u8) {
     )
 }
 
-/// A file path as a quoted filter option value: forward slashes, `:` and
-/// `'` escaped.
+/// A path for a quoted (`'…'`) filter option. The filtergraph parser strips
+/// one level of quoting and escaping, the option parser a second: `:` is
+/// escaped for the second, and `'` (which cannot appear inside quotes) closes
+/// the quote and is written as `\\\'` (an escaped backslash for the first
+/// level, then the escaped quote the second level turns into `'`).
 fn filter_path(p: &Path) -> String {
-    p.to_string_lossy().replace('\\', "/").replace(':', "\\:").replace('\'', r"'\''")
+    p.to_string_lossy().replace('\\', "/").replace(':', "\\:").replace('\'', r"'\\\''")
 }
 
 /// The preview (Chromium) decodes video without a colour matrix tag as
@@ -1148,6 +1151,17 @@ pub fn plan_with(
     }
     main.nested = nested;
     Ok(main)
+}
+
+/// True when `output` is a file the project uses as media: the finished
+/// export would replace it (it is renamed over the target at the end).
+pub fn overwrites_media(project: &Project, output: &Path) -> bool {
+    let key = |p: &Path| {
+        let p = fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        if cfg!(windows) { p.to_string_lossy().to_lowercase() } else { p.to_string_lossy().into_owned() }
+    };
+    let out = key(output);
+    project.media.iter().filter(|m| m.title.is_none()).any(|m| key(&m.path) == out)
 }
 
 /// What a call of [`plan_one`] renders.
@@ -2368,6 +2382,24 @@ fn render_one(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_export_never_replaces_a_source_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("clip.mp4");
+        fs::write(&src, b"x").unwrap();
+        let (mut p, _) = project_with_clip();
+        p.media[0].path = src.clone();
+        assert!(overwrites_media(&p, &src));
+        // The same file written differently still counts.
+        assert!(overwrites_media(&p, &dir.path().join(".").join("clip.mp4")));
+        assert!(!overwrites_media(&p, &dir.path().join("export.mp4")));
+    }
+
+    #[test]
+    fn filter_paths_survive_both_parsing_levels() {
+        assert_eq!(filter_path(Path::new(r"C:\Users\Marco's\l.cube")), r"C\:/Users/Marco'\\\''s/l.cube");
+    }
     use kerf_core::model::*;
     use kerf_core::ops::{apply, EditCommand, PlaceMode};
 

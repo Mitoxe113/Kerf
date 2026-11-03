@@ -3,7 +3,7 @@
 // mirrors only make the ghost stop where the engine will stop.
 
 import type { Clip, MediaAsset, Sequence, Track, TrackKind, TransitionKind, Uuid } from "../lib/types";
-import { framesBetween, sourceOut } from "../lib/keys";
+import { framesAfterEnd, framesBetween } from "../lib/keys";
 import { fpsOf } from "../lib/time";
 import { TRACK_HEIGHTS, type TrackSize } from "../state/editor";
 
@@ -162,9 +162,9 @@ export function mediaLength(asset: MediaAsset | undefined, seq: Sequence): numbe
 }
 
 /** Frames the clip's start can move earlier (kerf_core Clip::room_before). */
-const roomBefore = (c: Clip, len: number) => (c.reverse ? framesBetween(c, sourceOut(c), len) : framesBetween(c, 0, c.sourceIn));
+const roomBefore = (c: Clip, len: number) => (c.reverse ? framesAfterEnd(c, len) : framesBetween(c, 0, c.sourceIn));
 /** Frames the clip's end can move later (Clip::room_after). */
-const roomAfter = (c: Clip, len: number) => (c.reverse ? framesBetween(c, 0, c.sourceIn) : framesBetween(c, sourceOut(c), len));
+const roomAfter = (c: Clip, len: number) => (c.reverse ? framesBetween(c, 0, c.sourceIn) : framesAfterEnd(c, len));
 /** `delta` limited to [lo, hi]; 0 when the range is empty (never -0). */
 const clampDelta = (lo: number, hi: number, delta: number) => (lo > hi ? 0 : Math.max(lo, Math.min(hi, delta)) + 0);
 
@@ -206,7 +206,7 @@ export function clampRoll(track: Track, ci: number, delta: number, lenL: number 
 export function clampSlip(c: Clip, delta: number, len: number | null): number {
   if (len === null) return 0;
   const lo = -framesBetween(c, 0, c.sourceIn);
-  const hi = framesBetween(c, sourceOut(c), len);
+  const hi = framesAfterEnd(c, len);
   return clampDelta(lo, hi, delta);
 }
 

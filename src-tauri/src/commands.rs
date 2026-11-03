@@ -198,16 +198,25 @@ pub struct SaveResult {
     pub name: String,
 }
 
+/// `path` ending in `.kerf`. A name with another dot ("Film v1.2") keeps
+/// it: the extension is appended, not replaced.
+fn with_project_extension(path: PathBuf) -> PathBuf {
+    if path.extension().is_some_and(|e| e.eq_ignore_ascii_case(kerf_core::io::EXTENSION)) {
+        return path;
+    }
+    let mut s = path.into_os_string();
+    s.push(".");
+    s.push(kerf_core::io::EXTENSION);
+    PathBuf::from(s)
+}
+
 #[tauri::command(async)]
 pub fn project_save(state: State<'_, AppState>, path: Option<String>) -> CmdResult<SaveResult> {
     let (project, target, revision) = {
         let mut s = lock(&state.session);
         let target = match path {
             Some(p) => {
-                let mut p = PathBuf::from(p);
-                if p.extension().is_none_or(|e| e != kerf_core::io::EXTENSION) {
-                    p.set_extension(kerf_core::io::EXTENSION);
-                }
+                let p = with_project_extension(PathBuf::from(p));
                 if let Some(stem) = p.file_stem() {
                     s.project.name = stem.to_string_lossy().into_owned();
                 }
@@ -407,6 +416,9 @@ pub fn export_start(app: AppHandle, state: State<'_, AppState>, sequence: Uuid, 
     let (plan, name) = {
         let s = lock(&state.session);
         let seq = s.project.sequence(sequence).ok_or(EditError::SequenceNotFound)?;
+        if render::overwrites_media(&s.project, &settings.output) {
+            return Err(CommandError::new("exportOverwritesMedia", "the output file is media this project uses"));
+        }
         let plan = render::plan(&s.project, seq, &settings, &state.paths.work, &hw)
             .map_err(|e| CommandError::new("exportFailed", e))?;
         (plan, seq.name.clone())
@@ -854,7 +866,17 @@ pub fn reversed_audio(state: State<'_, AppState>, media: Uuid) -> CmdResult<Path
 
 #[cfg(test)]
 mod tests {
-    use super::decode_text;
+    use super::{decode_text, with_project_extension};
+    use std::path::PathBuf;
+
+    #[test]
+    fn saving_appends_the_project_extension() {
+        let ext = |p: &str| with_project_extension(PathBuf::from(p));
+        assert_eq!(ext("C:/p/Film v1.2"), PathBuf::from("C:/p/Film v1.2.kerf"));
+        assert_eq!(ext("C:/p/Film"), PathBuf::from("C:/p/Film.kerf"));
+        assert_eq!(ext("C:/p/Film.kerf"), PathBuf::from("C:/p/Film.kerf"));
+        assert_eq!(ext("C:/p/Film.KERF"), PathBuf::from("C:/p/Film.KERF"));
+    }
 
     #[test]
     fn subtitle_text_decodes_utf8_and_windows_1252() {

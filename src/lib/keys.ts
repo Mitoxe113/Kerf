@@ -141,10 +141,10 @@ export function shownFrame(c: Clip, local: number): number {
   return c.reverse ? Math.ceil(q - 1e-6) - 1 : Math.floor(q + 1e-6);
 }
 
-/** `sourceIn` after slipping `c` by `frames` timeline frames (Clip::slip). */
+/** `sourceIn` after slipping `c` by `frames` timeline frames (Clip::slip, rounded down). */
 export function slippedIn(c: Clip, frames: number): number {
   const w = warpOf(c);
-  return Math.max(0, Math.round(w.s(w.w(c.sourceIn) + frames)));
+  return Math.max(0, Math.floor(w.s(w.w(c.sourceIn) + frames) + 1e-6));
 }
 
 /** End of the used source range (exclusive), as kerf_core Clip::source_out. */
@@ -152,6 +152,16 @@ export function sourceOut(c: Clip): number {
   if (!isWarped(c)) return c.sourceIn + Math.round(c.duration * c.speed);
   const w = warpOf(c);
   return Math.round(w.s(w.w(c.sourceIn) + c.duration));
+}
+
+/**
+ * Timeline frames between the exact (unrounded) end of the used source range
+ * and source position `len` (Clip::frames_after_end).
+ */
+export function framesAfterEnd(c: Clip, len: number): number {
+  const w = warpOf(c);
+  const end = w.w(c.sourceIn) + c.duration;
+  return Math.max(0, Math.floor(w.w(len) - end + 1e-9));
 }
 
 /** Timeline frames between source positions a <= b, rounded down (Clip::frames_between). */

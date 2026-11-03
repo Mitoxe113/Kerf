@@ -75,7 +75,7 @@ export function copySelection(cut = false) {
   const items = ids.map((id) => {
     const l = locate(s, id)!;
     const t = s.tracks[l.track];
-    return { clip: t.clips[l.clip], track: t.id, kind: t.kind };
+    return { clip: t.clips[l.clip], track: t.id, kind: t.kind, rate: s.settings.fps };
   });
   useEditor.getState().set({ clipboard: items });
   if (cut) void deleteSelection(false);

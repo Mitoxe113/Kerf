@@ -79,6 +79,7 @@ const ERRORS: Record<string, string> = {
   openFailed: "Das Projekt konnte nicht geöffnet werden.",
   saveFailed: "Das Projekt konnte nicht gespeichert werden.",
   exportFailed: "Der Export konnte nicht gestartet werden.",
+  exportOverwritesMedia: "Die Zieldatei wird im Projekt als Medium verwendet. Wähle einen anderen Dateinamen, sonst würde der Export das Original ersetzen.",
   recoveryFailed: "Die Wiederherstellung ist fehlgeschlagen.",
   ffmpegMissing: "FFmpeg wurde nicht gefunden.",
   analysisFailed: "Die Analyse ist fehlgeschlagen.",

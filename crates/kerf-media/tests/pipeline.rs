@@ -470,7 +470,8 @@ fn effect_stack_renders() {
     let dir = tempfile::tempdir().unwrap();
     let src = dir.path().join("bars.mp4");
     ffmpeg(&tools, &["-f", "lavfi", "-i", "testsrc2=s=320x180:r=25:d=1", "-c:v", "libx264", "-preset", "ultrafast", "-y", &src.to_string_lossy()]);
-    let cube = dir.path().join("look.cube");
+    // Characters the filtergraph treats specially must reach lut3d unchanged.
+    let cube = dir.path().join("Marco's LUTs, v1; [look].cube");
     std::fs::write(&cube, "LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n").unwrap();
     let asset = import(&tools, &src, &dir.path().join("cache"));
     let mut p = Project::new("fx", 0);

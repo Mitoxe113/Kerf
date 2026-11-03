@@ -176,6 +176,11 @@ pub struct PasteItem {
     pub clip: Clip,
     pub track: Uuid,
     pub kind: TrackKind,
+    /// Frame rate the clip's frames are counted in (the sequence it was
+    /// copied from); pasting into another rate converts them. None: the
+    /// target's rate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rate: Option<Rational>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -948,7 +953,7 @@ fn edit_sequence(seq: &mut Sequence, media: &[MediaAsset], cmd: &EditCommand, ou
                 return Ok(false);
             }
             if seq.settings.fps != settings.fps {
-                convert_rate(seq, seq.settings.fps, settings.fps);
+                convert_rate(seq, media, seq.settings.fps, settings.fps);
             }
             seq.settings = *settings;
             out.sequences_changed = true;
@@ -1045,7 +1050,7 @@ fn edit_sequence(seq: &mut Sequence, media: &[MediaAsset], cmd: &EditCommand, ou
         C::ReplaceMedia { clip, media: id, .. } => replace_media(seq, media, *clip, *id),
         C::CloseGap { track, frame, .. } => close_gap(seq, *track, *frame),
         C::PasteClips { items, at, .. } => {
-            let created = paste(seq, items, *at)?;
+            let created = paste(seq, media, items, *at)?;
             let changed = !created.is_empty();
             out.created = created;
             Ok(changed)
@@ -1055,10 +1060,10 @@ fn edit_sequence(seq: &mut Sequence, media: &[MediaAsset], cmd: &EditCommand, ou
             for id in clips {
                 let (ti, ci) = seq.locate(*id).ok_or(EditError::ClipNotFound)?;
                 let t = &seq.tracks[ti];
-                items.push(PasteItem { clip: t.clips[ci].clone(), track: t.id, kind: t.kind });
+                items.push(PasteItem { clip: t.clips[ci].clone(), track: t.id, kind: t.kind, rate: None });
             }
             let at = items.iter().map(|i| i.clip.end()).max().unwrap_or(0);
-            let created = paste(seq, &items, at)?;
+            let created = paste(seq, media, &items, at)?;
             let changed = !created.is_empty();
             out.created = created;
             Ok(changed)
@@ -1166,9 +1171,10 @@ fn edit_sequence(seq: &mut Sequence, media: &[MediaAsset], cmd: &EditCommand, ou
                     return Err(EditError::Invalid("out point must be after in point".into()));
                 }
             }
-            let changed = seq.in_point != *in_point || seq.out_point != *out_point;
-            seq.in_point = in_point.map(|f| f.max(0));
-            seq.out_point = out_point.map(|f| f.max(1));
+            let (i, o) = (in_point.map(|f| f.max(0)), out_point.map(|f| f.max(1)));
+            let changed = seq.in_point != i || seq.out_point != o;
+            seq.in_point = i;
+            seq.out_point = o;
             Ok(changed)
         }
         C::SetSubtitles { cues, .. } => {
@@ -1293,34 +1299,85 @@ fn first_track(seq: &mut Sequence, kind: TrackKind) -> usize {
     }
 }
 
-fn convert_rate(seq: &mut Sequence, from: Rational, to: Rational) {
+/// Re-expresses everything a sequence stores in frames (clips, keys,
+/// transitions, fades, markers, subtitles, in/out) in the new rate, so it
+/// stays at the same time; clips stay inside their media.
+fn convert_rate(seq: &mut Sequence, media: &[MediaAsset], from: Rational, to: Rational) {
     let conv = |f: Frame| to.seconds_to_frames_round(from.frames_to_seconds(f));
     for c in seq.tracks.iter_mut().flat_map(|t| t.clips.iter_mut()) {
-        let start = conv(c.start);
-        let end = conv(c.end()).max(start + 1);
-        c.start = start;
-        c.duration = end - start;
-        c.source_in = conv(c.source_in);
-        c.fade_in = conv(c.fade_in);
-        c.fade_out = conv(c.fade_out);
-        clamp_fades(c);
+        convert_clip(c, from, to);
     }
     for t in &mut seq.tracks {
-        // Rounding can make neighbours touch differently; keep the invariant.
+        // Rounding can make neighbours overlap; the earlier clip gives way,
+        // or, when it is too short for that, the later one (its head, else
+        // its position).
         for i in 1..t.clips.len() {
             let prev_end = t.clips[i - 1].end();
-            if t.clips[i].start < prev_end {
-                let cut = prev_end - t.clips[i].start;
-                let c = &mut t.clips[i - 1];
-                c.duration = (c.duration - cut).max(1);
+            let cut = prev_end - t.clips[i].start;
+            if cut <= 0 {
+                continue;
             }
+            if t.clips[i - 1].duration > cut {
+                let p = &mut t.clips[i - 1];
+                p.set_range(p.start, prev_end - cut);
+            } else if t.clips[i].duration > cut {
+                let c = &mut t.clips[i];
+                c.set_range(prev_end, c.end());
+            } else {
+                t.clips[i].start = prev_end;
+            }
+        }
+        for c in &mut t.clips {
+            // The rounded range can end a frame past the media.
+            if let Some(len) = media_len(media, c, to) {
+                fit_into_media(c, len);
+            }
+            clamp_fades(c);
         }
     }
     for m in &mut seq.markers {
         m.frame = conv(m.frame);
+        m.duration = conv(m.duration);
     }
+    for cue in &mut seq.subtitles.cues {
+        cue.start = conv(cue.start);
+        cue.end = conv(cue.end).max(cue.start + 1);
+    }
+    // Neighbouring cues may touch differently after rounding.
+    seq.subtitles.cues = clean_cues(&seq.subtitles.cues);
     seq.in_point = seq.in_point.map(conv);
     seq.out_point = seq.out_point.map(conv);
+    // A range shorter than a frame of the new rate keeps one frame.
+    if let (Some(i), Some(o)) = (seq.in_point, seq.out_point) {
+        if o <= i {
+            seq.out_point = Some(i + 1);
+        }
+    }
+}
+
+/// Re-expresses a clip's frames (position, source, fades, keys, transition)
+/// in another rate. Fades are clamped by the caller.
+fn convert_clip(c: &mut Clip, from: Rational, to: Rational) {
+    let conv = |f: Frame| to.seconds_to_frames_round(from.frames_to_seconds(f));
+    let start = conv(c.start);
+    let end = conv(c.end()).max(start + 1);
+    c.start = start;
+    c.duration = end - start;
+    c.source_in = conv(c.source_in);
+    c.fade_in = conv(c.fade_in);
+    c.fade_out = conv(c.fade_out);
+    for keys in c.keys.values_mut() {
+        for k in keys.iter_mut() {
+            k.at = conv(k.at);
+        }
+        // Keys closer than a frame of the new rate collapse (the later one stays).
+        keys.reverse();
+        keys.dedup_by_key(|k| k.at);
+        keys.reverse();
+    }
+    if let Some(t) = &mut c.transition {
+        t.duration = conv(t.duration).max(1);
+    }
 }
 
 /// Splits `clip` at timeline frame `at` (strictly inside the clip).
@@ -1483,7 +1540,7 @@ fn place_media(seq: &mut Sequence, media: &[MediaAsset], mut a: PlaceArgs, out: 
                 a.source_in = a.source_in.map(conv);
                 a.source_out = a.source_out.map(conv);
                 a.at = conv(a.at);
-                convert_rate(seq, from, to);
+                convert_rate(seq, media, from, to);
                 seq.settings = settings;
                 out.sequences_changed = true;
             }
@@ -1754,7 +1811,7 @@ fn slip_clip(seq: &mut Sequence, media: &[MediaAsset], clip: Uuid, delta: Frame,
         match media_len(media, cl, rate) {
             Some(len) => {
                 b.min(-cl.frames_between(0.0, cl.source_in as f64));
-                b.max(cl.frames_between(cl.source_out() as f64, len as f64));
+                b.max(cl.frames_after_end(len));
             }
             // Slipping a still has no visible effect.
             None => b.max(0),
@@ -1985,15 +2042,27 @@ fn set_speed_keys(seq: &mut Sequence, media: &[MediaAsset], ti: usize, ci: usize
 /// running into the next clip or past the end of its media.
 fn retime(c: &mut Clip, out: Frame, next_start: Option<Frame>, len: Option<Frame>) {
     c.duration = c.duration_for(out);
-    let mut end = c.end();
     if let Some(n) = next_start {
-        end = end.min(n);
+        if c.end() > n {
+            c.set_range(c.start, n.max(c.start + 1));
+        }
     }
-    if let (Some(len), false) = (len, c.reverse) {
-        end = end.min(c.start + c.duration_for(len));
+    if let Some(len) = len {
+        fit_into_media(c, len);
     }
-    if end != c.end() {
-        c.set_range(c.start, end.max(c.start + 1));
+}
+
+/// Keeps every frame the clip shows inside a media of `len` frames: shorter
+/// first, and when even one frame reaches past the end (high speed, or a
+/// range that starts at the end), the range starts earlier so it ends at `len`.
+fn fit_into_media(c: &mut Clip, len: Frame) {
+    if c.shows_only_media(len) {
+        return;
+    }
+    c.duration = c.duration.min(c.max_duration_in(len));
+    if !c.shows_only_media(len) {
+        let w = c.warp();
+        c.source_in = ((w.s(w.w(len as f64) - c.duration as f64) + 1e-9).floor() as Frame).max(0);
     }
 }
 
@@ -2230,11 +2299,40 @@ fn replace_media(seq: &mut Sequence, media: &[MediaAsset], clip: Uuid, id: Uuid)
     Ok(true)
 }
 
-fn paste(seq: &mut Sequence, items: &[PasteItem], at: Frame) -> Result<Vec<Uuid>> {
+/// Pastes clips (from the clipboard or a duplicate). Their sources must be
+/// in `media` (the sequence's sources): clips copied from another project,
+/// or from a nested sequence that was removed since, are refused, and so is
+/// a nested sequence pasted into itself.
+fn paste(seq: &mut Sequence, media: &[MediaAsset], items: &[PasteItem], at: Frame) -> Result<Vec<Uuid>> {
+    let rate = seq.settings.fps;
+    // Clips copied from a sequence with another frame rate, in this one's frames.
+    let items: Vec<PasteItem> = items
+        .iter()
+        .map(|i| {
+            let mut i = i.clone();
+            if let Some(from) = i.rate.filter(|r| *r != rate && r.is_valid()) {
+                convert_clip(&mut i.clip, from, rate);
+                i.rate = Some(rate);
+            }
+            i
+        })
+        .collect();
+    let items = &items[..];
     let Some(min_start) = items.iter().map(|i| i.clip.start).min() else { return Ok(Vec::new()) };
     let offset = at.max(0) - min_start;
     let mut targets = Vec::with_capacity(items.len());
     for item in items {
+        let source = media.iter().find(|m| m.id == item.clip.media_id);
+        let Some(source) = source else {
+            return Err(if item.clip.media_id == seq.id { EditError::NestCycle } else { EditError::MediaNotFound });
+        };
+        let fits = match item.kind {
+            TrackKind::Video => source.has_video(),
+            TrackKind::Audio => source.has_audio(),
+        };
+        if !fits {
+            return Err(EditError::NoFootage);
+        }
         let idx = match seq.track_index(item.track).filter(|&i| seq.tracks[i].kind == item.kind) {
             Some(i) => i,
             None => first_track(seq, item.kind),
@@ -2252,6 +2350,10 @@ fn paste(seq: &mut Sequence, items: &[PasteItem], at: Frame) -> Result<Vec<Uuid>
         c.start += offset;
         c.transition = None;
         c.link = c.link.map(|l| *link_map.entry(l).or_insert_with(Uuid::new_v4));
+        if let Some(len) = media_len(media, &c, rate) {
+            fit_into_media(&mut c, len);
+        }
+        clamp_fades(&mut c);
         let t = seq.track_mut(track_id).expect("resolved");
         clear_range(t, c.start, c.end());
         created.push(c.id);
@@ -2333,8 +2435,13 @@ fn update_clips(seq: &mut Sequence, media: &[MediaAsset], ids: &[Uuid], p: &Clip
             }
         }
         if let Some(r) = p.reverse {
-            // Same source range and length, played the other way.
+            // Same source range and length, played the other way. Forward the
+            // range may end up to half a frame past the media (only the start of
+            // the last frame must lie in it); reversed that frame comes first.
             c.reverse = r;
+            if let Some(len) = len {
+                fit_into_media(c, len);
+            }
         }
         if let Some(b) = p.fx_bypass {
             c.fx_bypass = b;
@@ -2931,6 +3038,24 @@ mod tests {
     }
 
     #[test]
+    fn reversing_keeps_every_shown_frame_inside_the_media() {
+        let mut fx = Fx::new(10.0, true);
+        // 250 frames at 3.1x: 80.6 timeline frames, rounded to 81. The range
+        // reaches 251.1, past the media; the last forward frame (248) exists.
+        let ids = fx.place(0, Some(0), Some(250), PlaceMode::Overwrite);
+        let v = ids[0];
+        fx.run(EditCommand::UpdateClips { sequence: fx.seq, clips: vec![v], patch: ClipPatch { speed: Some(3.1), ..Default::default() } });
+        let c = fx.v1().clips[0].clone();
+        assert_eq!((c.duration, c.shown_frame(80)), (81, 248));
+        assert!(c.shows_only_media(250));
+        // Reversed, frame 0 would show frame 251: the clip loses a frame.
+        fx.run(EditCommand::UpdateClips { sequence: fx.seq, clips: vec![v], patch: ClipPatch { reverse: Some(true), ..Default::default() } });
+        let c = fx.v1().clips[0].clone();
+        assert_eq!((c.duration, c.shown_frame(0), c.shown_frame(79)), (80, 247, 3));
+        assert!(c.shows_only_media(250) && fx.a1().clips[0].shows_only_media(250));
+    }
+
+    #[test]
     fn speed_keys_retime_the_clip_and_its_partner() {
         let mut fx = Fx::new(10.0, true);
         let ids = fx.place(0, Some(0), Some(200), PlaceMode::Overwrite);
@@ -2955,13 +3080,14 @@ mod tests {
         assert!((cv.param_at(Param::Opacity, 125.0) - 0.5).abs() < 1e-6);
         // Slip and split work in timeline frames through the ramp.
         fx.run(EditCommand::SplitAt { sequence: fx.seq, frame: 125, clips: Some(vec![v]) });
-        // 25 frames into the ramp: 100 + 25 + 0.5 * 0.04 * 25² = 137.5.
+        // 25 frames into the ramp: 100 + 25 + 0.5 * 0.04 * 25² = 137.5, the
+        // frame shown there is 137. Starting half a frame early, the part
+        // ends just before 200 (at 3x a third of a timeline frame), never past it.
         let r = fx.v1().clips[1].clone();
-        assert_eq!((r.source_in, r.duration), (138, 25));
-        // Without keys the rest of the range plays at 1x (the rounded split
-        // point moves the ramp by half a frame, so it ends at 201).
+        assert_eq!((r.source_in, r.duration, r.source_out()), (137, 25, 199));
+        // Without keys the rest of the range plays at 1x.
         fx.run(EditCommand::SetKeyframes { sequence: fx.seq, clip: r.id, param: Param::Speed, keys: vec![] });
-        assert_eq!(fx.v1().clips[1].duration, 63);
+        assert_eq!((fx.v1().clips[1].duration, fx.v1().clips[1].source_out()), (62, 199));
         assert!(fx.a1().clips[0].keys_of(Param::Speed).len() == 2 && a != r.id);
     }
 
@@ -2986,6 +3112,37 @@ mod tests {
         settings.fps = Rational::new(50, 1);
         fx.run(EditCommand::UpdateSequenceSettings { sequence: fx.seq, settings });
         assert_eq!(Fx::spans(fx.v1()), vec![(100, 100, 50)]);
+    }
+
+    #[test]
+    fn changing_frame_rate_converts_keys_transitions_markers_and_subtitles() {
+        let mut fx = Fx::new(10.0, false);
+        let a = fx.place(0, Some(0), Some(50), PlaceMode::Overwrite)[0];
+        let b = fx.place(50, Some(50), Some(100), PlaceMode::Overwrite)[0];
+        let k = |at, value| Keyframe { at, value, ease: Ease::Linear };
+        fx.run(EditCommand::SetKeyframes { sequence: fx.seq, clip: a, param: Param::Opacity, keys: vec![k(10, 0.0), k(40, 1.0)] });
+        fx.run(EditCommand::SetTransitions { sequence: fx.seq, items: vec![TransitionEdit { clip: b, transition: Some(Transition { kind: TransitionKind::Dissolve, duration: 10, align: TransitionAlign::Center }) }] });
+        fx.run(EditCommand::AddMarkers { sequence: fx.seq, markers: vec![NewMarker { frame: 25, name: "m".into(), note: String::new(), color: MarkerColor::Blue, category: String::new(), duration: 25, chapter: false }] });
+        let cue = |start, end| Cue { id: Uuid::new_v4(), start, end, text: "x".into() };
+        fx.run(EditCommand::SetSubtitles { sequence: fx.seq, cues: vec![cue(0, 25), cue(25, 50)] });
+        let mut settings = fx.s().settings;
+        settings.fps = Rational::new(50, 1);
+        fx.run(EditCommand::UpdateSequenceSettings { sequence: fx.seq, settings });
+        let s = fx.s();
+        let ca = &s.tracks[0].clips[0];
+        assert_eq!(ca.keys_of(Param::Opacity).iter().map(|k| k.at).collect::<Vec<_>>(), vec![20, 80]);
+        assert_eq!(s.tracks[0].clips[1].transition.map(|t| t.duration), Some(20));
+        assert_eq!((s.markers[0].frame, s.markers[0].duration), (50, 50));
+        assert_eq!(s.subtitles.cues.iter().map(|c| (c.start, c.end)).collect::<Vec<_>>(), vec![(0, 50), (50, 100)]);
+        // Down to 24 fps: keys a frame apart collapse, ranges stay inside the media.
+        let mut fx = Fx::new(1.0, false);
+        let c = fx.place(0, None, None, PlaceMode::Overwrite)[0];
+        fx.run(EditCommand::SetKeyframes { sequence: fx.seq, clip: c, param: Param::Opacity, keys: vec![k(12, 0.0), k(13, 1.0)] });
+        settings.fps = Rational::new(24, 1);
+        fx.run(EditCommand::UpdateSequenceSettings { sequence: fx.seq, settings });
+        let c = &fx.s().tracks[0].clips[0];
+        assert_eq!(c.keys_of(Param::Opacity).len(), 1);
+        assert!(c.source_out() <= 24);
     }
 
     #[test]
