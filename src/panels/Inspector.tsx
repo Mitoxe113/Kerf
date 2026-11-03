@@ -5,9 +5,11 @@ import { engine } from "../engine/playback";
 import { IDENTITY_COLOR, IDENTITY_TRANSFORM } from "../engine/math";
 import { codecLabel, formatBytes } from "../lib/media";
 import { formatRate, formatTimecode, parseTimecode } from "../lib/time";
-import type { AudioEffect, ChannelMap, Clip, ClipPatch, ColorAdjust, ColorParam, Keyframe, KeyParam, Sequence, Transform } from "../lib/types";
+import type { AudioEffect, BlendMode, ChannelMap, Clip, ClipPatch, ColorAdjust, ColorParam, Keyframe, KeyParam, Sequence, Transform, Transition } from "../lib/types";
 import { findClip, locate, transitionInto } from "../timeline/geometry";
-import { ALIGNS, defaultTransition, kindsFor, setTransition } from "../actions/transitions";
+import { ALIGNS, defaultTransition, kindsFor, setTransition, TRANSITIONS } from "../actions/transitions";
+import { prompt } from "../actions/project";
+import { deletePreset, loadLibrary, savePreset, useLibrary } from "../state/library";
 import { useEditor } from "../state/editor";
 import { edit, sourceAsset, useActiveSequence, useProject } from "../state/project";
 import { Button, cx, Field, IconButton, NumberField, openContextMenu, PanelHeader, Section, Segmented, Select, Slider, Toggle } from "../ui/primitives";
@@ -275,6 +277,17 @@ function KeyNav({ seq, clips, params, frame }: { seq: Sequence; clips: Clip[]; p
   );
 }
 
+const BLEND_OPTIONS: { value: BlendMode; label: string }[] = [
+  { value: "normal", label: "Normal" },
+  { value: "multiply", label: "Multiplizieren" },
+  { value: "screen", label: "Negativ multiplizieren" },
+  { value: "overlay", label: "Ineinanderkopieren" },
+  { value: "add", label: "Addieren" },
+  { value: "lighten", label: "Aufhellen" },
+  { value: "darken", label: "Abdunkeln" },
+  { value: "difference", label: "Differenz" },
+];
+
 function VideoSection({ seq, clips, commit }: { seq: Sequence; clips: Clip[]; commit: Commit }) {
   const c = clips[0];
   const t = c.transform;
@@ -324,6 +337,14 @@ function VideoSection({ seq, clips, commit }: { seq: Sequence; clips: Clip[]; co
         <Slider label="Deckkraft" value={po.value} min={0} max={1} onPreview={po.onPreview} onCommit={(v) => void po.onCommit(v)} onReset={() => void po.onCommit(1)} />
         <NumberField label="Deckkraft" value={po.value * 100} min={0} max={100} step={0.5} unit=" %" width={58} {...pct(po)} />
         <KeyNav seq={seq} clips={clips} params={["opacity"]} frame={frame} />
+      </Field>
+      <Field label="Mischmodus">
+        <Select
+          label="Mischmodus"
+          value={clips.every((x) => (x.blendMode ?? "normal") === (c.blendMode ?? "normal")) ? (c.blendMode ?? "normal") : "normal"}
+          options={BLEND_OPTIONS}
+          onChange={(v) => void commit(clips, { blendMode: v })}
+        />
       </Field>
       <div className="pt-1 text-[10.5px] font-semibold uppercase tracking-wider text-fg-4">Zuschneiden</div>
       <Field label="Links / Rechts">
@@ -469,6 +490,26 @@ function AudioFxSection({ seq, clips }: { seq: Sequence; clips: Clip[] }) {
   );
 }
 
+/** Saved transitions (kind, duration, position) from the local library. */
+async function openTransitionPresets(e: React.MouseEvent, t: Transition, put: (t: Transition) => void) {
+  const at = { clientX: e.clientX, clientY: e.clientY };
+  await loadLibrary();
+  const presets = useLibrary.getState().presets.filter((p) => p.kind === "transition");
+  const label = TRANSITIONS.find((k) => k.value === t.kind)?.label ?? t.kind;
+  openContextMenu(at, [
+    ...presets.map((p) => ({ label: p.name, onSelect: () => put(p.data as Transition) })),
+    ...(presets.length ? [{ separator: true }] : [{ label: "Noch keine Übergangs-Presets", disabled: true }]),
+    {
+      label: "Als Preset speichern …",
+      onSelect: async () => {
+        const name = await prompt({ title: "Übergangs-Preset speichern", label: "Name", value: `${label} ${t.duration} F`, confirm: "Speichern" });
+        if (name?.trim()) await savePreset("transition", name.trim(), t);
+      },
+    },
+    ...presets.map((p) => ({ label: `„${p.name}“ löschen`, danger: true, onSelect: () => void deletePreset(p.id) })),
+  ]);
+}
+
 /** Transitions at both ends of a clip: into it, and out of it into the next one. */
 function TransitionSection({ seq, clip }: { seq: Sequence; clip: Clip }) {
   const active = useEditor((s) => s.activeTransition);
@@ -512,6 +553,11 @@ function TransitionSection({ seq, clip }: { seq: Sequence; clip: Clip }) {
                 </Field>
                 <Field label="Lage">
                   <Segmented size="sm" value={t.align} options={ALIGNS.map((x) => ({ value: x.value, label: x.label, title: x.title }))} onChange={(v) => put({ ...t, align: v })} />
+                </Field>
+                <Field label="Preset">
+                  <Button size="sm" onClick={(e) => void openTransitionPresets(e, t, put)}>
+                    Presets …
+                  </Button>
                 </Field>
               </>
             )}

@@ -1,4 +1,4 @@
-// Mask transitions: compares the preview compositor (WebGL2 in headless
+// Mask transitions and blend modes: compares the preview compositor (WebGL2 in headless
 // Chromium) with the export's FFmpeg geq mask, pixel by pixel.
 //   node scripts/transition-parity.mjs
 // Needs ffmpeg on PATH (or KERF_FFMPEG_DIR), cargo, and Playwright's Chromium.
@@ -28,6 +28,21 @@ writeFileSync(
   entry,
   `import { Compositor } from ${JSON.stringify(path.join(root, "src/engine/compositor.ts"))};
 import { IDENTITY_COLOR } from ${JSON.stringify(path.join(root, "src/engine/math.ts"))};
+const grad = (w, h, vertical) => { const s = document.createElement("canvas"); s.width = w; s.height = h; const x = s.getContext("2d"); const d = x.createImageData(w, h);
+  for (let y = 0; y < h; y++) for (let i = 0; i < w; i++) { const v = vertical ? Math.floor((y * 255) / (h - 1)) : Math.floor((i * 255) / (w - 1)); d.data.set([v, v, v, 255], (y * w + i) * 4); }
+  x.putImageData(d, 0, 0); return s; };
+window.blend = (mode, w, h) => {
+  const canvas = document.createElement("canvas"); canvas.width = w; canvas.height = h;
+  const c = new Compositor(canvas);
+  const FULL = new Float32Array([2, 0, 0, 0, -2, 0, -1, 1, 1]);
+  const layer = (key, src, blend) => ({ key, source: src, matrix: FULL, crop: [0, 0, 0, 0], opacity: 1, color: IDENTITY_COLOR, blend });
+  c.render([layer("a", grad(w, h, false)), layer("b", grad(w, h, true), mode)]);
+  const gl = c.gl; const px = new Uint8Array(w * h * 4);
+  gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  const out = [];
+  for (let y = h - 1; y >= 0; y--) for (let x = 0; x < w; x++) out.push(px[(y * w + x) * 4]);
+  return out;
+};
 window.run = (kind, p, w, h) => {
   const canvas = document.createElement("canvas"); canvas.width = w; canvas.height = h;
   const c = new Compositor(canvas);
@@ -62,5 +77,16 @@ for (const [kind, cond] of Object.entries(masks))
     const shown = want.reduce((s, v) => s + (v > 127 ? 1 : 0), 0) / want.length;
     console.log(`${ok ? "ok  " : "FAIL"} ${kind.padEnd(13)} p=${p}  incoming ${(shown * 100).toFixed(1)} %, ${off} of ${want.length} pixels differ`);
   }
+const FF_BLEND = { multiply: "multiply", screen: "screen", overlay: "overlay", add: "addition", lighten: "lighten", darken: "darken", difference: "difference" };
+for (const [mode, ff] of Object.entries(FF_BLEND)) {
+  const g = (e) => `color=c=black:s=${W}x${H}:d=1,format=gray,geq=lum='floor(${e}*255/${e === "X" ? W - 1 : H - 1})',format=gbrp`;
+  const want = execFileSync(ffmpeg, ["-v", "error", "-f", "lavfi", "-i", g("X"), "-f", "lavfi", "-i", g("Y"), "-filter_complex", `[0][1]blend=all_mode=${ff},format=gray`, "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "gray", "pipe:1"]);
+  const got = await page.evaluate(([m, w, h]) => window.blend(m, w, h), [mode, W, H]);
+  let max = 0;
+  for (let i = 0; i < want.length; i++) max = Math.max(max, Math.abs(want[i] - got[i]));
+  const ok = max <= 1;
+  if (!ok) failed = true;
+  console.log(`${ok ? "ok  " : "FAIL"} blend ${mode.padEnd(11)} max difference ${max}`);
+}
 await browser.close();
 process.exit(failed ? 1 : 0);

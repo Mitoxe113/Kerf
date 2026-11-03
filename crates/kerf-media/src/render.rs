@@ -1642,13 +1642,29 @@ fn plan_one(
             if let (Some(p), Some(label), true) = (placed, own_label, own) {
                 let from = incoming.map_or(p.start, |s| s.t1.max(p.start));
                 let out = format!("o{}", p.k);
-                chains.push(format!(
-                    "[{last}][{label}]overlay=x={}:y={}:eof_action=pass:format=rgb:enable='between(t,{},{})'[{out}]",
-                    p.x,
-                    p.y,
+                let enable = format!(
+                    "between(t,{},{})",
                     num(sf.frames_to_seconds(from - t0) - 0.5 * frame_s),
                     num(sf.frames_to_seconds(p.end - t0) - 0.5 * frame_s)
-                ));
+                );
+                if clip.blend_mode.is_normal() {
+                    chains.push(format!("[{last}][{label}]overlay=x={}:y={}:eof_action=pass:format=rgb:enable='{enable}'[{out}]", p.x, p.y));
+                } else {
+                    // The clip on a transparent full frame (colour premultiplied
+                    // by the overlay), blended with the composite, then laid
+                    // over it with the clip's alpha. See BlendMode.
+                    let k = p.k;
+                    let (fw, fh) = (seq.settings.width, seq.settings.height);
+                    chains.push(format!("color=c=black@0:s={fw}x{fh}:r={},format=rgba[bcv{k}]", rate_str(of)));
+                    chains.push(format!("[bcv{k}][{label}]overlay=x={}:y={}:eof_action=pass:format=rgb,format=rgba,split[bla{k}][blc{k}]", p.x, p.y));
+                    chains.push(format!("[{last}]split[bbase{k}][btop{k}]"));
+                    chains.push(format!("[btop{k}]format=gbrp[bA{k}]"));
+                    chains.push(format!("[blc{k}]format=gbrp[bB{k}]"));
+                    chains.push(format!("[bA{k}][bB{k}]blend=all_mode={}:shortest=1[bmix{k}]", clip.blend_mode.ffmpeg()));
+                    chains.push(format!("[bla{k}]alphaextract[balpha{k}]"));
+                    chains.push(format!("[bmix{k}][balpha{k}]alphamerge[bmixa{k}]"));
+                    chains.push(format!("[bbase{k}][bmixa{k}]overlay=eof_action=pass:format=rgb:enable='{enable}'[{out}]"));
+                }
                 last = out;
             }
         }

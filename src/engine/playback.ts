@@ -876,6 +876,7 @@ export class PlaybackEngine {
       work: t.scale > 0 ? [(p.width / t.scale) * fxScale, (p.height / t.scale) * fxScale] : undefined,
       fxScale,
       fxFrame: frame - c.start,
+      blend: c.blendMode,
     };
   }
 

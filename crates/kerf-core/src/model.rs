@@ -764,6 +764,49 @@ pub struct Clip {
     /// Skips the whole effect stack without changing it.
     #[serde(default, skip_serializing_if = "is_false")]
     pub fx_bypass: bool,
+    /// How the clip mixes with what is below it (video tracks).
+    #[serde(default, skip_serializing_if = "BlendMode::is_normal")]
+    pub blend_mode: BlendMode,
+}
+
+/// Blend modes with 8-bit formulas as FFmpeg's `blend` filter computes them,
+/// with the composite below as `A` (top input) and the clip's premultiplied
+/// colour as `B`: multiply A*B/255, screen 255-(255-A)(255-B)/255, overlay
+/// (A < 128 ? 2*(AB/255) : 255-2*((255-A)(255-B)/255)), add min(A+B, 255),
+/// lighten max, darken min, difference |A-B| (integer divisions truncate).
+/// The result is laid over the composite with the clip's alpha.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BlendMode {
+    #[default]
+    Normal,
+    Multiply,
+    Screen,
+    Overlay,
+    Add,
+    Lighten,
+    Darken,
+    Difference,
+}
+
+impl BlendMode {
+    pub fn is_normal(&self) -> bool {
+        *self == BlendMode::Normal
+    }
+
+    /// Name of the mode in FFmpeg's `blend` filter.
+    pub fn ffmpeg(self) -> &'static str {
+        match self {
+            BlendMode::Normal => "normal",
+            BlendMode::Multiply => "multiply",
+            BlendMode::Screen => "screen",
+            BlendMode::Overlay => "overlay",
+            BlendMode::Add => "addition",
+            BlendMode::Lighten => "lighten",
+            BlendMode::Darken => "darken",
+            BlendMode::Difference => "difference",
+        }
+    }
 }
 
 fn is_false(v: &bool) -> bool {
@@ -798,6 +841,7 @@ impl Clip {
             reverse: false,
             multicam: None,
             fx_bypass: false,
+            blend_mode: BlendMode::Normal,
         }
     }
 

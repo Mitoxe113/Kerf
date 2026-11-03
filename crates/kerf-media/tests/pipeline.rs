@@ -1259,3 +1259,64 @@ fn segmented_export_matches_one_piece() {
     };
     assert_eq!(md5(&parts), md5(&whole), "{log}");
 }
+
+#[test]
+fn blend_modes_render() {
+    let Some(tools) = tools() else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    let (bg, fg) = (d.join("grey.mp4"), d.join("light.mp4"));
+    ffmpeg(&tools, &["-f", "lavfi", "-i", "color=c=0x808080:s=320x180:r=25:d=2", "-c:v", "libx264", "-preset", "ultrafast", "-y", &bg.to_string_lossy()]);
+    ffmpeg(&tools, &["-f", "lavfi", "-i", "color=c=0xc0c0c0:s=320x180:r=25:d=2", "-c:v", "libx264", "-preset", "ultrafast", "-y", &fg.to_string_lossy()]);
+    let (bg, fg) = (import(&tools, &bg, &d.join("cache")), import(&tools, &fg, &d.join("cache")));
+    let (bg_id, fg_id) = (bg.id, fg.id);
+    let mut p = Project::new("b", 0);
+    p.media.extend([bg, fg]);
+    let seq = p.active_sequence;
+    let settings = SequenceSettings { width: 320, height: 180, fps: Rational::new(25, 1), sample_rate: 48_000 };
+    let run = |p: &mut Project, cmd: EditCommand| kerf_core::ops::apply(p, &cmd).unwrap();
+    run(&mut p, EditCommand::UpdateSequenceSettings { sequence: seq, settings });
+    let place = |media, video_track| EditCommand::PlaceMedia {
+        sequence: seq, media, video_track, audio_track: None, at: 0,
+        mode: PlaceMode::Overwrite, source_in: None, source_out: None, match_sequence: false,
+    };
+    let v2 = p.sequence(seq).unwrap().tracks[1].id;
+    run(&mut p, place(bg_id, None));
+    let top = run(&mut p, place(fg_id, Some(v2))).created[0];
+    // Half size in the left half: the right half shows the grey alone.
+    run(&mut p, EditCommand::UpdateClips {
+        sequence: seq, clips: vec![top],
+        patch: ClipPatch { transform: Some(Transform { x: -80.0, scale: 0.5, ..Default::default() }), ..Default::default() },
+    });
+    let render_mode = |p: &mut Project, mode: BlendMode| {
+        run(p, EditCommand::UpdateClips { sequence: seq, clips: vec![top], patch: ClipPatch { blend_mode: Some(mode), ..Default::default() } });
+        let file = d.join(format!("{mode:?}.mp4"));
+        let export = ExportSettings {
+            output: file.clone(), video_codec: VideoCodec::H264, hardware: false, width: 320, height: 180,
+            fps: Rational::new(25, 1), rate: RateControl::Quality { crf: 10 }, audio_codec: AudioCodec::Aac,
+            audio_bitrate_kbps: 192, sample_rate: 48_000, audio_channels: 2, use_in_out: false,
+            subtitles: Default::default(), title_files: Default::default(), loudness: None, segmented: false,
+        };
+        let plan = render::plan(p, p.sequence(seq).unwrap(), &export, d, &[]).unwrap();
+        let mut log = String::new();
+        let res = render::render_logged(&tools, &plan, &AtomicBool::new(false), |_| {}, &mut log);
+        assert!(res.is_ok(), "{mode:?}: {res:?}\n{log}");
+        let dur = probe_entries(&tools, &file, &["-show_entries", "format=duration"]);
+        (region_luma(&tools, &file, 1.0, (60, 70, 40, 40)), region_luma(&tools, &file, 1.0, (240, 70, 40, 40)), dur)
+    };
+    // Grey 128 (A, below) and 192 (B, the clip); read back through limited-range YUV.
+    for (mode, want) in [
+        (BlendMode::Normal, 192.0),
+        (BlendMode::Multiply, (128.0 * 192.0 / 255.0f64).floor()),
+        (BlendMode::Screen, 255.0 - (127.0 * 63.0 / 255.0f64).floor()),
+        (BlendMode::Difference, 64.0),
+        (BlendMode::Darken, 128.0),
+    ] {
+        let (inside, outside, dur) = render_mode(&mut p, mode);
+        eprintln!("{mode:?}: inside {inside:.1} outside {outside:.1} duration {dur}");
+        assert!((inside - want).abs() < 5.0, "{mode:?}: {inside:.1}, want {want:.1}");
+        assert!((outside - 128.0).abs() < 5.0, "{mode:?}: the grey alone outside the clip");
+        let secs: f64 = dur.parse().unwrap_or(0.0);
+        assert!((secs - 2.0).abs() < 0.05, "{mode:?}: length {dur}");
+    }
+}
