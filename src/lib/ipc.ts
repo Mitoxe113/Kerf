@@ -12,7 +12,10 @@ import type {
   ExportJob,
   ExportSettings,
   HistoryList,
+  ItemKind,
   MediaAsset,
+  Preset,
+  PresetKind,
   ProjectState,
   RecoveryInfo,
   TimedText,
@@ -100,6 +103,17 @@ export const api = {
   setPreferences: (autosaveSecs: number, keepVersions: number) => invoke<void>("set_preferences", { autosaveSecs, keepVersions }),
   sessionEnd: () => invoke<void>("session_end"),
   revealPath: (path: string) => invoke<void>("reveal_path", { path }),
+  presetList: (kind?: PresetKind) => invoke<Preset[]>("preset_list", { kind: kind ?? null }),
+  presetSave: (preset: Preset) => invoke<Preset>("preset_save", { preset }),
+  presetRename: (id: string, name: string) => invoke<Preset>("preset_rename", { id, name }),
+  presetFavorite: (id: string, on: boolean) => invoke<void>("preset_favorite", { id, on }),
+  presetDelete: (id: string) => invoke<void>("preset_delete", { id }),
+  presetExport: (ids: string[], path: string) => invoke<void>("preset_export", { ids, path }),
+  presetImport: (path: string) => invoke<Preset[]>("preset_import", { path }),
+  favoriteList: (kind: ItemKind) => invoke<string[]>("favorite_list", { kind }),
+  favoriteSet: (kind: ItemKind, key: string, on: boolean) => invoke<void>("favorite_set", { kind, key, on }),
+  recentList: (kind: ItemKind) => invoke<string[]>("recent_list", { kind }),
+  recentTouch: (kind: ItemKind, key: string) => invoke<void>("recent_touch", { kind, key }),
 };
 
 export interface MediaJobEvent {

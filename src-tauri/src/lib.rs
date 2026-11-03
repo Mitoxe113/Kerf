@@ -2,6 +2,7 @@
 
 mod commands;
 mod export_jobs;
+mod library;
 mod media_jobs;
 mod recovery;
 mod versions;
@@ -107,6 +108,13 @@ pub fn run() {
                 media: MediaService::new(tools),
                 exports: ExportService::new(),
                 launch_file: Mutex::new(project_arg(std::env::args(), &std::env::current_dir().unwrap_or_default())),
+                library: Mutex::new(match kerf_library::Library::open(&data_root.join("library.db")) {
+                    Ok(l) => Some(l),
+                    Err(e) => {
+                        log::error!("library: {e}");
+                        None
+                    }
+                }),
             };
             app.manage(state);
             let handle = app.handle();
@@ -174,6 +182,17 @@ pub fn run() {
             commands::reversed_audio,
             commands::sync_angles,
             commands::take_launch_file,
+            library::preset_list,
+            library::preset_save,
+            library::preset_rename,
+            library::preset_favorite,
+            library::preset_delete,
+            library::preset_export,
+            library::preset_import,
+            library::favorite_list,
+            library::favorite_set,
+            library::recent_list,
+            library::recent_touch,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Kerf")

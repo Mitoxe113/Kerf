@@ -30,7 +30,7 @@ pub struct CommandError {
 }
 
 impl CommandError {
-    fn new(code: &str, message: impl ToString) -> Self {
+    pub(crate) fn new(code: &str, message: impl ToString) -> Self {
         Self { code: code.into(), message: message.to_string() }
     }
 }
@@ -60,7 +60,7 @@ impl From<EditError> for CommandError {
     }
 }
 
-type CmdResult<T> = Result<T, CommandError>;
+pub(crate) type CmdResult<T> = Result<T, CommandError>;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]

@@ -63,7 +63,7 @@ export interface TransitionLayer {
 export type DrawItem = Layer | TransitionLayer;
 const isTransition = (l: DrawItem): l is TransitionLayer => "p" in l;
 
-const VS = `#version 300 es
+export const VS = `#version 300 es
 layout(location = 0) in vec2 a_uv;
 uniform mat3 u_matrix;
 uniform vec4 u_crop;
@@ -382,7 +382,7 @@ export class Compositor {
   }
 }
 
-function link(gl: WebGL2RenderingContext, vs: string, fs: string): WebGLProgram {
+export function link(gl: WebGL2RenderingContext, vs: string, fs: string): WebGLProgram {
   const compile = (type: number, src: string) => {
     const s = gl.createShader(type)!;
     gl.shaderSource(s, src);

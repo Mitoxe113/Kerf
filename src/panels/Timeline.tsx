@@ -38,7 +38,9 @@ import {
   type TrackRow,
 } from "../timeline/geometry";
 import { COLORS, drawRuler, drawSubtitleLane, drawTracks, type View } from "../timeline/render";
-import { mediaDragRange, registerDropTarget } from "../ui/dnd";
+import { mediaDragRange, registerDropTarget, registerPayloadTarget } from "../ui/dnd";
+import { applyEntry, applyPreset, entryByKey, selectedVideoClips } from "../actions/effects";
+import { useLibrary } from "../state/library";
 import { cx, IconButton, openContextMenu, PanelHeader, Tooltip, type MenuItem } from "../ui/primitives";
 
 const SNAP_PX = 9;
@@ -59,7 +61,9 @@ type Drag =
   | { kind: "slide"; clip: Clip; track: number; ci: number; x0: number; delta: number; snapAt: number | null }
   | { kind: "marquee"; x0: number; y0: number; x1: number; y1: number; additive: boolean }
   | { kind: "hand"; x0: number; y0: number; sx: number; sy: number }
-  | { kind: "drop"; media: Uuid[]; frame: number; video: TrackRow | null; audio: TrackRow | null; length: number; hasVideo: boolean; hasAudio: boolean; insert: boolean; snapAt: number | null };
+  | { kind: "drop"; media: Uuid[]; frame: number; video: TrackRow | null; audio: TrackRow | null; length: number; hasVideo: boolean; hasAudio: boolean; insert: boolean; snapAt: number | null }
+  /** An effect or preset dragged from the effect browser; `clips` receive it. */
+  | { kind: "fxDrop"; label: string; clips: Clip[]; row: TrackRow | null };
 
 const EDGE_SCROLL_PX = 28;
 
@@ -421,6 +425,9 @@ export function Timeline() {
         const y = Math.min(d.y0, d.y1);
         ctx.fillRect(x, y, Math.abs(d.x1 - d.x0), Math.abs(d.y1 - d.y0));
         ctx.strokeRect(x + 0.5, y + 0.5, Math.abs(d.x1 - d.x0), Math.abs(d.y1 - d.y0));
+      } else if (d.kind === "fxDrop") {
+        if (d.row) for (const c of d.clips.filter((c) => d.row!.track.clips.includes(c))) ghost(fx(c.start), top + d.row.y, c.duration * v.zoom, d.row.h, true);
+        label = d.clips.length ? (d.clips.length > 1 ? `${d.label} → ${d.clips.length} ausgewählte Clips` : `${d.label} → ${d.clips[0].name}`) : "Nur auf Videoclips";
       } else if (d.kind === "drop") {
         if (d.hasVideo && d.video) ghost(fx(d.frame), top + d.video.y, d.length * v.zoom, d.video.h, true);
         if (d.hasAudio && d.audio) ghost(fx(d.frame), top + d.audio.y, d.length * v.zoom, d.audio.h, true);
@@ -571,6 +578,58 @@ export function Timeline() {
       },
     });
     // The drop area only exists once a sequence is shown.
+  }, [drawOverlay, !!seq]);
+
+  // --- effect / preset drop target ---------------------------------------------------
+  useEffect(() => {
+    const el = areaRef.current;
+    if (!el) return;
+    /** Video clip under the pointer; a selected clip takes the whole video selection with it. */
+    const targetsAt = (cx: number, cy: number): { clips: Clip[]; row: TrackRow | null } => {
+      const lay = layoutRef.current;
+      const v = viewRef.current;
+      if (!lay) return { clips: [], row: null };
+      const r = el.getBoundingClientRect();
+      const x = cx - r.left;
+      const y = cy - r.top;
+      cursorRef.current = { x, y };
+      if (y < RULER_H) return { clips: [], row: null };
+      const row = rowAt(lay, y - RULER_H + v.scrollY);
+      if (!row || row.track.kind !== "video" || row.track.locked) return { clips: [], row: null };
+      const f = (x + v.scrollX) / v.zoom;
+      const hit = row.track.clips.find((c) => f >= c.start && f < c.start + c.duration);
+      if (!hit) return { clips: [], row };
+      const sel = useEditor.getState().selection;
+      if (!sel.includes(hit.id)) return { clips: [hit], row };
+      const all = selectedVideoClips();
+      return { clips: all.some((c) => c.id === hit.id) ? all : [hit], row };
+    };
+    return registerPayloadTarget({
+      el,
+      accepts: (p) => p.kind === "effect" || p.kind === "preset",
+      onMove: (cx, cy, p) => {
+        dragRef.current = { kind: "fxDrop", label: p.label, ...targetsAt(cx, cy) };
+        drawOverlay();
+      },
+      onLeave: () => {
+        if (dragRef.current?.kind === "fxDrop") dragRef.current = null;
+        drawOverlay();
+      },
+      onDrop: (cx, cy, p) => {
+        const { clips } = targetsAt(cx, cy);
+        dragRef.current = null;
+        drawOverlay();
+        if (!clips.length) return;
+        const ids = clips.map((c) => c.id);
+        if (p.kind === "effect") {
+          const entry = entryByKey(p.key);
+          if (entry) void applyEntry(entry, ids);
+        } else if (p.kind === "preset") {
+          const preset = useLibrary.getState().presets.find((x) => x.id === p.id);
+          if (preset) void applyPreset(preset, ids);
+        }
+      },
+    });
   }, [drawOverlay, !!seq]);
 
   const seqRef = useRef(seq);
@@ -886,7 +945,7 @@ export function Timeline() {
   function updateEdgeScroll(e: React.PointerEvent, x: number) {
     const d = dragRef.current;
     const w = viewRef.current.width;
-    const scrolls = d && d.kind !== "hand" && d.kind !== "drop" && d.kind !== "slip";
+    const scrolls = d && d.kind !== "hand" && d.kind !== "drop" && d.kind !== "fxDrop" && d.kind !== "slip";
     const speed = !scrolls ? 0 : x < EDGE_SCROLL_PX ? x - EDGE_SCROLL_PX : x > w - EDGE_SCROLL_PX ? x - (w - EDGE_SCROLL_PX) : 0;
     const cur = edgeScroll.current;
     if (!speed) {
@@ -924,8 +983,8 @@ export function Timeline() {
     const d = dragRef.current;
     if (edgeScroll.current) cancelAnimationFrame(edgeScroll.current.raf);
     edgeScroll.current = null;
-    // Media drops complete in the drop target's onDrop (window pointerup).
-    if (!d || d.kind === "drop") return;
+    // Media and effect drops complete in the drop target's onDrop (window pointerup).
+    if (!d || d.kind === "drop" || d.kind === "fxDrop") return;
     const done = () => {
       dragRef.current = null;
       engine.setPreviewFrame(null);

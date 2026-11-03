@@ -3,7 +3,7 @@ import { formatRate } from "../lib/time";
 import { useEditor } from "../state/editor";
 import { useActiveSequence, useProject } from "../state/project";
 import { useToasts } from "../state/toasts";
-import { useDragGhost } from "../ui/dnd";
+import { useDragGhost, usePayloadGhost } from "../ui/dnd";
 import { cx } from "../ui/primitives";
 
 export function StatusBar() {
@@ -93,8 +93,16 @@ export function Toasts() {
 
 export function DragGhost() {
   const drag = useDragGhost((s) => s.drag);
+  const payload = usePayloadGhost((s) => s.drag);
   const media = useProject((s) => s.mediaById);
   const sequences = useProject((s) => s.project?.sequences);
+  if (payload)
+    return (
+      <div className="pointer-events-none fixed z-[990] rounded-sm bg-raised px-2 py-1 text-xs text-fg shadow-pop ring-1 ring-signal" style={{ left: payload.x + 12, top: payload.y + 12 }}>
+        {payload.label}
+        {payload.hint && <span className="text-fg-3"> · {payload.hint}</span>}
+      </div>
+    );
   if (!drag) return null;
   const first = media.get(drag.media[0]) ?? sequences?.find((q) => q.id === drag.media[0]);
   return (

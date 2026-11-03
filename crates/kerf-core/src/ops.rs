@@ -220,6 +220,9 @@ pub enum EditCommand {
     SetKeyframes { sequence: Uuid, clip: Uuid, param: Param, keys: Vec<Keyframe> },
     /// Replaces the effect stack of video clips (each gets its own copy).
     SetEffects { sequence: Uuid, clips: Vec<Uuid>, effects: Vec<Effect> },
+    /// Appends effects to the stack of each video clip (each clip keeps its
+    /// own stack; every appended effect gets a fresh id per clip).
+    AddEffects { sequence: Uuid, clips: Vec<Uuid>, effects: Vec<Effect> },
     /// Sets or removes the transition into each clip from its left neighbour.
     SetTransitions { sequence: Uuid, items: Vec<TransitionEdit> },
     /// Replaces the audio effects of audio clips, each with its own list.
@@ -311,6 +314,7 @@ impl EditCommand {
             C::UpdateClips { .. } => "updateClips",
             C::SetKeyframes { .. } => "setKeyframes",
             C::SetEffects { .. } => "setEffects",
+            C::AddEffects { .. } => "addEffects",
             C::SetTransitions { .. } => "setTransition",
             C::SetAudioEffects { .. } => "setAudioEffects",
             C::SetClipGain { .. } => "normalizeAudio",
@@ -348,6 +352,7 @@ impl EditCommand {
             | C::UpdateClips { sequence, .. }
             | C::SetKeyframes { sequence, .. }
             | C::SetEffects { sequence, .. }
+            | C::AddEffects { sequence, .. }
             | C::SetTransitions { sequence, .. }
             | C::SetAudioEffects { sequence, .. }
             | C::SetClipGain { sequence, .. }
@@ -945,6 +950,7 @@ fn edit_sequence(seq: &mut Sequence, media: &[MediaAsset], cmd: &EditCommand, ou
         C::DeleteClips { clips, ripple, .. } => delete_clips(seq, clips, *ripple),
         C::SetKeyframes { clip, param, keys, .. } => set_keyframes(seq, media, *clip, *param, keys),
         C::SetEffects { clips, effects, .. } => set_effects(seq, clips, effects),
+        C::AddEffects { clips, effects, .. } => add_effects(seq, clips, effects),
         C::SetTransitions { items, .. } => set_transitions(seq, items),
         C::SetAudioEffects { items, .. } => set_audio_effects(seq, items),
         C::SetClipGain { gains, .. } => set_clip_gain(seq, gains),
@@ -1870,12 +1876,16 @@ fn retime(c: &mut Clip, out: Frame, next_start: Option<Frame>, len: Option<Frame
     }
 }
 
-fn set_effects(seq: &mut Sequence, clips: &[Uuid], effects: &[Effect]) -> Result<bool> {
+fn clean_effects(effects: &[Effect]) -> Result<Vec<Effect>> {
     let mut clean = Vec::with_capacity(effects.len());
     for e in effects {
         let kind = e.kind.sanitized().ok_or_else(|| EditError::Invalid("effect parameter".into()))?;
         clean.push(Effect { id: e.id, enabled: e.enabled, name: e.name.chars().filter(|c| !c.is_control()).take(80).collect(), kind });
     }
+    Ok(clean)
+}
+
+fn effect_targets(seq: &Sequence, clips: &[Uuid]) -> Result<Vec<(usize, usize)>> {
     let mut at = Vec::with_capacity(clips.len());
     for id in clips {
         let (ti, ci) = seq.locate(*id).ok_or(EditError::ClipNotFound)?;
@@ -1888,6 +1898,36 @@ fn set_effects(seq: &mut Sequence, clips: &[Uuid], effects: &[Effect]) -> Result
         }
         at.push((ti, ci));
     }
+    Ok(at)
+}
+
+/// Longest effect stack a clip may have.
+const MAX_EFFECTS: usize = 64;
+
+fn add_effects(seq: &mut Sequence, clips: &[Uuid], effects: &[Effect]) -> Result<bool> {
+    let clean = clean_effects(effects)?;
+    let at = effect_targets(seq, clips)?;
+    if clean.is_empty() {
+        return Ok(false);
+    }
+    for &(ti, ci) in &at {
+        if seq.tracks[ti].clips[ci].effects.len() + clean.len() > MAX_EFFECTS {
+            return Err(EditError::Invalid("too many effects on one clip".into()));
+        }
+    }
+    for (ti, ci) in at {
+        let c = &mut seq.tracks[ti].clips[ci];
+        c.effects.extend(clean.iter().map(|e| Effect { id: Uuid::new_v4(), ..e.clone() }));
+    }
+    Ok(true)
+}
+
+fn set_effects(seq: &mut Sequence, clips: &[Uuid], effects: &[Effect]) -> Result<bool> {
+    let clean = clean_effects(effects)?;
+    if clean.len() > MAX_EFFECTS {
+        return Err(EditError::Invalid("too many effects on one clip".into()));
+    }
+    let at = effect_targets(seq, clips)?;
     let mut changed = false;
     for (ti, ci) in at {
         let c = &mut seq.tracks[ti].clips[ci];
@@ -2860,6 +2900,22 @@ mod tests {
         );
         let nan = vec![effect(EffectKind::Vignette { amount: f32::NAN })];
         assert!(apply(&mut fx.p, &EditCommand::SetEffects { sequence: fx.seq, clips: vec![v], effects: nan }).is_err());
+    }
+
+    #[test]
+    fn add_effects_appends_with_fresh_ids() {
+        let mut fx = Fx::new(4.0, true);
+        let v = fx.place(0, None, None, PlaceMode::Overwrite)[0];
+        let e = Effect { id: Uuid::new_v4(), enabled: true, name: "Warm".into(), kind: EffectKind::Vignette { amount: 0.3 } };
+        assert!(fx.run(EditCommand::AddEffects { sequence: fx.seq, clips: vec![v], effects: vec![e.clone()] }).changed);
+        assert!(fx.run(EditCommand::AddEffects { sequence: fx.seq, clips: vec![v], effects: vec![e.clone()] }).changed);
+        let got = &fx.v1().clips[0].effects;
+        assert_eq!(got.len(), 2);
+        assert_ne!(got[0].id, got[1].id);
+        assert_ne!(got[0].id, e.id);
+        assert_eq!(got[1].name, "Warm");
+        let many = vec![e; 63];
+        assert!(apply(&mut fx.p, &EditCommand::AddEffects { sequence: fx.seq, clips: vec![v], effects: many }).is_err());
     }
 
     #[test]

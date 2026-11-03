@@ -91,3 +91,82 @@ export function startMediaDrag(down: React.PointerEvent, media: Uuid[], onEnd?: 
   window.addEventListener("pointercancel", cancel);
   window.addEventListener("keydown", key);
 }
+
+// --- payload drags (effects, presets, library items) ------------------------------------
+
+/** Things other than project media that can be dragged onto panels. */
+export type Payload =
+  | { kind: "effect"; key: string; label: string }
+  | { kind: "preset"; id: string; label: string };
+
+export interface PayloadTarget {
+  el: HTMLElement;
+  accepts: (p: Payload) => boolean;
+  onMove?: (x: number, y: number, p: Payload) => void;
+  onLeave?: () => void;
+  onDrop: (x: number, y: number, p: Payload) => void;
+}
+
+export const usePayloadGhost = create<{ drag: { label: string; hint: string; x: number; y: number } | null }>(() => ({ drag: null }));
+
+const payloadTargets = new Set<PayloadTarget>();
+
+export function registerPayloadTarget(t: PayloadTarget): () => void {
+  payloadTargets.add(t);
+  return () => payloadTargets.delete(t);
+}
+
+function payloadTargetAt(x: number, y: number, p: Payload): PayloadTarget | null {
+  let best: PayloadTarget | null = null;
+  for (const t of payloadTargets) {
+    if (!t.accepts(p)) continue;
+    const r = t.el.getBoundingClientRect();
+    if (x >= r.left && x < r.right && y >= r.top && y < r.bottom && (!best || best.el.contains(t.el))) best = t;
+  }
+  return best;
+}
+
+/** Starts dragging `payload` once the pointer moved a few pixels; a plain click runs `onClick`. */
+export function startPayloadDrag(down: React.PointerEvent, payload: Payload, onClick?: () => void) {
+  if (down.button !== 0) return;
+  const sx = down.clientX;
+  const sy = down.clientY;
+  let active = false;
+  let over: PayloadTarget | null = null;
+  const move = (e: PointerEvent) => {
+    if (!active) {
+      if (Math.hypot(e.clientX - sx, e.clientY - sy) < 5) return;
+      active = true;
+    }
+    const t = payloadTargetAt(e.clientX, e.clientY, payload);
+    if (t !== over) over?.onLeave?.();
+    over = t;
+    usePayloadGhost.setState({ drag: { label: payload.label, hint: t ? "" : "Auf einen Clip ziehen", x: e.clientX, y: e.clientY } });
+    t?.onMove?.(e.clientX, e.clientY, payload);
+  };
+  const finish = () => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", up);
+    window.removeEventListener("pointercancel", cancel);
+    window.removeEventListener("keydown", key);
+    usePayloadGhost.setState({ drag: null });
+  };
+  const up = (e: PointerEvent) => {
+    finish();
+    if (!active) return onClick?.();
+    const t = payloadTargetAt(e.clientX, e.clientY, payload);
+    if (over && over !== t) over.onLeave?.();
+    t?.onDrop(e.clientX, e.clientY, payload);
+  };
+  const cancel = () => {
+    finish();
+    over?.onLeave?.();
+  };
+  const key = (e: KeyboardEvent) => {
+    if (e.key === "Escape") cancel();
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up);
+  window.addEventListener("pointercancel", cancel);
+  window.addEventListener("keydown", key);
+}

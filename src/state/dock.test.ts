@@ -16,8 +16,8 @@ describe("docking", () => {
   it("adds a panel as the active tab of another area", () => {
     const next = movePanel(edit, "history", "media", "center");
     const area = findLeaf(next, "media")!;
-    expect(leafTabs(area.node as never)).toEqual(["media", "source", "multicam", "subtitles", "history"]);
-    expect((area.node as { active: number }).active).toBe(4);
+    expect(leafTabs(area.node as never)).toEqual(["media", "source", "effects", "multicam", "subtitles", "history"]);
+    expect((area.node as { active: number }).active).toBe(5);
     // The inspector area keeps the inspector alone.
     expect(leafTabs(findLeaf(next, "inspector")!.node as never)).toEqual(["inspector"]);
   });
@@ -26,7 +26,7 @@ describe("docking", () => {
     // The monitor sits in a row: dropping to its right inserts a sibling with half its room.
     const next = movePanel(edit, "history", "monitor", "right");
     const top = next.children[0].node as LayoutNode;
-    expect(shape(top)).toBe("row([media,source,multicam,subtitles],[monitor],[history],[inspector])");
+    expect(shape(top)).toBe("row([media,source,effects,multicam,subtitles],[monitor],[history],[inspector])");
     expect(sizes(top)).toEqual([0.25, 0.245, 0.245, 0.26]);
     // Below it: a column in the monitor's slot.
     const below = movePanel(edit, "scopes" as PanelId, "monitor", "bottom");
@@ -41,7 +41,7 @@ describe("docking", () => {
     // Moving the monitor next to the timeline empties its area.
     const next = movePanel(edit, "monitor", "timeline", "top");
     expect(leafOf(next, "monitor")).not.toBeNull();
-    expect(shape(next)).toBe("col(row([media,source,multicam,subtitles],[inspector,history]),row(col([monitor],[timeline]),[meters]))");
+    expect(shape(next)).toBe("col(row([media,source,effects,multicam,subtitles],[inspector,history]),row(col([monitor],[timeline]),[meters]))");
     // The area before the monitor takes its room.
     expect(sizes(next.children[0].node as LayoutNode)).toEqual([0.74, 0.26]);
     // The meters keep their fixed width.
@@ -76,7 +76,7 @@ describe("docking", () => {
   it("splits a tab off its own area", () => {
     const next = movePanel(edit, "source", "media", "bottom");
     const slot = (next.children[0].node as LayoutNode).children[0];
-    expect(shape(slot.node as LayoutNode)).toBe("col([media,multicam,subtitles],[source])");
+    expect(shape(slot.node as LayoutNode)).toBe("col([media,effects,multicam,subtitles],[source])");
   });
 
   it("merges branches of the same direction", () => {

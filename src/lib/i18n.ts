@@ -38,6 +38,7 @@ const EDIT_LABELS: Record<string, string> = {
   updateMedia: "Medien-Metadaten",
   setSourceMarks: "Quell-In/Out",
   setEffects: "Effekte",
+  addEffects: "Effekte hinzufügen",
   liftRange: "Herausheben",
   extractRange: "Extrahieren",
   replaceMedia: "Clip ersetzen",
@@ -79,6 +80,9 @@ const ERRORS: Record<string, string> = {
   versionNotFound: "Diese Version existiert nicht mehr.",
   openFileFailed: "Die Datei konnte nicht geöffnet werden.",
   ioFailed: "Die Datei konnte nicht gelesen oder geschrieben werden.",
+  libraryFailed: "Die lokale Bibliothek (Presets, Favoriten) ist nicht verfügbar.",
+  notFound: "Der Eintrag existiert nicht mehr.",
+  invalid: "Die Daten sind ungültig.",
 };
 
 export const errorText = (code: string, message: string) => ERRORS[code] ?? message;

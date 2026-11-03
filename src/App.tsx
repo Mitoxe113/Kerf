@@ -22,6 +22,7 @@ import { DragGhost, StatusBar, Toasts } from "./shell/StatusBar";
 import { TitleBar } from "./shell/TitleBar";
 import { MulticamPanel } from "./panels/Multicam";
 import { Workspace } from "./shell/Workspace";
+import { EffectsBrowser } from "./panels/EffectsBrowser";
 import { useEditor, type PanelId } from "./state/editor";
 import { activeSequence, useProject } from "./state/project";
 import { ContextMenuHost } from "./ui/primitives";
@@ -39,6 +40,7 @@ const PANELS: Record<PanelId, React.ReactNode> = {
   source: <SourceMonitor />,
   subtitles: <SubtitlesPanel />,
   multicam: <MulticamPanel />,
+  effects: <EffectsBrowser />,
 };
 
 /** Keeps the playback engine in sync with the document and view settings. */
