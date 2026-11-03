@@ -10,6 +10,7 @@
 //! * [`render`]   – the export renderer (timeline -> ffmpeg filter graph)
 
 pub mod analysis;
+pub mod detect;
 pub mod error;
 #[cfg(test)]
 mod exprtest;

@@ -4,6 +4,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
+  AnalysisProgress,
+  AnalysisRequest,
+  AnalysisResult,
+  AnalysisTarget,
+  DuckOptions,
+  DuckPlan,
+  SilenceOptions,
   AppInfo,
   ClipLoudness,
   CommandError,
@@ -76,6 +83,10 @@ export const api = {
   /** Read-only; waits for queued edits so the clips exist in the engine. */
   measureClips: (sequence: Uuid, clips: Uuid[]) => new Promise<void>((r) => whenIdle(r)).then(() => invoke<ClipLoudness[]>("measure_clips", { sequence, clips })),
   reversedAudio: (media: Uuid) => invoke<string>("reversed_audio", { media }),
+  analyze: (job: Uuid, target: AnalysisTarget, request: AnalysisRequest) => invoke<AnalysisResult>("analyze", { job, target, request }),
+  analyzeCancel: (job: Uuid) => invoke<void>("analyze_cancel", { job }),
+  duckPlan: (job: Uuid, sequence: Uuid, triggers: Uuid[], targets: Uuid[], speech: SilenceOptions, duck: DuckOptions) =>
+    invoke<DuckPlan>("duck_plan", { job, sequence, triggers, targets, speech, duck }),
   syncAngles: (media: Uuid[]) => invoke<(number | null)[]>("sync_angles", { media }),
   freezeFrame: (sequence: Uuid, clip: Uuid, frame: number, seconds: number) => serial(() => invoke<Delta>("freeze_frame", { sequence, clip, frame, seconds })),
   undo: () => serial(() => invoke<Delta | null>("undo")),
@@ -153,6 +164,7 @@ export interface MediaJobEvent {
 
 export const events = {
   mediaUpdated: (cb: (a: MediaAsset) => void): Promise<UnlistenFn> => listen<MediaAsset>("media-updated", (e) => whenIdle(() => cb(e.payload))),
+  analysisProgress: (cb: (p: AnalysisProgress) => void): Promise<UnlistenFn> => listen<AnalysisProgress>("analysis-progress", (e) => cb(e.payload)),
   mediaJob: (cb: (e: MediaJobEvent) => void): Promise<UnlistenFn> => listen<MediaJobEvent>("media-job", (e) => cb(e.payload)),
   exportUpdated: (cb: (j: ExportJob) => void): Promise<UnlistenFn> => listen<ExportJob>("export-updated", (e) => cb(e.payload)),
   appInfoChanged: (cb: () => void): Promise<UnlistenFn> => listen("app-info-changed", () => cb()),

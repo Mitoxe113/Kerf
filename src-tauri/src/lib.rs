@@ -1,5 +1,6 @@
 //! Kerf application shell: wires the engine crates to the Tauri window.
 
+mod assist;
 mod commands;
 mod export_jobs;
 mod library;
@@ -148,6 +149,9 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            assist::analyze,
+            assist::analyze_cancel,
+            assist::duck_plan,
             commands::app_info,
             commands::project_state,
             commands::project_new,

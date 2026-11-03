@@ -93,6 +93,59 @@ pub struct MarkerPatch {
     pub name: Option<String>,
     pub note: Option<String>,
     pub color: Option<MarkerColor>,
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default)]
+    pub duration: Option<Frame>,
+    #[serde(default)]
+    pub chapter: Option<bool>,
+}
+
+/// One marker of [`EditCommand::AddMarkers`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewMarker {
+    pub frame: Frame,
+    pub name: String,
+    #[serde(default)]
+    pub note: String,
+    pub color: MarkerColor,
+    #[serde(default)]
+    pub category: String,
+    #[serde(default)]
+    pub duration: Frame,
+    #[serde(default)]
+    pub chapter: bool,
+}
+
+/// Undo label of a [`EditCommand::Batch`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BatchLabel {
+    SceneCuts,
+    RemoveSilence,
+    Ducking,
+    AnalysisMarkers,
+    RelinkMedia,
+}
+
+impl BatchLabel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BatchLabel::SceneCuts => "sceneCuts",
+            BatchLabel::RemoveSilence => "removeSilence",
+            BatchLabel::Ducking => "ducking",
+            BatchLabel::AnalysisMarkers => "analysisMarkers",
+            BatchLabel::RelinkMedia => "relinkMedia",
+        }
+    }
+}
+
+/// Longest marker category.
+const MAX_CATEGORY: usize = 40;
+
+fn category(s: &str) -> String {
+    s.trim().chars().filter(|c| !c.is_control()).take(MAX_CATEGORY).collect()
 }
 
 /// New static gain of one audio clip (see [`EditCommand::SetClipGain`]).
@@ -260,12 +313,20 @@ pub enum EditCommand {
     AddMarker { sequence: Uuid, frame: Frame, name: String, color: MarkerColor },
     UpdateMarker { sequence: Uuid, marker: Uuid, patch: MarkerPatch },
     RemoveMarker { sequence: Uuid, marker: Uuid },
+    /// Adds several markers in one step (analysis results).
+    AddMarkers { sequence: Uuid, markers: Vec<NewMarker> },
+    /// Removes several markers in one step; unknown ids are an error.
+    RemoveMarkers { sequence: Uuid, markers: Vec<Uuid> },
     SetInOut { sequence: Uuid, in_point: Option<Frame>, out_point: Option<Frame> },
 
     // --- subtitles -----------------------------------------------------------
     /// Replaces all cues (sorted and de-overlapped).
     SetSubtitles { sequence: Uuid, cues: Vec<Cue> },
     SetSubtitleStyle { sequence: Uuid, style: TextStyle, margin: f32, visible: bool },
+
+    // --- grouped ---------------------------------------------------------------
+    /// Applies `commands` in order as one undo step; all or nothing. Batches do not nest.
+    Batch { label: BatchLabel, commands: Vec<EditCommand> },
 }
 
 impl EditCommand {
@@ -324,6 +385,9 @@ impl EditCommand {
             C::AddMarker { .. } => "addMarker",
             C::UpdateMarker { .. } => "updateMarker",
             C::RemoveMarker { .. } => "removeMarker",
+            C::AddMarkers { .. } => "addMarkers",
+            C::RemoveMarkers { .. } => "removeMarkers",
+            C::Batch { label, .. } => label.as_str(),
             C::SetInOut { .. } => "setInOut",
             C::SetSubtitles { .. } => "editSubtitles",
             C::SetSubtitleStyle { .. } => "subtitleStyle",
@@ -362,6 +426,8 @@ impl EditCommand {
             | C::AddMarker { sequence, .. }
             | C::UpdateMarker { sequence, .. }
             | C::RemoveMarker { sequence, .. }
+            | C::AddMarkers { sequence, .. }
+            | C::RemoveMarkers { sequence, .. }
             | C::SetInOut { sequence, .. }
             | C::SetSubtitles { sequence, .. }
             | C::SetSubtitleStyle { sequence, .. }
@@ -391,6 +457,26 @@ pub struct EditOutcome {
 pub fn apply(project: &mut Project, cmd: &EditCommand) -> Result<EditOutcome> {
     use EditCommand as C;
     let mut out = EditOutcome { label: cmd.label().to_string(), ..Default::default() };
+
+    if let C::Batch { commands, .. } = cmd {
+        if commands.iter().any(|c| matches!(c, C::Batch { .. })) {
+            return Err(EditError::Invalid("batches do not nest".into()));
+        }
+        // Work on a copy so a failing step leaves the project untouched.
+        let mut work = project.clone();
+        for c in commands {
+            let o = apply(&mut work, c)?;
+            out.changed |= o.changed;
+            out.media_changed |= o.media_changed;
+            out.sequences_changed |= o.sequences_changed;
+            out.sequence = out.sequence.or(o.sequence);
+            out.created.extend(o.created);
+        }
+        if out.changed {
+            *project = work;
+        }
+        return Ok(out);
+    }
 
     if let C::PlaceMulticam { sequence, .. } | C::SwitchAngle { sequence, .. } = cmd {
         return multicam_edit(project, *sequence, cmd, out);
@@ -1007,7 +1093,7 @@ fn edit_sequence(seq: &mut Sequence, media: &[MediaAsset], cmd: &EditCommand, ou
             Ok(changed)
         }
         C::AddMarker { frame, name, color, .. } => {
-            let m = Marker { id: Uuid::new_v4(), frame: (*frame).max(0), name: name.trim().to_string(), note: String::new(), color: *color };
+            let m = Marker { id: Uuid::new_v4(), frame: (*frame).max(0), name: name.trim().to_string(), note: String::new(), color: *color, category: String::new(), duration: 0, chapter: false };
             out.created.push(m.id);
             seq.markers.push(m);
             seq.markers.sort_by_key(|m| m.frame);
@@ -1028,9 +1114,43 @@ fn edit_sequence(seq: &mut Sequence, media: &[MediaAsset], cmd: &EditCommand, ou
             if let Some(c) = patch.color {
                 m.color = c;
             }
+            if let Some(c) = &patch.category {
+                m.category = category(c);
+            }
+            if let Some(d) = patch.duration {
+                m.duration = d.max(0);
+            }
+            if let Some(c) = patch.chapter {
+                m.chapter = c;
+            }
             let changed = *m != before;
             seq.markers.sort_by_key(|m| m.frame);
             Ok(changed)
+        }
+        C::AddMarkers { markers, .. } => {
+            for n in markers {
+                let m = Marker {
+                    id: Uuid::new_v4(),
+                    frame: n.frame.max(0),
+                    name: n.name.trim().to_string(),
+                    note: n.note.clone(),
+                    color: n.color,
+                    category: category(&n.category),
+                    duration: n.duration.max(0),
+                    chapter: n.chapter,
+                };
+                out.created.push(m.id);
+                seq.markers.push(m);
+            }
+            seq.markers.sort_by_key(|m| m.frame);
+            Ok(!markers.is_empty())
+        }
+        C::RemoveMarkers { markers, .. } => {
+            if markers.iter().any(|id| !seq.markers.iter().any(|m| m.id == *id)) {
+                return Err(EditError::MarkerNotFound);
+            }
+            seq.markers.retain(|m| !markers.contains(&m.id));
+            Ok(!markers.is_empty())
         }
         C::RemoveMarker { marker, .. } => {
             let before = seq.markers.len();
@@ -3137,5 +3257,67 @@ mod tests {
         assert_eq!(Fx::spans(&seq.tracks[0]), vec![(0, 50, 0), (50, 200, 0)]);
         // Media used by a group cannot be removed.
         assert_eq!(apply(&mut fx2, &EditCommand::RemoveMedia { media: vec![b_id] }), Err(EditError::MediaInUse(2)));
+    }
+
+    #[test]
+    fn batches_apply_as_one_step_or_not_at_all() {
+        let mut fx = Fx::new(10.0, false);
+        fx.place(0, None, None, PlaceMode::Overwrite);
+        let seq = fx.seq;
+        let ok = EditCommand::Batch {
+            label: BatchLabel::SceneCuts,
+            commands: vec![
+                EditCommand::SplitAt { sequence: seq, frame: 40, clips: None },
+                EditCommand::SplitAt { sequence: seq, frame: 80, clips: None },
+            ],
+        };
+        let out = fx.run(ok.clone());
+        assert_eq!(out.label, "sceneCuts");
+        assert_eq!(fx.p.sequence(seq).unwrap().tracks[0].clips.len(), 3);
+        // A failing step leaves everything as it was.
+        let before = fx.p.clone();
+        let bad = EditCommand::Batch {
+            label: BatchLabel::SceneCuts,
+            commands: vec![
+                EditCommand::SplitAt { sequence: seq, frame: 120, clips: None },
+                EditCommand::RemoveMarker { sequence: seq, marker: Uuid::new_v4() },
+            ],
+        };
+        assert_eq!(apply(&mut fx.p, &bad), Err(EditError::MarkerNotFound));
+        assert_eq!(fx.p, before);
+        let nested = EditCommand::Batch { label: BatchLabel::Ducking, commands: vec![ok] };
+        assert!(apply(&mut fx.p, &nested).is_err());
+        // Through the history it is a single undo step.
+        let mut p = before.clone();
+        let mut h = crate::history::History::new(10);
+        h.apply(&mut p, &EditCommand::Batch { label: BatchLabel::SceneCuts, commands: vec![
+            EditCommand::SplitAt { sequence: seq, frame: 10, clips: None },
+            EditCommand::SplitAt { sequence: seq, frame: 20, clips: None },
+        ] }).unwrap();
+        assert_eq!(p.sequence(seq).unwrap().tracks[0].clips.len(), 5);
+        h.undo(&mut p);
+        assert_eq!(p, before);
+    }
+
+    #[test]
+    fn markers_carry_categories_ranges_and_chapters() {
+        let mut fx = Fx::new(10.0, false);
+        let seq = fx.seq;
+        let nm = |frame, cat: &str| NewMarker { frame, name: format!("m{frame}"), note: String::new(), color: MarkerColor::Blue, category: cat.into(), duration: -3, chapter: frame == 0 };
+        let out = fx.run(EditCommand::AddMarkers { sequence: seq, markers: vec![nm(50, " beat\u{7} "), nm(0, "scene")] });
+        assert_eq!(out.created.len(), 2);
+        let m = &fx.p.sequence(seq).unwrap().markers;
+        assert_eq!((m[0].frame, m[0].chapter, m[0].category.as_str()), (0, true, "scene"));
+        assert_eq!((m[1].category.as_str(), m[1].duration), ("beat", 0));
+        let id = m[1].id;
+        fx.run(EditCommand::UpdateMarker { sequence: seq, marker: id, patch: MarkerPatch { duration: Some(12), category: Some("x".into()), ..Default::default() } });
+        assert_eq!(fx.p.sequence(seq).unwrap().markers[1].duration, 12);
+        let ids: Vec<Uuid> = fx.p.sequence(seq).unwrap().markers.iter().map(|m| m.id).collect();
+        assert!(apply(&mut fx.p, &EditCommand::RemoveMarkers { sequence: seq, markers: vec![ids[0], Uuid::new_v4()] }).is_err());
+        fx.run(EditCommand::RemoveMarkers { sequence: seq, markers: ids });
+        assert!(fx.p.sequence(seq).unwrap().markers.is_empty());
+        // Old project files without the new fields still load.
+        let old: Marker = serde_json::from_str(r#"{"id":"00000000-0000-0000-0000-000000000001","frame":3,"name":"a","color":"red"}"#).unwrap();
+        assert_eq!((old.category.as_str(), old.duration, old.chapter), ("", 0, false));
     }
 }

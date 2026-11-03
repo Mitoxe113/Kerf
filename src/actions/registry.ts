@@ -6,7 +6,7 @@ import { checkForUpdate } from "./update";
 import { toggleOutputWindow } from "../shell/OutputWindow";
 import { switchAngle } from "./multicam";
 import { engine } from "../engine/playback";
-import { useEditor, WORKSPACES, type ToolId } from "../state/editor";
+import { PANEL_LABELS, useEditor, WORKSPACES, type PanelId, type ToolId } from "../state/editor";
 import { useProject } from "../state/project";
 import { LABEL_NAMES, LABELS } from "../lib/labels";
 import * as E from "./editing";
@@ -215,7 +215,15 @@ const workspaces: Action[] = WORKSPACES.map((w, i) => ({
   checked: () => ed().workspace === w.id,
 }));
 
-export const ACTIONS: Action[] = [...base, ...tools, ...workspaces];
+const panels: Action[] = (Object.keys(PANEL_LABELS) as PanelId[]).map((p) => ({
+  id: `panel.${p}`,
+  group: "Fenster",
+  label: `Panel: ${PANEL_LABELS[p]}`,
+  keys: [],
+  run: () => ed().focusPanel(p),
+}));
+
+export const ACTIONS: Action[] = [...base, ...tools, ...workspaces, ...panels];
 export const ACTION_BY_ID = new Map(ACTIONS.map((a) => [a.id, a]));
 
 export function runAction(id: string) {
