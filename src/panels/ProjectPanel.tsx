@@ -420,7 +420,7 @@ function MetaView() {
   useEffect(() => {
     setRaw(null);
     setErr(null);
-    if (asset && !asset.title) api.mediaMetadata(asset.id).then((r) => setRaw(r as Probe)).catch((e) => setErr(isCommandError(e) ? e.message : String(e)));
+    if (asset && !asset.title && !asset.adjustment) api.mediaMetadata(asset.id).then((r) => setRaw(r as Probe)).catch((e) => setErr(isCommandError(e) ? e.message : String(e)));
   }, [asset?.id, asset?.path]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!asset) return <p className="p-3 text-xs text-fg-4">Wähle ein Medium in der Medienablage aus.</p>;
   const i = asset.info;

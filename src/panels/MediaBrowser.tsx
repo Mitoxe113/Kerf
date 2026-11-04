@@ -1,5 +1,5 @@
 import { useShallow } from "zustand/react/shallow";
-import { AlertTriangle, ChevronRight, Film, Folder, FolderPlus, FolderSearch, Image as ImageIcon, LayoutGrid, List, Loader2, Music, Plus, Search, Star } from "lucide-react";
+import { AlertTriangle, ChevronRight, Film, Folder, FolderPlus, FolderSearch, Image as ImageIcon, LayoutGrid, List, Loader2, Music, Plus, Search, SlidersHorizontal, Star } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { placeMedia } from "../actions/editing";
 import { importMedia, relinkMedia } from "../actions/project";
@@ -43,7 +43,7 @@ function Thumb({ a, scrub }: { a: MediaAsset; scrub: number | null }) {
   if (a.derived.poster) return <img src={fileUrl(a.derived.poster)} className="h-full w-full object-contain" draggable={false} alt="" />;
   // Titles have no poster; their PNG is the picture.
   if (a.title) return <img src={fileUrl(a.path)} className="h-full w-full bg-[#101012] object-contain" draggable={false} alt="" />;
-  const Icon = KIND_ICON[a.kind];
+  const Icon = a.adjustment ? SlidersHorizontal : KIND_ICON[a.kind];
   return (
     <div className="flex h-full w-full items-center justify-center text-fg-4">
       <Icon size={22} strokeWidth={1.3} />
@@ -185,9 +185,10 @@ export function MediaBrowser() {
       },
       { separator: true },
       { label: "Proxy erstellen", disabled: !ready || a.kind === "image" || !!a.derived.proxy, onSelect: () => void api.createProxies(ids) },
-      { label: "Neu analysieren", onSelect: () => void api.analyzeMedia(ids) },
-      { label: "Neu verknüpfen …", onSelect: () => void relinkMedia(a.id) },
-      { label: "Im Explorer anzeigen", onSelect: () => void api.revealPath(a.path) },
+      // Titles are drawn from their definition, adjustment layers have no file.
+      { label: "Neu analysieren", disabled: !!a.title || !!a.adjustment, onSelect: () => void api.analyzeMedia(ids) },
+      { label: "Neu verknüpfen …", disabled: !!a.title || !!a.adjustment, onSelect: () => void relinkMedia(a.id) },
+      { label: "Im Explorer anzeigen", disabled: !a.path, onSelect: () => void api.revealPath(a.path) },
       { separator: true },
       { label: "Aus Projekt entfernen", danger: true, onSelect: () => void edit({ type: "removeMedia", media: ids }) },
     ];

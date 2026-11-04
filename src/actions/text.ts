@@ -79,6 +79,66 @@ export async function addTitle() {
   }
 }
 
+/** Media entry of an adjustment layer (mirrors MediaAsset::adjustment_layer in kerf-core). */
+export function adjustmentAsset(s: Sequence): MediaAsset {
+  return {
+    id: crypto.randomUUID(),
+    path: "",
+    name: "Einstellungsebene",
+    kind: "image",
+    status: { state: "ready" },
+    info: {
+      duration: 0,
+      sizeBytes: 0,
+      container: "adjustment",
+      bitRate: null,
+      video: { codec: "adjustment", profile: null, width: s.settings.width, height: s.settings.height, fps: s.settings.fps, pixFmt: "rgba", bitRate: null, rotation: 0 },
+      audio: null,
+    },
+    bin: holdingBin(useProject.getState().project?.bins ?? [], useEditor.getState().currentBin),
+    favorite: false,
+    label: "none",
+    tags: [],
+    note: "",
+    importedAt: Date.now(),
+    derived: { poster: null, filmstrip: null, peaks: null, proxy: null, previewNative: true },
+    adjustment: true,
+  };
+}
+
+/**
+ * Adds a 5 s adjustment layer at the playhead on the first free video track
+ * above every track with a clip there (a new track when none is free) and
+ * opens its colour settings in the inspector.
+ */
+export async function addAdjustmentLayer() {
+  const s = seq();
+  if (!s) return;
+  const at = playhead();
+  const duration = Math.max(1, Math.round(5 * fpsOf(s.settings.fps)));
+  const video = s.tracks.map((t, i) => ({ t, i })).filter(({ t }) => t.kind === "video");
+  const shown = (i: number) => s.tracks[i].clips.some((c) => c.start < at + duration && c.start + c.duration > at);
+  const highest = video.reduce((h, v, k) => (shown(v.i) ? k : h), -1);
+  let track: Uuid | undefined = video.slice(highest + 1).find(({ i }) => free(s, i, at, at + duration))?.t.id;
+  try {
+    if (!track) {
+      const d = await edit({ type: "addTrack", sequence: s.id, kind: "video" });
+      track = d?.outcome.created[0];
+      if (!track) return;
+    }
+    const d = await edit({ type: "addAdjustment", sequence: s.id, asset: adjustmentAsset(s), track, at, duration });
+    const clip = d?.outcome.created[0];
+    if (clip) {
+      const ed = useEditor.getState();
+      ed.select([clip]);
+      ed.set({ inspectorTab: "color" });
+      ed.focusPanel("inspector");
+    }
+  } catch (e) {
+    reportError(e);
+  }
+}
+
 /** Commits an edited title: draws its PNG, then records the change. */
 export async function updateTitle(media: Uuid, spec: TitleSpec) {
   try {

@@ -72,6 +72,7 @@ fn import(tools: &Tools, path: &Path, cache: &Path) -> MediaAsset {
         marks: Default::default(),
         matrix: Default::default(),
         title: None,
+        adjustment: false,
     }
 }
 
@@ -1244,6 +1245,13 @@ fn segmented_export_matches_one_piece() {
     kerf_core::ops::apply(&mut p, &EditCommand::SetTransitions { sequence: seq, items }).unwrap();
     let cues = vec![Cue { id: Uuid::new_v4(), start: 200, end: 300, text: "Über die Grenze".into() }];
     kerf_core::ops::apply(&mut p, &EditCommand::SetSubtitles { sequence: seq, cues }).unwrap();
+    // An adjustment layer (colour, fade, an effect) across the first boundary as well.
+    let v2 = p.sequence(seq).unwrap().tracks[1].id;
+    let layer = Box::new(MediaAsset::adjustment_layer(&settings, 0));
+    let adj = kerf_core::ops::apply(&mut p, &EditCommand::AddAdjustment { sequence: seq, asset: layer, track: v2, at: 230, duration: 60 }).unwrap().created[0];
+    let patch = ClipPatch { color: Some(ColorAdjust { exposure: 0.5, saturation: 0.3, ..Default::default() }), opacity: Some(0.7), fade_in: Some(10), ..Default::default() };
+    kerf_core::ops::apply(&mut p, &EditCommand::UpdateClips { sequence: seq, clips: vec![adj], patch }).unwrap();
+    kerf_core::ops::apply(&mut p, &EditCommand::SetEffects { sequence: seq, clips: vec![adj], effects: vec![Effect::new(EffectKind::Vignette { amount: 0.6 })] }).unwrap();
     // Chapters at 0 s and 12 s (the second one across a part boundary); a plain marker is no chapter.
     let mark = |frame, name: &str, chapter| kerf_core::ops::NewMarker { frame, name: name.into(), note: String::new(), color: MarkerColor::Blue, category: String::new(), duration: 0, chapter };
     let markers = vec![mark(0, "Anfang", true), mark(300, "Teil = 2; #b", true), mark(400, "kein Kapitel", false)];
@@ -1320,6 +1328,103 @@ fn segmented_export_matches_one_piece() {
         String::from_utf8_lossy(&out.stdout).trim().to_string()
     };
     assert_eq!(md5(&parts), md5(&whole), "{log}");
+}
+
+/// Adjustment layers: colour, an effect and opacity act on the tracks below
+/// inside their range and not on tracks above; inside a nested sequence the
+/// transparent parts stay transparent.
+#[test]
+fn adjustment_layers_render() {
+    let Some(tools) = tools() else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    let (bg, fg) = (d.join("grey.mp4"), d.join("white.mp4"));
+    ffmpeg(&tools, &["-f", "lavfi", "-i", "color=c=0x808080:s=320x180:r=25:d=2", "-c:v", "libx264", "-preset", "ultrafast", "-y", &bg.to_string_lossy()]);
+    ffmpeg(&tools, &["-f", "lavfi", "-i", "color=c=white:s=320x180:r=25:d=2", "-c:v", "libx264", "-preset", "ultrafast", "-y", &fg.to_string_lossy()]);
+    let (bg, fg) = (import(&tools, &bg, &d.join("cache")), import(&tools, &fg, &d.join("cache")));
+    let (bg_id, fg_id) = (bg.id, fg.id);
+    let mut p = Project::new("a", 0);
+    p.media.extend([bg, fg]);
+    let seq = p.active_sequence;
+    let settings = SequenceSettings { width: 320, height: 180, fps: Rational::new(25, 1), sample_rate: 48_000 };
+    let run = |p: &mut Project, cmd: EditCommand| kerf_core::ops::apply(p, &cmd).unwrap();
+    run(&mut p, EditCommand::UpdateSequenceSettings { sequence: seq, settings });
+    let place = |sequence, media, video_track| EditCommand::PlaceMedia {
+        sequence, media, video_track, audio_track: None, at: 0,
+        mode: PlaceMode::Overwrite, source_in: None, source_out: None, match_sequence: false,
+    };
+    let small_box = ClipPatch { transform: Some(Transform { x: -100.0, scale: 0.25, ..Default::default() }), ..Default::default() };
+    let export = |p: &Project, name: &str| {
+        let file = d.join(name);
+        let s = ExportSettings {
+            output: file.clone(), video_codec: VideoCodec::H264, hardware: false, width: 320, height: 180,
+            fps: Rational::new(25, 1), rate: RateControl::Quality { crf: 10 }, audio_codec: AudioCodec::Aac,
+            audio_bitrate_kbps: 192, sample_rate: 48_000, audio_channels: 2, use_in_out: false,
+            subtitles: Default::default(), title_files: Default::default(), title_sequences: Default::default(), loudness: None, segmented: false, chapters: false, cache_dir: None,
+        };
+        let plan = render::plan(p, p.sequence(seq).unwrap(), &s, d, &[]).unwrap();
+        let mut log = String::new();
+        render::render_logged(&tools, &plan, &AtomicBool::new(false), |_| {}, &mut log).unwrap_or_else(|e| panic!("{e}\n{log}"));
+        file
+    };
+    let at = |f: &Path, frame: u32, r: (u32, u32, u32, u32)| region_luma(&tools, f, frame as f64 / 25.0, r);
+    // The centre (where the vignette leaves the picture alone), the box, a corner.
+    let (rest, boxed, corner) = ((150, 80, 20, 20), (40, 80, 30, 20), (0, 0, 16, 16));
+
+    // V1 grey; V2 an adjustment layer at 10..40 (+1 exposure, vignette, 50 %); V3 a white box.
+    let tracks = p.sequence(seq).unwrap().tracks.clone();
+    run(&mut p, place(seq, bg_id, None));
+    let layer = MediaAsset::adjustment_layer(&settings, 0);
+    let adj = run(&mut p, EditCommand::AddAdjustment { sequence: seq, asset: Box::new(layer), track: tracks[1].id, at: 10, duration: 30 }).created[0];
+    run(&mut p, EditCommand::UpdateClips {
+        sequence: seq, clips: vec![adj],
+        patch: ClipPatch { color: Some(ColorAdjust { exposure: 1.0, ..Default::default() }), opacity: Some(0.5), ..Default::default() },
+    });
+    run(&mut p, EditCommand::SetEffects { sequence: seq, clips: vec![adj], effects: vec![Effect::new(EffectKind::Vignette { amount: 1.0 })] });
+    let v3 = run(&mut p, EditCommand::AddTrack { sequence: seq, kind: TrackKind::Video }).created[0];
+    let top = run(&mut p, place(seq, fg_id, Some(v3))).created[0];
+    run(&mut p, EditCommand::UpdateClips { sequence: seq, clips: vec![top], patch: small_box.clone() });
+    assert_no_unknown_fields(&p);
+    let file = export(&p, "adjust.mp4");
+    let (before, inside, after) = (at(&file, 5, rest), at(&file, 20, rest), at(&file, 45, rest));
+    let (box_inside, corner_inside, corner_before) = (at(&file, 20, boxed), at(&file, 20, corner), at(&file, 5, corner));
+    eprintln!("grey {before:.1} -> {inside:.1} -> {after:.1}, box {box_inside:.1}, corner {corner_before:.1} -> {corner_inside:.1}");
+    assert!((before - 126.0).abs() < 6.0 && (after - before).abs() < 2.0, "outside its range the layer does nothing");
+    assert!((inside - (255.0 + before) / 2.0).abs() < 6.0, "half of the brightened grey");
+    assert!(box_inside > 245.0, "the box above stays white");
+    assert!((corner_before - before).abs() < 3.0 && corner_inside < inside - 15.0, "the vignette darkens the corners");
+
+    // Inside a nested sequence: a darkened white box; where the sequence is empty the grey below shows.
+    let inner = run(&mut p, EditCommand::AddSequence { name: "Innen".into(), settings }).created[0];
+    let inner_tracks = p.sequence(inner).unwrap().tracks.clone();
+    let b = run(&mut p, place(inner, fg_id, None)).created[0];
+    run(&mut p, EditCommand::UpdateClips { sequence: inner, clips: vec![b], patch: small_box });
+    let layer = MediaAsset::adjustment_layer(&settings, 0);
+    let dark = run(&mut p, EditCommand::AddAdjustment { sequence: inner, asset: Box::new(layer), track: inner_tracks[1].id, at: 0, duration: 50 }).created[0];
+    run(&mut p, EditCommand::UpdateClips {
+        sequence: inner, clips: vec![dark],
+        patch: ClipPatch { color: Some(ColorAdjust { exposure: -1.0, ..Default::default() }), ..Default::default() },
+    });
+    let outer_tracks = p.sequence(seq).unwrap().tracks.clone();
+    for t in outer_tracks.iter().skip(1).filter(|t| t.kind == TrackKind::Video) {
+        let ids: Vec<Uuid> = t.clips.iter().map(|c| c.id).collect();
+        if !ids.is_empty() {
+            run(&mut p, EditCommand::DeleteClips { sequence: seq, clips: ids, ripple: false });
+        }
+    }
+    run(&mut p, place(seq, inner, Some(outer_tracks[1].id)));
+    let file = export(&p, "nested.mp4");
+    let (grey, boxed) = (at(&file, 20, rest), at(&file, 20, boxed));
+    eprintln!("nested: grey {grey:.1}, box {boxed:.1}");
+    assert!((grey - before).abs() < 3.0, "transparent parts of the nested sequence stay transparent");
+    assert!((boxed - 128.0).abs() < 8.0, "the white box at half brightness");
+    // With an effect: the vignette darkens the box near the edge (the preview's
+    // compositor gives 19.9 there), the grey around it stays.
+    run(&mut p, EditCommand::SetEffects { sequence: inner, clips: vec![dark], effects: vec![Effect::new(EffectKind::Vignette { amount: 1.0 })] });
+    let file = export(&p, "nested_fx.mp4");
+    let (grey, dimmed) = (at(&file, 20, rest), at(&file, 20, (40, 80, 30, 20)));
+    eprintln!("nested with vignette: grey {grey:.1}, box {dimmed:.1}");
+    assert!((grey - before).abs() < 3.0 && (dimmed - 19.9).abs() < 8.0);
 }
 
 #[test]

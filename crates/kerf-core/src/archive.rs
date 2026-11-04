@@ -117,7 +117,7 @@ pub fn plan(project: &Project, o: &ArchiveOptions) -> ArchivePlan {
             _ => out.missing.push(path.to_path_buf()),
         }
     };
-    for m in project.media.iter().filter(|m| m.title.is_none()) {
+    for m in project.media.iter().filter(|m| m.has_file()) {
         if o.include_unused || used.contains(&m.id) {
             add(&m.path, "Media", &mut out);
         } else {
@@ -187,7 +187,7 @@ pub fn write(project: &Project, plan: &ArchivePlan, dest: &Path, name: &str, can
         }
     });
     // Thumbnails, waveforms and proxies are machine-local caches: made again on open.
-    for m in copy.media.iter_mut().filter(|m| m.title.is_none()) {
+    for m in copy.media.iter_mut().filter(|m| m.has_file()) {
         m.derived = Derived::default();
         m.status = MediaStatus::Analyzing;
     }

@@ -2,7 +2,7 @@
 
 Nicht-linearer Videoschnitt für den Desktop. Rust-Engine, Tauri-2-Shell, React-Oberfläche, FFmpeg für Analyse und Export, WebGL2 für die Echtzeit-Vorschau.
 
-> **Stand:** Phase 1–3 und 7–10 sind fertig und getestet: Mehrspur-Timeline mit allen Profi-Werkzeugen, Quellmonitor, Keyframes mit Bezier-Kurven, Effekt-Stapel mit LUTs, Chroma-Key, Farbrädern und Kurven, Titel und Untertitel (SRT/VTT), Übergänge, Audio-Effekte und Lautheit, Geschwindigkeitsrampen und Rückwärts-Clips, verschachtelte Sequenzen, Multicam, andockbare Panels, Programmausgabe auf einem zweiten Bildschirm, segmentierter Export, automatische Updates. Die CI baut und testet unter Windows. Was noch fehlt, steht ehrlich in [docs/STATUS.md](docs/STATUS.md), die nächsten Schritte in [docs/ROADMAP.md](docs/ROADMAP.md).
+> **Stand:** Phase 1–3 und 7–10 sind fertig und getestet: Mehrspur-Timeline mit allen Profi-Werkzeugen, Quellmonitor, Keyframes mit Bezier-Kurven, Effekt-Stapel mit LUTs, Chroma-Key, Farbrädern und Kurven, Titel und Untertitel (SRT/VTT), Übergänge, Audio-Effekte und Lautheit, Geschwindigkeitsrampen und Rückwärts-Clips, verschachtelte Sequenzen, Einstellungsebenen, Multicam, andockbare Panels, Programmausgabe auf einem zweiten Bildschirm, segmentierter Export, automatische Updates. Die CI baut und testet unter Windows. Was noch fehlt, steht ehrlich in [docs/STATUS.md](docs/STATUS.md), die nächsten Schritte in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Installieren
 
@@ -53,7 +53,7 @@ npm test
 npm run typecheck
 ```
 
-Die Rust-Tests enthalten 20 echte Läufe mit FFmpeg (`crates/kerf-media/tests/pipeline.rs`): Testmedien erzeugen → analysieren → schneiden → rendern → Pixel, Ton und Dauer des Ergebnisses prüfen, für Keyframes, Effekte (auch animiert und mit Freiform-Masken), Übergänge, Untertitel, Audio-Effekte, Rauschunterdrückung, Rampen, verschachtelte Sequenzen, Multicam und den segmentierten Export. Ohne FFmpeg werden sie übersprungen; mit `KERF_REQUIRE_FFMPEG=1` (so in der CI) schlagen sie stattdessen fehl.
+Die Rust-Tests enthalten 21 echte Läufe mit FFmpeg (`crates/kerf-media/tests/pipeline.rs`): Testmedien erzeugen → analysieren → schneiden → rendern → Pixel, Ton und Dauer des Ergebnisses prüfen, für Keyframes, Effekte (auch animiert und mit Freiform-Masken), Übergänge, Untertitel, Audio-Effekte, Rauschunterdrückung, Rampen, verschachtelte Sequenzen, Einstellungsebenen, Multicam und den segmentierten Export. Ohne FFmpeg werden sie übersprungen; mit `KERF_REQUIRE_FFMPEG=1` (so in der CI) schlagen sie stattdessen fehl.
 
 Die [CI](.github/workflows/ci.yml) führt bei jedem Push alles unter Windows aus und baut den unsignierten Installer als Artefakt.
 

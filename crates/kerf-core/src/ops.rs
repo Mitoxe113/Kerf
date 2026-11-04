@@ -307,6 +307,10 @@ pub enum EditCommand {
     /// Adds a title asset to the project and places it at `at` on `track`
     /// (overwriting what is there). One undo step.
     AddTitle { sequence: Uuid, asset: Box<MediaAsset>, track: Uuid, at: Frame, duration: Frame },
+    /// Adds an adjustment layer (`asset.adjustment`, an image without a file)
+    /// and places it like a title. Its clips apply their colour, effects and
+    /// opacity to the tracks below; they take no part in transitions.
+    AddAdjustment { sequence: Uuid, asset: Box<MediaAsset>, track: Uuid, at: Frame, duration: Frame },
     /// Swaps the media of a clip (and its linked partners) keeping position and length.
     ReplaceMedia { sequence: Uuid, clip: Uuid, media: Uuid },
     CloseGap { sequence: Uuid, track: Uuid, frame: Frame },
@@ -417,6 +421,7 @@ impl EditCommand {
             C::ReplaceMedia { .. } => "replaceMedia",
             C::InsertStill { .. } => "insertStill",
             C::AddTitle { .. } => "addTitle",
+            C::AddAdjustment { .. } => "addAdjustment",
             C::CloseGap { .. } => "closeGap",
             C::PasteClips { .. } => "pasteClips",
             C::DuplicateClips { .. } => "duplicateClips",
@@ -551,6 +556,9 @@ pub fn apply(project: &mut Project, cmd: &EditCommand) -> Result<EditOutcome> {
             seq.tracks.iter_mut().for_each(|t| {
                 t.tidy_transitions();
             });
+            if drop_adjustment_transitions(&mut seq, &sources) && project.sequence(seq_id) == Some(&seq) {
+                return Ok(out);
+            }
             *project.sequence_mut(seq_id).expect("sequence exists") = seq;
             out.sequence = Some(seq_id);
             out.changed = true;
@@ -563,6 +571,9 @@ pub fn apply(project: &mut Project, cmd: &EditCommand) -> Result<EditOutcome> {
             if assets.iter().any(|a| project.media(a.id).is_some()) {
                 return Err(EditError::Invalid("duplicate media id".into()));
             }
+            if assets.iter().any(|a| a.adjustment) {
+                return Err(EditError::Invalid("adjustment layers are added with addAdjustment".into()));
+            }
             let held: Vec<MediaAsset> = assets.iter().map(|a| MediaAsset { bin: holding_bin(project, a.bin), ..a.clone() }).collect();
             project.media.extend(held);
             out.created = assets.iter().map(|a| a.id).collect();
@@ -574,10 +585,19 @@ pub fn apply(project: &mut Project, cmd: &EditCommand) -> Result<EditOutcome> {
         }
         C::AddTitle { sequence, asset, track, at, duration } => {
             let title = asset.title.as_ref().and_then(TitleSpec::sanitized).ok_or_else(|| EditError::Invalid("title".into()))?;
-            if asset.kind != MediaKind::Image || asset.info.is_none() {
+            if asset.kind != MediaKind::Image || asset.info.is_none() || asset.adjustment {
                 return Err(EditError::Invalid("title".into()));
             }
             let asset = MediaAsset { title: Some(title), ..(**asset).clone() };
+            add_still(project, *sequence, &asset, *track, *at, *duration, PlaceMode::Overwrite, &mut out)?;
+        }
+        C::AddAdjustment { sequence, asset, track, at, duration } => {
+            let size = asset.info.as_ref().and_then(|i| i.video.as_ref()).map(|v| (v.width, v.height));
+            if !asset.adjustment || asset.title.is_some() || asset.kind != MediaKind::Image || !size.is_some_and(|(w, h)| w > 0 && h > 0) {
+                return Err(EditError::Invalid("adjustment layer".into()));
+            }
+            let info = asset.info.clone().map(|i| MediaInfo { audio: None, ..i });
+            let asset = MediaAsset { path: PathBuf::new(), status: MediaStatus::Ready, info, ..(**asset).clone() };
             add_still(project, *sequence, &asset, *track, *at, *duration, PlaceMode::Overwrite, &mut out)?;
         }
         C::RemoveMedia { media } => {
@@ -694,6 +714,10 @@ pub fn apply(project: &mut Project, cmd: &EditCommand) -> Result<EditOutcome> {
         }
         C::RelinkMedia { media, path } => {
             let asset = project.media_mut(*media).ok_or(EditError::MediaNotFound)?;
+            // Titles are drawn from their definition, adjustment layers have no file.
+            if asset.is_generated() {
+                return Err(EditError::Invalid("generated media has no file to relink".into()));
+            }
             asset.path = path.clone();
             asset.status = MediaStatus::Analyzing;
             asset.derived = Derived::default();
@@ -1081,8 +1105,8 @@ fn plain_nested(c: &Clip, kind: TrackKind) -> bool {
 }
 
 /// The clips of `track` inside `[lo, hi)` (trimmed to it), or why taking them
-/// out would change what the window shows.
-fn window_of(track: &Track, lo: Frame, hi: Frame) -> Result<Vec<Clip>> {
+/// out would change what the window shows. `adjust` holds the adjustment layers.
+fn window_of(track: &Track, lo: Frame, hi: Frame, adjust: &HashSet<Uuid>) -> Result<Vec<Clip>> {
     let block = |b| Err(EditError::CannotUnnest(b));
     for b in 0..track.clips.len() {
         if let Some(s) = track.transition_into(b) {
@@ -1098,6 +1122,10 @@ fn window_of(track: &Track, lo: Frame, hi: Frame) -> Result<Vec<Clip>> {
         }
         if track.kind == TrackKind::Video && c.start < hi && c.end() > lo && c.blend_mode != BlendMode::Normal {
             return block(UnnestBlock::BlendMode);
+        }
+        // In the nested sequence it changes only the tracks below it there.
+        if c.start < hi && c.end() > lo && c.enabled && adjust.contains(&c.media_id) {
+            return block(UnnestBlock::Adjustment);
         }
     }
     let mut copy = track.clone();
@@ -1145,6 +1173,7 @@ fn unnest_clip(project: &mut Project, seq_id: Uuid, clip_id: Uuid, out: &mut Edi
         outer.track_mut(*track).expect("exists").clips.retain(|c| c.id != m.id);
     }
 
+    let adjust: HashSet<Uuid> = project.media.iter().filter(|m| m.adjustment).map(|m| m.id).collect();
     let mut links = HashMap::new();
     for (track, kind, m) in &members {
         let (lo, hi) = (m.source_in, m.source_in + m.duration);
@@ -1161,7 +1190,7 @@ fn unnest_clip(project: &mut Project, seq_id: Uuid, clip_id: Uuid, out: &mut Edi
             if !plain_mix(t) {
                 return Err(block(UnnestBlock::TrackMix));
             }
-            layers.push((k, window_of(t, lo, hi)?));
+            layers.push((k, window_of(t, lo, hi, &adjust)?));
         }
         let Some(&(k0, _)) = layers.first() else { continue };
         let span = layers.last().expect("not empty").0 - k0;
@@ -1520,6 +1549,7 @@ fn add_still(project: &mut Project, sequence: Uuid, asset: &MediaAsset, track: U
         t.tidy_transitions();
     });
     project.media.push(MediaAsset { bin: holding_bin(project, asset.bin), ..asset.clone() });
+    drop_adjustment_transitions(&mut seq, &project.media);
     *project.sequence_mut(sequence).expect("sequence exists") = seq;
     out.sequence = Some(sequence);
     out.changed = true;
@@ -1530,6 +1560,16 @@ fn add_still(project: &mut Project, sequence: Uuid, asset: &MediaAsset, track: U
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Adjustment layers take no part in transitions: drops those into or out of
+/// their clips. True when something was dropped.
+fn drop_adjustment_transitions(seq: &mut Sequence, media: &[MediaAsset]) -> bool {
+    let adjust: HashSet<Uuid> = media.iter().filter(|m| m.adjustment).map(|m| m.id).collect();
+    if adjust.is_empty() {
+        return false;
+    }
+    seq.tracks.iter_mut().fold(false, |any, t| t.drop_transitions_of(|c| adjust.contains(&c.media_id)) | any)
+}
 
 fn yes() -> bool {
     true
@@ -2838,6 +2878,7 @@ mod tests {
             marks: Default::default(),
             matrix: Default::default(),
             title: None,
+            adjustment: false,
         }
     }
 
@@ -3770,6 +3811,7 @@ mod tests {
         let id = asset.id;
         let out = fx.run(EditCommand::AddTitle { sequence: fx.seq, asset: Box::new(asset.clone()), track: v1, at: 20, duration: 30 });
         assert!(out.media_changed && out.created.len() == 1);
+        assert!(apply(&mut fx.p, &EditCommand::RelinkMedia { media: id, path: "x.png".into() }).is_err());
         // Overwrite, not insert: the sequence keeps its length.
         assert_eq!(Fx::spans(fx.v1()), vec![(0, 20, 0), (20, 30, 0), (50, 50, 50)]);
 
@@ -3788,6 +3830,61 @@ mod tests {
         let other = fx.media;
         let t = fx.p.media(id).unwrap().title.clone().unwrap();
         assert!(apply(&mut fx.p, &EditCommand::UpdateTitle { media: other, title: t, path: "x.png".into() }).is_err());
+    }
+
+    #[test]
+    fn adjustment_layers_are_placed_without_files_or_transitions() {
+        let mut fx = Fx::new(10.0, false);
+        fx.place(0, Some(0), Some(100), PlaceMode::Overwrite);
+        let v1 = fx.v1().id;
+        let settings = fx.s().settings;
+        let layer = MediaAsset::adjustment_layer(&settings, 0);
+        let add = |asset: MediaAsset| EditCommand::AddAdjustment { sequence: fx.seq, asset: Box::new(asset), track: v1, at: 50, duration: 50 };
+        // Not media: neither imported nor added as a title or as anything but an image with a size.
+        assert!(apply(&mut fx.p, &EditCommand::ImportMedia { assets: vec![layer.clone()] }).is_err());
+        let titled = MediaAsset { title: title_asset().title, ..layer.clone() };
+        assert!(apply(&mut fx.p, &EditCommand::AddTitle { sequence: fx.seq, asset: Box::new(titled.clone()), track: v1, at: 50, duration: 50 }).is_err());
+        assert!(apply(&mut fx.p, &add(titled)).is_err());
+        assert!(apply(&mut fx.p, &add(MediaAsset { adjustment: false, ..layer.clone() })).is_err());
+        assert!(apply(&mut fx.p, &add(MediaAsset { kind: MediaKind::Video, ..layer.clone() })).is_err());
+        let mut flat = layer.clone();
+        flat.info.as_mut().unwrap().video.as_mut().unwrap().width = 0;
+        assert!(apply(&mut fx.p, &add(flat)).is_err());
+        assert_eq!(fx.p.media.len(), 1);
+
+        // A path or sound sent along is dropped: the layer reads no file.
+        let mut sent = layer.clone();
+        sent.path = "x.png".into();
+        sent.status = MediaStatus::Missing;
+        sent.info.as_mut().unwrap().audio = video_asset(1.0, true).info.unwrap().audio;
+        let out = fx.run(add(sent));
+        assert!(out.media_changed && out.created.len() == 1);
+        assert_eq!(Fx::spans(fx.v1()), vec![(0, 50, 0), (50, 50, 0)]);
+        let a = fx.p.media(layer.id).unwrap();
+        assert!(a.path.as_os_str().is_empty() && a.status == MediaStatus::Ready && a.info.as_ref().unwrap().audio.is_none());
+        assert!(a.is_generated() && !a.has_file());
+        // Nothing to relink: it would wait for an analysis that never comes.
+        assert!(apply(&mut fx.p, &EditCommand::RelinkMedia { media: layer.id, path: "x.mp4".into() }).is_err());
+
+        // Transitions into or out of it are dropped, so the edit changes nothing.
+        let layer_clip = out.created[0];
+        let dissolve = Some(Transition { kind: TransitionKind::Dissolve, duration: 10, align: TransitionAlign::Center });
+        let before = fx.p.clone();
+        let out = apply(&mut fx.p, &EditCommand::SetTransitions { sequence: fx.seq, items: vec![TransitionEdit { clip: layer_clip, transition: dissolve }] }).unwrap();
+        assert!(!out.changed);
+        assert_eq!(fx.p, before);
+        // An ordinary clip after it gets none either.
+        fx.place(100, Some(100), Some(150), PlaceMode::Overwrite);
+        let after = fx.v1().clips[2].id;
+        let before = fx.p.clone();
+        assert!(!apply(&mut fx.p, &EditCommand::SetTransitions { sequence: fx.seq, items: vec![TransitionEdit { clip: after, transition: dissolve }] }).unwrap().changed);
+        assert_eq!(fx.p, before);
+        // One written into a file is dropped on load.
+        let seq = fx.seq;
+        fx.p.sequence_mut(seq).unwrap().tracks[0].clips[1].transition = dissolve;
+        fx.p.sequence_mut(seq).unwrap().tracks[0].clips[2].transition = dissolve;
+        fx.p.normalize();
+        assert!(fx.v1().clips.iter().all(|c| c.transition.is_none()));
     }
 
     #[test]
@@ -4005,6 +4102,13 @@ mod tests {
         apply(&mut p, &EditCommand::UpdateClips { sequence: inner, clips: vec![inner_clip], patch }).unwrap();
         apply(&mut p, &EditCommand::TrimClip { sequence: fx.seq, clip, edge: Edge::Start, delta: 10, ripple: false, linked: true }).unwrap();
         assert_eq!(unnest(&mut p, clip), refused(UnnestBlock::Edge));
+        // An adjustment layer in the nested sequence (it would reach the tracks below).
+        let mut p = fx.clone_project();
+        let settings = p.sequence(inner).unwrap().settings;
+        let v1 = p.sequence(inner).unwrap().tracks[0].id;
+        let asset = Box::new(MediaAsset::adjustment_layer(&settings, 0));
+        apply(&mut p, &EditCommand::AddAdjustment { sequence: inner, asset, track: v1, at: 30, duration: 10 }).unwrap();
+        assert_eq!(unnest(&mut p, clip), refused(UnnestBlock::Adjustment));
         // The plain case works.
         let before = fx.clone_project();
         assert_eq!(unnest(&mut fx.p, clip).map(|_| ()), Ok(()));

@@ -56,6 +56,9 @@ pub enum UnnestBlock {
     Edge,
     /// A clip of the sequence uses a blend mode other than normal.
     BlendMode,
+    /// An adjustment layer of the sequence would act on the tracks below the
+    /// nested clip too.
+    Adjustment,
 }
 
 pub type Result<T> = std::result::Result<T, EditError>;

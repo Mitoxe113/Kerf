@@ -27,7 +27,7 @@ use std::time::{Duration, Instant};
 use kerf_core::audio::{active as active_effects, AudioEffect, AudioEffectKind, EqShape, LIMITER_ATTACK_MS};
 use kerf_core::model::{
     Clip, ColorTags, Cue, CurvePoint, Ease, Effect, EffectKind, Keyframe, MediaAsset, MediaKind, MediaStatus, Param, Project, Sequence, TrackKind,
-    TransitionKind, TransitionSpan, Ycc,
+    Transform, TransitionKind, TransitionSpan, Ycc,
 };
 use kerf_core::text::{write_subtitles, SubtitleFormat};
 use kerf_core::time::{Frame, Rational};
@@ -606,6 +606,9 @@ fn levels_commands(clip: &Clip, seg: &Segment, frame_s: f64, target: &str) -> St
 /// Transparent border (source pixels) added around animated clips before
 /// warping: `perspective` repeats edge pixels outside the source.
 const PAD: u32 = 2;
+
+/// Labels of adjustment layers start here (clips use their input index).
+const ADJUSTMENT_LABELS: usize = 1_000_000;
 
 /// `perspective` filter that maps the padded, frame-sized source onto its
 /// animated placement: corner = centre + offset + S * R(theta) * (corner - anchor).
@@ -1391,7 +1394,7 @@ pub fn overwrites_media(project: &Project, output: &Path) -> bool {
         if cfg!(windows) { p.to_string_lossy().to_lowercase() } else { p.to_string_lossy().into_owned() }
     };
     let out = key(output);
-    project.media.iter().filter(|m| m.title.is_none()).any(|m| key(&m.path) == out)
+    project.media.iter().filter(|m| m.has_file()).any(|m| key(&m.path) == out)
 }
 
 /// What a call of [`plan_one`] renders.
@@ -1731,6 +1734,7 @@ fn plan_one(
         num(duration)
     ));
     let mut last = "base".to_string();
+    let mut adjustments = 0usize;
 
     let asset_for = |c: &Clip| -> Result<Option<&kerf_core::model::MediaAsset>, MediaError> {
         let Some(a) = project.media(c.media_id) else { return Ok(None) };
@@ -1753,6 +1757,8 @@ fn plan_one(
         // Composite under the outgoing clip of a transition, for the incoming side.
         let mut below: Option<String> = None;
         for (ci, clip) in track.clips.iter().enumerate() {
+            // Alpha of the composite under an adjustment layer (nested sequences).
+            let mut restore_alpha: Option<String> = None;
             let incoming = spans[ci];
             let outgoing = spans.get(ci + 1).copied().flatten();
             let placed = 'clip: {
@@ -1762,14 +1768,22 @@ fn plan_one(
             let head_ext = incoming.map_or(0, |s| s.cut - s.t0);
             let tail_ext = outgoing.map_or(0, |s| s.t1 - s.cut);
             let Some(seg) = segment_ext(clip, head_ext, tail_ext, t0, t1).filter(|_| visible) else { break 'clip None };
+            let Some(asset) = asset_for(clip)? else { break 'clip None };
+            // An adjustment layer works on the composite so far, full frame: its
+            // transform does not apply.
+            let adjust = asset.adjustment;
             // Animated position/scale/rotation: the clip is warped onto the frame by
             // `perspective` with per-frame corner expressions (same math as `place`).
-            let animated = [Param::X, Param::Y, Param::Scale, Param::Rotation].iter().any(|p| !clip.keys_of(*p).is_empty());
+            let animated = !adjust && [Param::X, Param::Y, Param::Scale, Param::Rotation].iter().any(|p| !clip.keys_of(*p).is_empty());
             let fading = !clip.keys_of(Param::Opacity).is_empty();
-            let Some(asset) = asset_for(clip)? else { break 'clip None };
             let info = asset.info.as_ref().expect("checked");
-            let Some((dw, dh)) = display_size(info) else { break 'clip None };
-            let t = &clip.transform;
+            let full_frame = Transform::default();
+            let (t, (dw, dh)) = if adjust {
+                (&full_frame, (seq.settings.width, seq.settings.height))
+            } else {
+                let Some(size) = display_size(info) else { break 'clip None };
+                (&clip.transform, size)
+            };
             if t.scale <= 0.0 && !animated {
                 break 'clip None;
             }
@@ -1782,10 +1796,35 @@ fn plan_one(
             let seg_len = sf.frames_to_seconds(seg.len);
             let offset = sf.frames_to_seconds(seg.start - t0);
             let image = asset.kind == MediaKind::Image;
-            let k = inputs;
+            let k = if adjust {
+                adjustments += 1;
+                ADJUSTMENT_LABELS + adjustments
+            } else {
+                inputs
+            };
             let mut src = format!("{k}:v:0");
             let mut f: Vec<String> = Vec::new();
-            if clip.is_warped() && !image {
+            if adjust {
+                // A copy of the composite, cut to the segment so its time runs from
+                // the segment's start like a clip's. In a nested sequence the
+                // composite has alpha: the copy and the base are mixed opaque and the
+                // base's alpha is put back after the overlay.
+                if intermediate {
+                    chains.push(format!("[{last}]split=3[adjb{k}][adji{k}][adja{k}]"));
+                    chains.push(format!("[adjb{k}]lutrgb=a=maxval[adjo{k}]"));
+                    last = format!("adjo{k}");
+                    restore_alpha = Some(format!("adja{k}"));
+                } else {
+                    chains.push(format!("[{last}]split[adjb{k}][adji{k}]"));
+                    last = format!("adjb{k}");
+                }
+                src = format!("adji{k}");
+                f.push(format!(
+                    "trim=start={}:end={},setpts=PTS-STARTPTS",
+                    num((offset - 0.5 * frame_s).max(0.0)),
+                    num(offset + seg_len - 0.5 * frame_s)
+                ));
+            } else if clip.is_warped() && !image {
                 let (wargs, chain, n) = warped_video(clip, &seg, asset, sf, k);
                 args.extend(wargs);
                 inputs += n;
@@ -1870,6 +1909,10 @@ fn plan_one(
                 f.push(format!("scale={sw}:{sh}:flags=bicubic"));
             }
             f.push("format=rgba".into());
+            if adjust {
+                // Opaque: the layer's opacity alone mixes it with the composite.
+                f.push("lutrgb=a=maxval".into());
+            }
             let col = clip.color_at(seg.head as f64);
             let alpha = clip.param_at(Param::Opacity, seg.head as f64);
             let alpha_here = effects.is_empty() && (clip.opacity < 1.0 || dynamic);
@@ -2002,6 +2045,13 @@ fn plan_one(
                     chains.push(format!("[bbase{k}][bmixa{k}]overlay=eof_action=pass:format=rgb:enable='{enable}'[{out}]"));
                 }
                 last = out;
+            }
+            if let Some(alpha) = restore_alpha {
+                let n = labels;
+                labels += 1;
+                chains.push(format!("[{alpha}]alphaextract[ra{n}]"));
+                chains.push(format!("[{last}][ra{n}]alphamerge[rm{n}]"));
+                last = format!("rm{n}");
             }
         }
     }
@@ -2757,6 +2807,7 @@ mod tests {
             marks: Default::default(),
             matrix: Default::default(),
             title: None,
+            adjustment: false,
         });
         let seq = p.active_sequence;
         apply(

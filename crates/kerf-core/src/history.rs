@@ -354,6 +354,7 @@ mod tests {
             marks: Default::default(),
             matrix: Default::default(),
             title: None,
+            adjustment: false,
         }
     }
 

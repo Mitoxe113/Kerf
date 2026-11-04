@@ -58,7 +58,7 @@ export function checkProject(p: Project, ctx: HealthContext): Issue[] {
   const used = new Set(p.sequences.flatMap((s) => s.tracks.flatMap((t) => t.clips.map((c) => c.mediaId))));
 
   for (const m of p.media) {
-    if (m.title) continue;
+    if (m.title || m.adjustment) continue;
     const where = used.has(m.id) ? "Wird in einer Sequenz verwendet." : "Wird in keiner Sequenz verwendet.";
     if (m.status.state === "missing") out.push({ id: `missing-${m.id}`, severity: used.has(m.id) ? "error" : "warning", title: `Medium fehlt: ${m.name}`, detail: `${m.path}\n${where}`, media: m.id, fix: "relink" });
     else if (m.status.state === "error") out.push({ id: `error-${m.id}`, severity: "error", title: `Medium nicht lesbar: ${m.name}`, detail: m.status.message, media: m.id });

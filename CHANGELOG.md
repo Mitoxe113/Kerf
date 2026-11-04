@@ -16,7 +16,8 @@ Format nach [Keep a Changelog](https://keepachangelog.com/de/1.1.0/), Versionen 
 - Metadaten-Editor im Panel *Projekt*: Name, Favorit, Farbe, Tags und Notiz; für mehrere Medien Favorit, Farbe und Tags auf einmal. Die Suche im Medienbrowser findet auch Notizen und Tags.
 - Überwachte Ordner: neue Video-, Audio- und Bilddateien werden, solange das Projekt geöffnet ist, in eine gewählte Ablage importiert, sobald sie fertig kopiert sind; vorhandene Dateien auf Wunsch sofort, beim Öffnen gemeldete mit *Abgleichen*.
 - Farbmatrix je Video wählbar (Automatisch, BT.601, BT.709) im Panel *Projekt › Metadaten*; die Wahl gilt in Vorschau und Export.
-- Verschachtelung auflösen (Compound Clips): legt die Clips eines verschachtelten Clips an seine Stelle zurück, jede Spur der inneren Sequenz auf eine eigene Spur. Wo das Bild oder Ton ändern würde (veränderter Clip, angeschnittene Übergänge oder Blenden, Mischmodi, Spurmischung, andere Bildrate oder Größe), lehnt Kerf mit Begründung ab.
+- Verschachtelung auflösen (Compound Clips): legt die Clips eines verschachtelten Clips an seine Stelle zurück, jede Spur der inneren Sequenz auf eine eigene Spur. Wo das Bild oder Ton ändern würde (veränderter Clip, angeschnittene Übergänge oder Blenden, Mischmodi, Einstellungsebenen, Spurmischung, andere Bildrate oder Größe), lehnt Kerf mit Begründung ab.
+- Einstellungsebenen (*Sequenz › Einstellungsebene einfügen*): Farbkorrektur, Effekte, Deckkraft, Blenden und Mischmodus der Ebene wirken auf alle Spuren darunter. In verschachtelten Sequenzen bleiben durchsichtige Stellen durchsichtig. Vorschau und Export sind in denselben Fällen gemessen (höchstens 2 Stufen Abstand), der segmentierte Export gleicht dem in einem Stück.
 
 ### Behoben
 - Schnitt: Teilen und Slip runden die Quellposition nicht mehr auf; ein Teil konnte sonst ein Bild über das Clipende oder das Medium hinausreichen.
@@ -33,6 +34,8 @@ Format nach [Keep a Changelog](https://keepachangelog.com/de/1.1.0/), Versionen 
 - Medienbrowser: Verschwindet die geöffnete Ablage, springt die Ansicht zum Projektstamm statt leer zu bleiben.
 - Farbe: Ungetaggtes VP9 und AV1 in HD las der Export als BT.709, die Vorschau zeigt es als BT.601 (in Chromium gemessen). H.264 und VP8 mit Matrix-Tag, aber ohne Primärfarben und Übertragung zeigt die Vorschau wie ungetaggt, der Export las den Tag. Beides liest der Export jetzt wie die Vorschau.
 - Farbe: Mit eingeschalteten Proxys zeigte die Vorschau ungetaggtes VP9 und AV1 in HD andere Farben als ohne; sie gleicht den Proxy jetzt aus.
+- Vorschau: Ein Clip mit Effekten wurde im ersten Bild einer neuen Größe schwarz gezeichnet, weil das Anlegen eines Zwischenpuffers die Textur des Clips verdrängte (im Compositor gemessen: 0/0/0 statt 55/155/205).
+- Medienbrowser: *Neu analysieren* und *Neu verknüpfen* sind für Titel gesperrt, die aus ihrer Definition gezeichnet werden; für Titel und Einstellungsebenen lehnt der Kern *Neu verknüpfen* ab, und das Backend analysiert sie nicht und erstellt keine Proxys.
 - In schmalen Bereichen mit vielen Tabs schoben die Tabs die Knöpfe des Panels (z. B. Import, Neue Ablage) und den Ablagepfad aus dem sichtbaren Bereich; die Tab-Leiste scrollt jetzt.
 
 - Doku: Der Effekt-Katalog hat 39 Effekte (nicht 38); die Paritätsangabe nennt jetzt die vier Effekte mit größeren Ausreißern.

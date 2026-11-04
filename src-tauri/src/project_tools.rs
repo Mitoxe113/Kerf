@@ -142,7 +142,7 @@ pub fn relink_search(state: State<'_, AppState>, media: Vec<Uuid>, dirs: Vec<Str
             .map(|id| s.project.media(*id).cloned().ok_or(EditError::MediaNotFound))
             .collect::<Result<Vec<_>, _>>()?
             .into_iter()
-            .filter(|a| a.title.is_none())
+            .filter(|a| a.has_file())
             .collect()
     };
     let mut found: Vec<Vec<Candidate>> = wanted.iter().map(|_| Vec::new()).collect();

@@ -92,6 +92,8 @@ export interface MediaAsset {
   marks?: SourceMarks;
   /** Generated title; `path` is its rendered PNG. */
   title?: TitleSpec;
+  /** Adjustment layer: no file; its clips change the picture of the tracks below. */
+  adjustment?: boolean;
   /** Colour matrix chosen by the user (absent = automatic). */
   matrix?: MatrixChoice;
 }
@@ -194,7 +196,7 @@ export interface Bin {
   smart?: SmartRules;
 }
 
-export type SmartKind = "video" | "audio" | "image" | "title";
+export type SmartKind = "video" | "audio" | "image" | "title" | "adjustment";
 export type SmartUsage = "any" | "used" | "unused";
 
 /** Rules of a smart bin (kerf_core::model::SmartRules); a medium must meet all. */
@@ -582,6 +584,7 @@ export type EditCommand =
   | { type: "renameSequence"; sequence: Uuid; name: string }
   | { type: "nestClips"; sequence: Uuid; clips: Uuid[]; name: string }
   | { type: "unnestClip"; sequence: Uuid; clip: Uuid }
+  | { type: "addAdjustment"; sequence: Uuid; asset: MediaAsset; track: Uuid; at: Frame; duration: Frame }
   | { type: "createMulticam"; multicam: Multicam }
   | { type: "placeMulticam"; sequence: Uuid; multicam: Uuid; at: Frame; mode: PlaceMode; videoAngle: number; audioAngle: number | null; videoTrack: Uuid | null; audioTrack: Uuid | null }
   | { type: "switchAngle"; sequence: Uuid; clip: Uuid; angle: number; at: Frame | null }

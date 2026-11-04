@@ -555,8 +555,8 @@ export class PlaybackEngine {
 
   private voice(clip: Clip, kind: "video" | "audio", path = ""): Voice | null {
     const asset = this.media.get(clip.mediaId);
-    // Titles are drawn from their definition (layers()), not loaded.
-    if (!asset || asset.status.state !== "ready" || asset.title) return null;
+    // Titles are drawn from their definition (layers()), not loaded; adjustment layers have no file.
+    if (!asset || asset.status.state !== "ready" || asset.title || asset.adjustment) return null;
     // A reversed audio clip plays the reversed sound forwards; silent until it exists.
     const reversed = kind === "audio" && !!clip.reverse;
     // A denoised clip plays the denoised sound, and the original until that is rendered.
@@ -884,6 +884,25 @@ export class PlaybackEngine {
     if (!c.enabled) return null;
     const frame = s.frame;
     const { width: W, height: H } = s.seq.settings;
+    if (this.media.get(c.mediaId)?.adjustment) {
+      // The composite below, full frame: colour, effects and opacity apply, the transform does not.
+      const a = animate(c, frame);
+      const opacity = a.opacity * fadeGain(c, frame);
+      if (opacity <= 0) return null;
+      return {
+        key: `adjust:${s.path}${c.id}`,
+        backdrop: true,
+        matrix: quadMatrix(place(IDENTITY_TRANSFORM, W, H, W, H), W, H),
+        crop: [0, 0, 0, 0],
+        opacity,
+        color: a.color,
+        effects: activeEffects(c.effects, c.fxBypass || this.compareBypass).map((e) => effectAt(c, e, frame - c.start)),
+        work: [W * s.px, H * s.px],
+        fxScale: s.px,
+        fxFrame: frame - c.start,
+        blend: c.blendMode,
+      };
+    }
     const inner = this.nestedOf(c, s);
     let src: LayerSource | undefined;
     let group: Layer["group"];

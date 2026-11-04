@@ -13,6 +13,7 @@ const KINDS: { value: SmartKind; label: string }[] = [
   { value: "audio", label: "Audio" },
   { value: "image", label: "Bilder" },
   { value: "title", label: "Titel" },
+  { value: "adjustment", label: "Einstellungsebenen" },
 ];
 
 const toggle = <T,>(list: T[], v: T) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);

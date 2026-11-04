@@ -12,6 +12,9 @@
 // order of an uploaded image), which is then placed like any clip, its
 // premultiplied colours divided by alpha first, as the export reads the
 // nested sequence's file with straight alpha.
+// An adjustment layer draws a copy of the composite below it, made opaque,
+// through its colour and effects back over it with its opacity; the
+// composite keeps its alpha (as render.rs does with the nested file).
 
 import { api } from "../lib/ipc";
 import type { BlendMode, ColorAdjust, EffectKind, TransitionKind } from "../lib/types";
@@ -49,6 +52,8 @@ export interface Layer {
   fxFrame?: number;
   /** How the layer mixes with what is below it; absent = normal. */
   blend?: BlendMode;
+  /** Adjustment layer: the source is the composite below (full frame, no transform). */
+  backdrop?: boolean;
 }
 
 /** Two clips of one track mixed by a transition. */
@@ -89,6 +94,7 @@ uniform float u_contrast;
 uniform float u_opacity;
 uniform float u_premul;
 uniform float u_unpremul;
+uniform float u_opaque;
 // Mask transitions (TransitionKind::mask in kerf-core): 0 = none.
 uniform int u_mask;
 uniform float u_prog;
@@ -113,6 +119,7 @@ void main() {
   if (u_mask > 0 && !shown()) discard;
   vec4 s = texture(u_tex, v_uv);
   if (u_unpremul > 0.5) s.rgb = s.a > 0.0 ? s.rgb / s.a : vec3(0.0);
+  if (u_opaque > 0.5) s.a = 1.0;
   // Another Y'CbCr matrix than the WebView decoded with, clipped like FFmpeg's RGB conversion.
   if (u_fixOn > 0.5) s.rgb = clamp(u_fix * s.rgb, 0.0, 1.0);
   vec3 rgb = clamp(u_color * s.rgb, 0.0, 1.0);
@@ -153,6 +160,8 @@ void main() {
 export const BLEND_MODES: BlendMode[] = ["normal", "multiply", "screen", "overlay", "add", "lighten", "darken", "difference"];
 
 const FULL_QUAD = new Float32Array([2, 0, 0, 0, 2, 0, -1, -1, 1]);
+/** FULL_QUAD upside down: a framebuffer copy into the row order of an uploaded image. */
+const FLIPPED_QUAD = new Float32Array([2, 0, 0, 0, -2, 0, -1, 1, 1]);
 /** Mask transitions in the order of the shader's u_mask (1-based). */
 export const MASK_TRANSITIONS: TransitionKind[] = ["irisRound", "irisBox", "clock", "barnDoorH", "barnDoorV", "wipeDiagonal", "blinds"];
 
@@ -217,6 +226,8 @@ export class Compositor {
   private blendProgram: WebGLProgram | null = null;
   /** Drawing into a group's framebuffer: layer matrices are flipped vertically. */
   private flip = false;
+  /** Copy of the composite under the adjustment layer being drawn. */
+  private backdrop: WebGLTexture | null = null;
 
   constructor(
     readonly canvas: HTMLCanvasElement,
@@ -227,7 +238,7 @@ export class Compositor {
     this.gl = gl;
     this.program = link(gl, VS, FS);
     this.loc = Object.fromEntries(
-      ["u_matrix", "u_crop", "u_tex", "u_fix", "u_fixOn", "u_color", "u_contrast", "u_opacity", "u_premul", "u_unpremul", "u_mask", "u_prog", "u_frame"].map((n) => [n, gl.getUniformLocation(this.program, n)]),
+      ["u_matrix", "u_crop", "u_tex", "u_fix", "u_fixOn", "u_color", "u_contrast", "u_opacity", "u_premul", "u_unpremul", "u_opaque", "u_mask", "u_prog", "u_frame"].map((n) => [n, gl.getUniformLocation(this.program, n)]),
     );
     const vao = gl.createVertexArray()!;
     gl.bindVertexArray(vao);
@@ -288,9 +299,10 @@ export class Compositor {
     return f;
   }
 
-  private quad(matrix: Mat3, crop: [number, number, number, number], color: ColorAdjust, opacity: number, premul: boolean, unpremul = false, fix: Mat3 | null = null) {
+  private quad(matrix: Mat3, crop: [number, number, number, number], color: ColorAdjust, opacity: number, premul: boolean, unpremul = false, fix: Mat3 | null = null, opaque = false) {
     const gl = this.gl;
     gl.uniform1f(this.loc.u_unpremul, unpremul ? 1 : 0);
+    gl.uniform1f(this.loc.u_opaque, opaque ? 1 : 0);
     gl.uniform1f(this.loc.u_fixOn, fix ? 1 : 0);
     if (fix) gl.uniformMatrix3fv(this.loc.u_fix, false, fix);
     gl.uniformMatrix3fv(this.loc.u_matrix, false, matrix);
@@ -302,17 +314,40 @@ export class Compositor {
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 
-  /** Draws one layer onto `target`, which the main program is bound to. */
-  private drawLayer(l: Layer, target: WebGLFramebuffer | null, width: number, height: number, upload: boolean) {
+  /**
+   * Blending of an adjustment layer over the composite it was copied from:
+   * the composite keeps its alpha, and the layer's colour is weighted by it
+   * (straight colours mixed by the layer's opacity, as render.rs does).
+   */
+  private overBackdrop(on: boolean) {
+    const gl = this.gl;
+    if (on) gl.blendFuncSeparate(gl.DST_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ZERO, gl.ONE);
+    else gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+  }
+
+  /**
+   * Draws one layer onto `target`, which the main program is bound to. An
+   * adjustment layer reads `this.backdrop`; `over` = false draws it alone
+   * (into an empty buffer, for a blend mode).
+   */
+  private drawLayer(l: Layer, target: WebGLFramebuffer | null, width: number, height: number, upload: boolean, over = true) {
     const gl = this.gl;
     // A nested sequence is composited first; its texture holds premultiplied colours.
     const group = l.group ? this.renderGroup(l.group, upload) : null;
+    const backdrop = !!l.backdrop;
+    let tex: WebGLTexture;
     if (group) {
       this.bindMain(target, width, height);
-      gl.bindTexture(gl.TEXTURE_2D, group.tex);
+      tex = group.tex;
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+    } else if (backdrop) {
+      if (!this.backdrop) return;
+      tex = this.backdrop;
+      gl.bindTexture(gl.TEXTURE_2D, tex);
     } else {
       if (!l.source) return;
-      gl.bindTexture(gl.TEXTURE_2D, this.texture(l.key));
+      tex = this.texture(l.key);
+      gl.bindTexture(gl.TEXTURE_2D, tex);
       if (upload) {
         try {
           gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, l.source);
@@ -321,21 +356,30 @@ export class Compositor {
         }
       }
     }
-    const unpremul = !!group;
+    const unpremul = !!group || backdrop;
+    const blendOver = backdrop && over;
     if (!l.effects?.length || !l.work) {
-      this.quad(this.placed(l.matrix), l.crop, l.color, l.opacity, true, unpremul, l.fix ?? null);
+      // The copy has the target's row order: drawn back as it is.
+      if (blendOver) this.overBackdrop(true);
+      this.quad(backdrop ? FULL_QUAD : this.placed(l.matrix), l.crop, l.color, l.opacity, true, unpremul, l.fix ?? null, backdrop);
+      if (blendOver) this.overBackdrop(false);
     } else {
       // Crop and colour into a framebuffer at the fitted size, run the effects, then place.
+      // (A copy of the canvas is turned into image row order first; a group's already is.)
       const [w, h] = l.work.map((v) => Math.max(1, Math.round(v)));
       const first = this.fx.acquire(w, h);
       gl.bindFramebuffer(gl.FRAMEBUFFER, first.fbo);
       gl.viewport(0, 0, w, h);
       gl.disable(gl.BLEND);
-      this.quad(FULL_QUAD, l.crop, l.color, 1, false, unpremul, l.fix ?? null);
+      // A new framebuffer from the pool leaves its own texture bound.
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      this.quad(backdrop && !this.flip ? FLIPPED_QUAD : FULL_QUAD, l.crop, l.color, 1, false, unpremul, l.fix ?? null, backdrop);
       const out = this.fx.apply(first, l.effects, l.fxScale ?? 1, l.fxFrame ?? 0);
       this.bindMain(target, width, height);
       gl.bindTexture(gl.TEXTURE_2D, out.tex);
+      if (blendOver) this.overBackdrop(true);
       this.quad(this.placed(l.matrix), NO_CROP, IDENTITY_COLOR, l.opacity, true);
+      if (blendOver) this.overBackdrop(false);
       this.fx.release(out);
     }
     if (group) this.fx.release(group);
@@ -355,15 +399,26 @@ export class Compositor {
     const gl = this.gl;
     // With transitions the frame is built in a framebuffer and drawn at the end.
     // So are blend modes, which read what is below (never the multisampled canvas).
-    const acc = items.some((it) => isTransition(it) || (it.blend !== undefined && it.blend !== "normal")) ? this.fx.acquire(width, height) : null;
+    // Adjustment layers copy what is below them.
+    const acc = items.some((it) => isTransition(it) || (it.blend !== undefined && it.blend !== "normal") || it.backdrop) ? this.fx.acquire(width, height) : null;
     const into = acc?.fbo ?? target;
     this.bindMain(into, width, height);
     gl.clearColor(0, 0, 0, transparent ? 0 : 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
     for (const it of items) {
       if (!isTransition(it)) {
+        const copy = it.backdrop ? this.fx.acquire(width, height) : null;
+        if (copy) {
+          this.copy(into, copy.fbo, width, height);
+          this.backdrop = copy.tex;
+          this.bindMain(into, width, height);
+        }
         if (it.blend && it.blend !== "normal") this.drawBlended(it, into, width, height, upload);
         else this.drawLayer(it, into, width, height, upload);
+        if (copy) {
+          this.backdrop = null;
+          this.fx.release(copy);
+        }
         continue;
       }
       // The incoming clip goes over a copy of the stack so far, the outgoing one over the stack.
@@ -396,7 +451,7 @@ export class Compositor {
     this.bindMain(layer.fbo, width, height);
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
-    this.drawLayer(l, layer.fbo, width, height, upload);
+    this.drawLayer(l, layer.fbo, width, height, upload, false);
     const base = this.fx.acquire(width, height);
     this.copy(target, base.fbo, width, height);
     this.blendProgram ??= link(gl, VS, BLEND_FS);

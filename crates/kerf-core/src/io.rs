@@ -150,7 +150,7 @@ fn diff_keys(input: &Value, output: &Value, at: &str, out: &mut Vec<String>) {
 
 /// Every file path the project refers to (media and LUTs), for rewriting.
 pub fn for_each_path(project: &mut Project, mut f: impl FnMut(&mut std::path::PathBuf)) {
-    for m in project.media.iter_mut().filter(|m| m.title.is_none()) {
+    for m in project.media.iter_mut().filter(|m| m.has_file()) {
         f(&mut m.path);
     }
     for seq in &mut project.sequences {
@@ -202,8 +202,9 @@ pub fn load_with_fallback(path: &Path) -> Result<(Project, bool), ProjectIoError
 
 /// Marks media whose file disappeared as missing and re-queues reappeared files.
 /// Titles stay ready: the UI renders their PNG again from the definition.
+/// Adjustment layers have no file.
 pub fn refresh_media_status(project: &mut Project) {
-    for m in project.media.iter_mut().filter(|m| m.title.is_none()) {
+    for m in project.media.iter_mut().filter(|m| m.has_file()) {
         let exists = m.path.is_file();
         match (&m.status, exists) {
             (_, false) => m.status = MediaStatus::Missing,
@@ -273,6 +274,7 @@ mod tests {
             marks: Default::default(),
             matrix: Default::default(),
             title: None,
+            adjustment: false,
         });
         let mid = p.media[0].id;
         let seq = &mut p.sequences[0];

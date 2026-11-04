@@ -89,6 +89,8 @@ export function Inspector() {
     targets.forEach((c) => engine.setOverride(c.id, null));
   };
   const title = clips.length === 1 && asset?.title ? { ...asset, title: asset.title } : null;
+  // Adjustment layers act on the full frame: no motion or crop.
+  const adjust = video.length > 0 && video.every((c) => !!media.get(c.mediaId)?.adjustment);
   const tabs = [
     ...(title ? [{ value: "title" as const, label: "Titel" }] : []),
     ...(video.length ? [{ value: "clip" as const, label: "Video" }] : []),
@@ -106,14 +108,14 @@ export function Inspector() {
           <div className="truncate text-sm font-semibold">{clips.length > 1 ? `${clips.length} Clips` : ref.name}</div>
           {asset && (
             <div className="truncate text-xs text-fg-3" title={asset.path}>
-              {[nested && "Verschachtelte Sequenz", asset.info?.video && `${asset.info.video.width}×${asset.info.video.height}`, asset.info?.video && asset.kind === "video" && `${formatRate(asset.info.video.fps)} fps`, !nested && codecLabel(asset.info?.video?.codec ?? asset.info?.audio?.codec), asset.info?.sizeBytes ? formatBytes(asset.info.sizeBytes) : null]
+              {[nested && "Verschachtelte Sequenz", asset.adjustment && "Einstellungsebene: wirkt auf die Spuren darunter", !asset.adjustment && asset.info?.video && `${asset.info.video.width}×${asset.info.video.height}`, asset.info?.video && asset.kind === "video" && `${formatRate(asset.info.video.fps)} fps`, !nested && !asset.adjustment && codecLabel(asset.info?.video?.codec ?? asset.info?.audio?.codec), asset.info?.sizeBytes ? formatBytes(asset.info.sizeBytes) : null]
                 .filter(Boolean)
                 .join(" · ")}
             </div>
           )}
         </div>
         {active === "title" && title && <TitleSection key={title.id} asset={title} />}
-        {active === "clip" && <VideoSection seq={seq} clips={video} commit={commit} />}
+        {active === "clip" && <VideoSection seq={seq} clips={video} commit={commit} motion={!adjust} />}
         {active === "clip" && video.length === 1 && <TransitionSection seq={seq} clip={video[0]} />}
         {active === "color" && <ColorSection seq={seq} clips={video} commit={commit} />}
         {active === "color" && <GradeSections seq={seq} clips={video} />}
@@ -320,7 +322,7 @@ const BLEND_OPTIONS: { value: BlendMode; label: string }[] = [
   { value: "difference", label: "Differenz" },
 ];
 
-function VideoSection({ seq, clips, commit }: { seq: Sequence; clips: Clip[]; commit: Commit }) {
+function VideoSection({ seq, clips, commit, motion }: { seq: Sequence; clips: Clip[]; commit: Commit; motion: boolean }) {
   const c = clips[0];
   const t = c.transform;
   const frame = useKeyFrame(c);
@@ -345,26 +347,30 @@ function VideoSection({ seq, clips, commit }: { seq: Sequence; clips: Clip[]; co
   };
   return (
     <Section
-      title="Bewegung"
+      title={motion ? "Bewegung" : "Deckkraft"}
       right={<IconButton icon={<RotateCcw size={12} />} size={22} label="Zurücksetzen" disabled={!changed} onClick={() => void reset()} />}
     >
-      <Field label="Position">
-        <NumberField label="Position X" step={1} unit=" x" {...px} width={76} />
-        <NumberField label="Position Y" step={1} unit=" y" {...py} width={76} />
-        <KeyNav seq={seq} clips={clips} params={["x", "y"]} frame={frame} />
-      </Field>
-      <Field label="Skalierung">
-        <NumberField label="Skalierung" value={ps.value * 100} step={0.5} min={0} max={10000} precision={1} unit=" %" {...pct(ps)} width={76} />
-        <KeyNav seq={seq} clips={clips} params={["scale"]} frame={frame} />
-      </Field>
-      <Field label="Rotation">
-        <NumberField label="Rotation" step={0.5} precision={1} unit="°" {...pr} width={76} />
-        <KeyNav seq={seq} clips={clips} params={["rotation"]} frame={frame} />
-      </Field>
-      <Field label="Ankerpunkt">
-        <NumberField label="Anker X" value={t.anchorX * 100} step={0.5} precision={1} unit=" %" {...tf("anchorX", 100)} width={76} />
-        <NumberField label="Anker Y" value={t.anchorY * 100} step={0.5} precision={1} unit=" %" {...tf("anchorY", 100)} width={76} />
-      </Field>
+      {motion && (
+        <>
+          <Field label="Position">
+            <NumberField label="Position X" step={1} unit=" x" {...px} width={76} />
+            <NumberField label="Position Y" step={1} unit=" y" {...py} width={76} />
+            <KeyNav seq={seq} clips={clips} params={["x", "y"]} frame={frame} />
+          </Field>
+          <Field label="Skalierung">
+            <NumberField label="Skalierung" value={ps.value * 100} step={0.5} min={0} max={10000} precision={1} unit=" %" {...pct(ps)} width={76} />
+            <KeyNav seq={seq} clips={clips} params={["scale"]} frame={frame} />
+          </Field>
+          <Field label="Rotation">
+            <NumberField label="Rotation" step={0.5} precision={1} unit="°" {...pr} width={76} />
+            <KeyNav seq={seq} clips={clips} params={["rotation"]} frame={frame} />
+          </Field>
+          <Field label="Ankerpunkt">
+            <NumberField label="Anker X" value={t.anchorX * 100} step={0.5} precision={1} unit=" %" {...tf("anchorX", 100)} width={76} />
+            <NumberField label="Anker Y" value={t.anchorY * 100} step={0.5} precision={1} unit=" %" {...tf("anchorY", 100)} width={76} />
+          </Field>
+        </>
+      )}
       <Field label="Deckkraft">
         <Slider label="Deckkraft" value={po.value} min={0} max={1} onPreview={po.onPreview} onCommit={(v) => void po.onCommit(v)} onReset={() => void po.onCommit(1)} />
         <NumberField label="Deckkraft" value={po.value * 100} min={0} max={100} step={0.5} unit=" %" width={58} {...pct(po)} />
@@ -378,15 +384,19 @@ function VideoSection({ seq, clips, commit }: { seq: Sequence; clips: Clip[]; co
           onChange={(v) => void commit(clips, { blendMode: v })}
         />
       </Field>
-      <div className="pt-1 text-[10.5px] font-semibold uppercase tracking-wider text-fg-4">Zuschneiden</div>
-      <Field label="Links / Rechts">
-        <NumberField label="Links" value={t.cropLeft * 100} min={0} max={99} step={0.2} precision={1} unit=" %" {...tf("cropLeft", 100)} width={66} />
-        <NumberField label="Rechts" value={t.cropRight * 100} min={0} max={99} step={0.2} precision={1} unit=" %" {...tf("cropRight", 100)} width={66} />
-      </Field>
-      <Field label="Oben / Unten">
-        <NumberField label="Oben" value={t.cropTop * 100} min={0} max={99} step={0.2} precision={1} unit=" %" {...tf("cropTop", 100)} width={66} />
-        <NumberField label="Unten" value={t.cropBottom * 100} min={0} max={99} step={0.2} precision={1} unit=" %" {...tf("cropBottom", 100)} width={66} />
-      </Field>
+      {motion && (
+        <>
+          <div className="pt-1 text-[10.5px] font-semibold uppercase tracking-wider text-fg-4">Zuschneiden</div>
+          <Field label="Links / Rechts">
+            <NumberField label="Links" value={t.cropLeft * 100} min={0} max={99} step={0.2} precision={1} unit=" %" {...tf("cropLeft", 100)} width={66} />
+            <NumberField label="Rechts" value={t.cropRight * 100} min={0} max={99} step={0.2} precision={1} unit=" %" {...tf("cropRight", 100)} width={66} />
+          </Field>
+          <Field label="Oben / Unten">
+            <NumberField label="Oben" value={t.cropTop * 100} min={0} max={99} step={0.2} precision={1} unit=" %" {...tf("cropTop", 100)} width={66} />
+            <NumberField label="Unten" value={t.cropBottom * 100} min={0} max={99} step={0.2} precision={1} unit=" %" {...tf("cropBottom", 100)} width={66} />
+          </Field>
+        </>
+      )}
     </Section>
   );
 }

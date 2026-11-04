@@ -60,6 +60,7 @@ impl From<EditError> for CommandError {
                 UnnestBlock::TrackMix => "unnestTrackMix",
                 UnnestBlock::Edge => "unnestEdge",
                 UnnestBlock::BlendMode => "unnestBlendMode",
+                UnnestBlock::Adjustment => "unnestAdjustment",
             },
             EditError::SequenceInUse(_) => "sequenceInUse",
             EditError::NoFootage => "noFootage",
@@ -133,8 +134,8 @@ pub(crate) fn activate_media(app: &AppHandle, state: &AppState, assets: &[MediaA
             MediaStatus::Ready => a.info.is_none() || derived_missing(&a.derived),
             MediaStatus::Missing | MediaStatus::Error(_) => false,
         };
-        // Titles are drawn by the UI and need no probing, posters or proxies.
-        if needs && a.title.is_none() {
+        // Titles are drawn by the UI and adjustment layers have no file: no probing, posters or proxies.
+        if needs && a.has_file() {
             state.media.submit(Job::Analyze(a.id));
         }
     }
@@ -378,6 +379,7 @@ pub fn media_import(app: AppHandle, state: State<'_, AppState>, paths: Vec<Strin
                 marks: Default::default(),
                 matrix: Default::default(),
                 title: None,
+                adjustment: false,
             }
         })
         .collect();
@@ -395,14 +397,20 @@ pub fn media_import(app: AppHandle, state: State<'_, AppState>, paths: Vec<Strin
 
 #[tauri::command]
 pub fn media_analyze(state: State<'_, AppState>, ids: Vec<Uuid>) {
-    {
+    // Titles and adjustment layers are not probed (an adjustment layer has no
+    // file and would end up offline).
+    let ids: Vec<Uuid> = {
         let mut s = lock(&state.session);
-        for id in &ids {
-            if let Some(a) = s.project.media_mut(*id) {
-                a.status = MediaStatus::Analyzing;
-            }
-        }
-    }
+        ids.into_iter()
+            .filter(|id| match s.project.media_mut(*id) {
+                Some(a) if a.has_file() => {
+                    a.status = MediaStatus::Analyzing;
+                    true
+                }
+                _ => false,
+            })
+            .collect()
+    };
     for id in ids {
         state.media.submit(Job::Analyze(id));
     }
@@ -410,6 +418,10 @@ pub fn media_analyze(state: State<'_, AppState>, ids: Vec<Uuid>) {
 
 #[tauri::command]
 pub fn media_proxy(state: State<'_, AppState>, ids: Vec<Uuid>) {
+    let ids: Vec<Uuid> = {
+        let s = lock(&state.session);
+        ids.into_iter().filter(|id| s.project.media(*id).is_some_and(|a| a.has_file())).collect()
+    };
     for id in ids {
         state.media.submit(Job::Proxy(id));
     }
@@ -861,6 +873,7 @@ pub fn freeze_frame(app: AppHandle, state: State<'_, AppState>, sequence: Uuid, 
         marks: Default::default(),
         matrix: Default::default(),
         title: None,
+        adjustment: false,
     };
     let id = asset.id;
     let mut s = lock(&state.session);
@@ -941,7 +954,7 @@ fn sound_of(state: &AppState, media: Uuid) -> CmdResult<(PathBuf, kerf_core::mod
         return Err(CommandError::new("mediaOffline", "media offline"));
     }
     let info = a.info.clone().ok_or(EditError::MediaNotReady)?;
-    if info.audio.is_none() || a.title.is_some() {
+    if info.audio.is_none() || a.is_generated() {
         return Err(CommandError::new("noAudio", "the media has no sound"));
     }
     Ok((a.path.clone(), info))

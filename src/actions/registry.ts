@@ -121,6 +121,7 @@ const base: Action[] = [
   { id: "clip.matchFrame", group: "Clip", label: "Match Frame (Quelle am Playhead öffnen)", keys: ["F"], run: matchFrame },
   { id: "clip.freeze", group: "Clip", label: "Standbild einfügen (2 s)", keys: ["Shift+N"], run: () => E.freezeFrame(2) },
   { id: "clip.title", group: "Clip", label: "Titel einfügen", keys: ["Ctrl+T"], run: T.addTitle },
+  { id: "clip.adjustment", group: "Clip", label: "Einstellungsebene einfügen", keys: [], run: T.addAdjustmentLayer },
   { id: "clip.normalize", group: "Clip", label: "Audio normalisieren …", keys: [], run: E.openNormalize, enabled: hasSelection },
   {
     id: "clip.rename", group: "Clip", label: "Umbenennen …", keys: ["F2"],

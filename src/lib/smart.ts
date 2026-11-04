@@ -12,7 +12,7 @@ export function usedMedia(p: Pick<Project, "sequences" | "multicams">): Set<Uuid
   return out;
 }
 
-export const smartKindOf = (m: MediaAsset): SmartKind => (m.title ? "title" : m.kind);
+export const smartKindOf = (m: MediaAsset): SmartKind => (m.title ? "title" : m.adjustment ? "adjustment" : m.kind);
 
 /** True when the name, the note or a tag contains `q` (already lower case). */
 export function textMatch(m: MediaAsset, q: string): boolean {
@@ -45,7 +45,7 @@ export function holdingBin(bins: Bin[], current: Uuid | null): Uuid | null {
 
 /** Short German summary of the rules, for tooltips. */
 export function describeRules(r: SmartRules): string {
-  const kinds: Record<SmartKind, string> = { video: "Video", audio: "Audio", image: "Bilder", title: "Titel" };
+  const kinds: Record<SmartKind, string> = { video: "Video", audio: "Audio", image: "Bilder", title: "Titel", adjustment: "Einstellungsebenen" };
   const parts: string[] = [];
   if (r.kinds.length) parts.push(r.kinds.map((k) => kinds[k]).join(" oder "));
   if (r.text.trim()) parts.push(`enthält „${r.text.trim()}“`);

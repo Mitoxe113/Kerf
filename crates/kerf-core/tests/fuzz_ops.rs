@@ -74,6 +74,7 @@ fn asset(name: &str, kind: MediaKind, seconds: f64, video: bool, audio: bool) ->
         marks: Default::default(),
         matrix: Default::default(),
         title: None,
+        adjustment: false,
     }
 }
 
@@ -142,6 +143,9 @@ fn invariants(p: &Project) -> Result<(), String> {
             let mut tidy = t.clone();
             if tidy.tidy_transitions() {
                 return Err(format!("{} track {ti}: transition between clips that do not touch", seq.name));
+            }
+            if tidy.drop_transitions_of(|c| p.media(c.media_id).is_some_and(|m| m.adjustment)) {
+                return Err(format!("{} track {ti}: transition into or out of an adjustment layer", seq.name));
             }
         }
         if let (Some(i), Some(o)) = (seq.in_point, seq.out_point) {
@@ -235,9 +239,15 @@ fn random_command(r: &mut Rng, p: &Project, clipboard: &[PasteItem]) -> EditComm
             }
         }
         27 => {
-            let mut a = asset("frozen", MediaKind::Image, 0.04, true, false);
-            a.id = Uuid::new_v4();
-            EditCommand::InsertStill { sequence, asset: Box::new(a), track: r.pick(&tracks).unwrap_or_default(), at: frame, duration: r.range(-2, 60) }
+            let track = r.pick(&tracks).unwrap_or_default();
+            if r.chance(50) {
+                let mut a = asset("frozen", MediaKind::Image, 0.04, true, false);
+                a.id = Uuid::new_v4();
+                EditCommand::InsertStill { sequence, asset: Box::new(a), track, at: frame, duration: r.range(-2, 60) }
+            } else {
+                let a = MediaAsset::adjustment_layer(&seq.settings, 0);
+                EditCommand::AddAdjustment { sequence, asset: Box::new(a), track, at: frame, duration: r.range(-2, 60) }
+            }
         }
         28 => {
             let mut angles = Vec::new();

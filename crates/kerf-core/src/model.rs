@@ -191,6 +191,12 @@ impl Project {
             }
             seq.markers.sort_by_key(|m| m.frame);
         }
+        let adjust: std::collections::HashSet<Uuid> = self.media.iter().filter(|m| m.adjustment).map(|m| m.id).collect();
+        if !adjust.is_empty() {
+            for t in self.sequences.iter_mut().flat_map(|s| s.tracks.iter_mut()) {
+                t.drop_transitions_of(|c| adjust.contains(&c.media_id));
+            }
+        }
         self.normalize_bins();
     }
 
@@ -294,6 +300,57 @@ pub struct MediaAsset {
     /// Colour matrix to read the video with instead of its tag or the guess.
     #[serde(default, skip_serializing_if = "MatrixChoice::is_auto")]
     pub matrix: MatrixChoice,
+    /// Adjustment layer: no file; its clips apply their colour, effects and
+    /// opacity to the picture of the tracks below them.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub adjustment: bool,
+}
+
+impl MediaAsset {
+    /// The media is a file of the user's (not a title or adjustment layer).
+    pub fn has_file(&self) -> bool {
+        self.title.is_none() && !self.adjustment
+    }
+
+    /// Generated media (title or adjustment layer): ready without a file.
+    pub fn is_generated(&self) -> bool {
+        !self.has_file()
+    }
+
+    /// A new adjustment layer of a sequence of `settings` (mirrored by
+    /// `adjustmentAsset` in `src/actions/text.ts`).
+    pub fn adjustment_layer(settings: &SequenceSettings, imported_at: i64) -> Self {
+        let video = VideoInfo {
+            codec: "adjustment".into(),
+            profile: None,
+            width: settings.width,
+            height: settings.height,
+            fps: settings.fps,
+            pix_fmt: Some("rgba".into()),
+            bit_rate: None,
+            rotation: 0,
+            color: ColorTags::default(),
+        };
+        MediaAsset {
+            id: Uuid::new_v4(),
+            path: PathBuf::new(),
+            name: "Einstellungsebene".into(),
+            kind: MediaKind::Image,
+            status: MediaStatus::Ready,
+            info: Some(MediaInfo { duration: 0.0, size_bytes: 0, container: "adjustment".into(), bit_rate: None, video: Some(video), audio: None }),
+            bin: None,
+            favorite: false,
+            label: LabelColor::None,
+            tags: Vec::new(),
+            note: String::new(),
+            imported_at,
+            derived: Derived { preview_native: true, ..Derived::default() },
+            marks: SourceMarks::default(),
+            title: None,
+            matrix: MatrixChoice::Auto,
+            adjustment: true,
+        }
+    }
 }
 
 /// Y'CbCr matrix family of a video.
@@ -499,7 +556,8 @@ pub struct Bin {
     pub smart: Option<SmartRules>,
 }
 
-/// Kind of medium a smart bin can ask for (titles are images with a title).
+/// Kind of medium a smart bin can ask for (titles are images with a title,
+/// adjustment layers images marked `adjustment`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SmartKind {
@@ -507,6 +565,7 @@ pub enum SmartKind {
     Audio,
     Image,
     Title,
+    Adjustment,
 }
 
 /// Whether a medium is placed in any sequence.
@@ -722,6 +781,7 @@ impl Sequence {
             marks: SourceMarks::default(),
             matrix: Default::default(),
             title: None,
+            adjustment: false,
         }
     }
 }
@@ -912,6 +972,19 @@ impl Track {
         };
         let (left, right) = (left.min(a.duration / 2), right.min(clip.duration / 2));
         (left + right > 0).then_some(TransitionSpan { kind: t.kind, t0: clip.start - left, t1: clip.start + right, cut: clip.start })
+    }
+
+    /// Drops transitions into or out of clips for which `adjust` holds
+    /// (adjustment layers take no part in transitions); true when something changed.
+    pub fn drop_transitions_of(&mut self, adjust: impl Fn(&Clip) -> bool) -> bool {
+        let mut changed = false;
+        for b in 0..self.clips.len() {
+            if self.clips[b].transition.is_some() && (adjust(&self.clips[b]) || (b > 0 && adjust(&self.clips[b - 1]))) {
+                self.clips[b].transition = None;
+                changed = true;
+            }
+        }
+        changed
     }
 
     /// Drops transitions whose clips are no longer adjacent or that do not

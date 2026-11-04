@@ -31,7 +31,7 @@ let busy = false;
 export const folderName = (path: string) => path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || path;
 
 function projectKeys(): Set<string> {
-  return new Set((useProject.getState().project?.media ?? []).filter((m) => !m.title).map((m) => fileKey(m.path)));
+  return new Set((useProject.getState().project?.media ?? []).filter((m) => !m.title && !m.adjustment).map((m) => fileKey(m.path)));
 }
 
 function publish(folders: WatchFolder[]) {

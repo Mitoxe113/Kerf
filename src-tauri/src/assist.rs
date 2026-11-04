@@ -144,8 +144,8 @@ fn resolve(state: &AppState, target: AnalysisTarget) -> CmdResult<Resolved> {
             (a, from, to - from, Some((c, rate.as_f64())))
         }
     };
-    if asset.title.is_some() {
-        return Err(CommandError::new("notMedia", "titles have nothing to analyse"));
+    if asset.is_generated() {
+        return Err(CommandError::new("notMedia", "titles and adjustment layers have nothing to analyse"));
     }
     if !asset.path.is_file() {
         return Err(CommandError::new("mediaOffline", format!("{} is offline", asset.path.display())));

@@ -26,6 +26,7 @@ fn asset(i: usize) -> MediaAsset {
         marks: Default::default(),
         matrix: Default::default(),
         title: None,
+        adjustment: false,
     }
 }
 

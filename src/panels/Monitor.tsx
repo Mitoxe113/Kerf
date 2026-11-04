@@ -348,6 +348,8 @@ export function Monitor() {
   const active = useActiveVisual(seq, frame);
   const maskEdit = useEditor((s) => s.maskEdit);
   const mask = active?.effects?.find((e): e is Poly => e.id === maskEdit && e.type === "polygonMask");
+  // An adjustment layer covers the frame: it has no position or size to drag.
+  const adjusting = useProject((s) => !!active && !!s.mediaById.get(active.mediaId)?.adjustment);
   useEffect(() => {
     if (!ed.picking) return;
     // Escape cancels the eyedropper before any other shortcut sees the key.
@@ -366,7 +368,7 @@ export function Monitor() {
     return sq.tracks.some((t) => {
       const c = clipAt(t, frame);
       const m = c && s.mediaById.get(c.mediaId);
-      return !!m && m.status.state === "ready" && !m.derived.previewNative && !m.derived.proxy && m.kind !== "audio" && !m.title;
+      return !!m && m.status.state === "ready" && !m.derived.previewNative && !m.derived.proxy && m.kind !== "audio" && !m.title && !m.adjustment;
     });
   });
   const proxyJobs = useProject((s) => s.proxyJobs);
@@ -516,7 +518,7 @@ export function Monitor() {
             </div>
           </div>
         )}
-        {active && !playing && !ed.picking && (
+        {active && !playing && !ed.picking && (mask || !adjusting) && (
           <div className="absolute inset-0">
             {mask ? <MaskGizmo clip={active} seq={seq} view={view} frame={frame} effect={mask} /> : <Gizmo clip={active} seq={seq} view={view} frame={frame} />}
           </div>
