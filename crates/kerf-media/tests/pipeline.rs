@@ -1936,3 +1936,122 @@ fn matrix_choice_reads_untagged_video() {
     let vp9_601 = centre_rgb(&tools, &webm, 5, Some("bt601"));
     assert!(close(vp9_auto, vp9_601), "untagged VP9: {vp9_auto:?}, BT.601 reads {vp9_601:?}");
 }
+
+/// DNxHR HQ and HQX (.mov) and AV1 (.mp4, SVT-AV1): codec, profile and pixel
+/// format as chosen, every frame close to a lossless H.264 export of the same
+/// sequence, the colour of a plain clip kept, and a segmented AV1 export with
+/// the frames and sound of one in a piece.
+#[test]
+fn dnxhr_and_av1_exports() {
+    let Some(tools) = tools() else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let make = |name: &str, video: &str, d: u32| {
+        let src = dir.path().join(name);
+        ffmpeg(&tools, &[
+            "-f", "lavfi", "-i", &format!("{video}s=320x180:r=25:d={d}"),
+            "-f", "lavfi", "-i", &format!("sine=frequency=440:duration={d}"),
+            "-c:v", "libx264", "-preset", "ultrafast", "-qp", "0", "-c:a", "aac", "-shortest", "-y", &src.to_string_lossy(),
+        ]);
+        import(&tools, &src, &dir.path().join("cache"))
+    };
+    let (moving, plain) = (make("moving.mp4", "testsrc2=", 20), make("plain.mp4", "color=c=0x3080C0:", 2));
+    let mut p = Project::new("t", 0);
+    let (mid, pid) = (moving.id, plain.id);
+    p.media.extend([moving, plain]);
+    let seq = p.active_sequence;
+    let settings = SequenceSettings { width: 320, height: 180, fps: Rational::new(25, 1), sample_rate: 48_000 };
+    kerf_core::ops::apply(&mut p, &EditCommand::UpdateSequenceSettings { sequence: seq, settings }).unwrap();
+    for (media, at, len) in [(mid, 0, 500), (pid, 500, 50)] {
+        kerf_core::ops::apply(&mut p, &EditCommand::PlaceMedia {
+            sequence: seq, media, video_track: None, audio_track: None, at,
+            mode: PlaceMode::Overwrite, source_in: Some(0), source_out: Some(len), match_sequence: false,
+        })
+        .unwrap();
+    }
+    let av1 = tools.working_encoders(&[render::AV1_ENCODER]);
+    let render = |name: &str, codec: VideoCodec, rate: RateControl, audio: AudioCodec, segmented: bool| {
+        let file = dir.path().join(name);
+        let export = ExportSettings {
+            output: file.clone(),
+            video_codec: codec,
+            hardware: false,
+            width: 320,
+            height: 180,
+            fps: Rational::new(25, 1),
+            rate,
+            audio_codec: audio,
+            audio_bitrate_kbps: 192,
+            sample_rate: 48_000,
+            audio_channels: 2,
+            use_in_out: false,
+            subtitles: Default::default(),
+            title_files: Default::default(),
+            title_sequences: Default::default(),
+            loudness: None,
+            segmented,
+            chapters: false, cache_dir: None,
+        };
+        let plan = render::plan_with(&p, p.sequence(seq).unwrap(), &export, dir.path(), &av1, Some(2)).unwrap();
+        assert_eq!(plan.parts.len(), if segmented { 2 } else { 0 });
+        let mut log = String::new();
+        let res = render::render_logged(&tools, &plan, &AtomicBool::new(false), |_| {}, &mut log);
+        assert!(res.is_ok(), "{res:?}\n{log}");
+        assert!(!log.contains("Svt[info]"), "{log}");
+        assert_eq!(probe_entries(&tools, &file, &["-count_packets", "-select_streams", "v", "-show_entries", "stream=nb_read_packets"]), "550", "{log}");
+        file
+    };
+    // Luma only: the lossless reference is 4:2:0, DNxHR keeps more colour (4:2:2).
+    let psnr = |a: &Path, b: &Path| -> (f64, f64) {
+        let stats = dir.path().join("psnr.log");
+        let filter = format!("[0:v][1:v]psnr=stats_file='{}'", stats.to_string_lossy().replace('\\', "/").replace(':', "\\:"));
+        ffmpeg(&tools, &["-i", &a.to_string_lossy(), "-i", &b.to_string_lossy(), "-lavfi", &filter, "-f", "null", "-"]);
+        let values: Vec<f64> = std::fs::read_to_string(&stats)
+            .unwrap()
+            .lines()
+            .map(|l| l.split_whitespace().find_map(|kv| kv.strip_prefix("psnr_y:")).unwrap().parse::<f64>().map_or(99.0, |v| v.min(99.0)))
+            .collect();
+        assert_eq!(values.len(), 550);
+        (values.iter().cloned().fold(f64::INFINITY, f64::min), values.iter().sum::<f64>() / 550.0)
+    };
+    // CRF 0 is lossless H.264 (x264 picks High 4:4:4 Predictive).
+    let reference = render("reference.mp4", VideoCodec::H264, RateControl::Quality { crf: 0 }, AudioCodec::Aac, false);
+    assert_eq!(probe_entries(&tools, &reference, &["-select_streams", "v", "-show_entries", "stream=profile"]), "High 4:4:4 Predictive");
+    let expected = centre_rgb(&tools, &reference, 525, None);
+    eprintln!("reference: plain clip {expected:?} (source 48, 128, 192)");
+    let close = |rgb: [f64; 3]| rgb.iter().zip(expected).all(|(a, b)| (a - b).abs() <= 2.0);
+    for (name, codec, profile) in [("hq.mov", VideoCodec::DnxhrHq, "dnxhd,DNXHR HQ,yuv422p"), ("hqx.mov", VideoCodec::DnxhrHqx, "dnxhd,DNXHR HQX,yuv422p10le")] {
+        let file = render(name, codec, RateControl::Quality { crf: 0 }, AudioCodec::Pcm, false);
+        assert_eq!(probe_entries(&tools, &file, &["-select_streams", "v", "-show_entries", "stream=codec_name,profile,pix_fmt"]), profile);
+        assert_eq!(probe_entries(&tools, &file, &["-select_streams", "v", "-show_entries", "stream=color_space,color_transfer,color_primaries"]), "bt709,bt709,bt709");
+        let (worst, mean) = psnr(&file, &reference);
+        let rgb = centre_rgb(&tools, &file, 525, None);
+        eprintln!("{name}: luma psnr worst {worst:.2} dB, mean {mean:.2} dB, plain clip {rgb:?}");
+        assert!(worst > 40.0, "{name}: {worst} dB");
+        assert!(close(rgb), "{name}: {rgb:?}");
+    }
+
+    if av1.is_empty() {
+        eprintln!("this FFmpeg has no {} - AV1 part skipped", render::AV1_ENCODER);
+        return;
+    }
+    let whole = render("av1.mp4", VideoCodec::Av1, RateControl::Quality { crf: 24 }, AudioCodec::Aac, false);
+    assert_eq!(probe_entries(&tools, &whole, &["-select_streams", "v", "-show_entries", "stream=codec_name,pix_fmt"]), "av1,yuv420p");
+    let (worst, mean) = psnr(&whole, &reference);
+    let rgb = centre_rgb(&tools, &whole, 525, None);
+    eprintln!("av1: luma psnr worst {worst:.2} dB, mean {mean:.2} dB, plain clip {rgb:?}");
+    assert!(worst > 30.0, "AV1: {worst} dB");
+    assert!(close(rgb), "AV1: {rgb:?}");
+    let vbr = render("av1-vbr.mp4", VideoCodec::Av1, RateControl::Bitrate { kbps: 1000 }, AudioCodec::Aac, false);
+    let kbps: f64 = probe_entries(&tools, &vbr, &["-select_streams", "v", "-show_entries", "stream=bit_rate"]).parse::<f64>().unwrap() / 1000.0;
+    eprintln!("av1 vbr: {kbps:.0} kbit/s for 1000");
+    assert!((700.0..1300.0).contains(&kbps), "{kbps} kbit/s");
+    let parts = render("av1-parts.mp4", VideoCodec::Av1, RateControl::Quality { crf: 24 }, AudioCodec::Aac, true);
+    let (worst, mean) = psnr(&parts, &whole);
+    eprintln!("av1 segmented against one piece: luma psnr worst {worst:.2} dB, mean {mean:.2} dB");
+    assert!(worst > 30.0, "segmented AV1: {worst} dB");
+    let md5 = |f: &Path| {
+        let out = tools.ffmpeg_cmd().arg("-i").arg(f).args(["-map", "0:a", "-f", "md5", "-"]).output().unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    assert_eq!(md5(&parts), md5(&whole));
+}

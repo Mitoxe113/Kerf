@@ -73,7 +73,7 @@ Ein Konto, eine Anmeldung oder eine Internetverbindung braucht Kerf dafür nicht
 
 ## Export
 
-- Panel *Export*: Voreinstellungen, H.264, HEVC, ProRes 422/HQ in MP4 oder MOV; Auflösung, Bildrate, Ratensteuerung (Qualität, VBR, CBR), Ton.
+- Panel *Export*: Voreinstellungen, H.264, HEVC, AV1 (wenn das installierte FFmpeg SVT-AV1 enthält, nur MP4), ProRes 422/HQ und DNxHR HQ/HQX (MOV); Auflösung, Bildrate, Ratensteuerung (Qualität, VBR, CBR), Ton.
 - **Stapel-Export:** Im Abschnitt *Stapel-Export* mehrere Vorgaben ankreuzen und einen Ordner wählen. Jede Vorgabe wird ein eigener Auftrag („Sequenzname - Vorgabe“); Bereich, Untertitel, Kapitel und Lautheit gelten wie oben eingestellt. Gibt es eine Datei schon, fragt Kerf vor dem Ersetzen.
 - Hardware-Encoder (NVENC, QSV, AMF), sofern eine Testkodierung gelingt; sonst Software.
 - Bereich In bis Out, Untertitel, Kapitelmarker, Lautheit, segmentiertes Rendern für aufwendige Timelines.

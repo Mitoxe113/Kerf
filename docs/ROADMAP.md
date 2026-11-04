@@ -35,6 +35,7 @@ Zuverlässigkeit (Deltas, geteilte Undo-Schnappschüsse, Autosave, Versionen, Wi
 - Segmentierter Export (Bild in Teilen parallel, Ton daneben, verlustfrei zusammengefügt) statt einer eigenen GPU-Pipeline
 - Verschachtelte Sequenzen, Multicam mit Ton-Synchronisation, Geschwindigkeitsrampen und Rückwärts-Clips
 - Andockbare Panels, Programmausgabe in eigenem Fenster für einen zweiten Bildschirm
+- Export-Codecs DNxHR HQ/HQX und AV1 (SVT-AV1, wenn das installierte FFmpeg es enthält)
 - Installer getestet, automatische Updates (signiert, über GitHub-Releases), CI und Installer (seit 0.1.0 nur noch für Windows), Lizenz GPL-3.0-or-later
 
 ## Kreativ-Ökosystem ◐

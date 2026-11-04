@@ -53,7 +53,7 @@ npm test
 npm run typecheck
 ```
 
-Die Rust-Tests enthalten 21 echte Läufe mit FFmpeg (`crates/kerf-media/tests/pipeline.rs`): Testmedien erzeugen → analysieren → schneiden → rendern → Pixel, Ton und Dauer des Ergebnisses prüfen, für Keyframes, Effekte (auch animiert und mit Freiform-Masken), Übergänge, Untertitel, Audio-Effekte, Rauschunterdrückung, Rampen, verschachtelte Sequenzen, Einstellungsebenen, Multicam und den segmentierten Export. Ohne FFmpeg werden sie übersprungen; mit `KERF_REQUIRE_FFMPEG=1` (so in der CI) schlagen sie stattdessen fehl.
+Die Rust-Tests enthalten 22 echte Läufe mit FFmpeg (`crates/kerf-media/tests/pipeline.rs`): Testmedien erzeugen → analysieren → schneiden → rendern → Pixel, Ton und Dauer des Ergebnisses prüfen, für Keyframes, Effekte (auch animiert und mit Freiform-Masken), Übergänge, Untertitel, Audio-Effekte, Rauschunterdrückung, Rampen, verschachtelte Sequenzen, Einstellungsebenen, Multicam, den segmentierten Export und die Codecs DNxHR und AV1. Ohne FFmpeg werden sie übersprungen; mit `KERF_REQUIRE_FFMPEG=1` (so in der CI) schlagen sie stattdessen fehl.
 
 Die [CI](.github/workflows/ci.yml) führt bei jedem Push alles unter Windows aus und baut den unsignierten Installer als Artefakt.
 

@@ -42,6 +42,7 @@ const PRESETS: Preset[] = [
   { id: "web", group: "Allgemein", label: "H.264 · Web 1080p", codec: "h264", rate: { mode: "bitrate", kbps: 12000 }, audio: "aac", shortEdge: 1080 },
   { id: "social", group: "Allgemein", label: "H.264 · Kompakt 720p", codec: "h264", rate: { mode: "bitrate", kbps: 5000 }, audio: "aac", shortEdge: 720 },
   { id: "hevc", group: "Allgemein", label: "HEVC · Hohe Qualität", codec: "hevc", rate: { mode: "quality", crf: 20 }, audio: "aac" },
+  { id: "av1", group: "Allgemein", label: "AV1 · Hohe Qualität", codec: "av1", rate: { mode: "quality", crf: 30 }, audio: "aac" },
   { id: "youtube", group: "Plattformen", label: "YouTube 1080p", codec: "h264", rate: (fps) => ({ mode: "bitrate", kbps: fps > 30 ? 12000 : 8000 }), audio: "aac", shortEdge: 1080 },
   {
     id: "youtube4k",
@@ -58,6 +59,8 @@ const PRESETS: Preset[] = [
   { id: "tiktok", group: "Plattformen", label: "TikTok", codec: "h264", rate: { mode: "bitrate", kbps: 10000 }, audio: "aac", audioKbps: 256, shortEdge: 1080, maxFps: 60, hint: SOCIAL_HINT },
   { id: "prores", group: "Mezzanine", label: "ProRes 422", codec: "proRes422", rate: { mode: "quality", crf: 0 }, audio: "pcm" },
   { id: "proreshq", group: "Mezzanine", label: "ProRes 422 HQ", codec: "proRes422Hq", rate: { mode: "quality", crf: 0 }, audio: "pcm" },
+  { id: "dnxhrhq", group: "Mezzanine", label: "DNxHR HQ", codec: "dnxhrHq", rate: { mode: "quality", crf: 0 }, audio: "pcm" },
+  { id: "dnxhrhqx", group: "Mezzanine", label: "DNxHR HQX (10 Bit)", codec: "dnxhrHqx", rate: { mode: "quality", crf: 0 }, audio: "pcm" },
 ];
 
 const CODECS: { value: VideoCodec; label: string }[] = [
@@ -65,9 +68,25 @@ const CODECS: { value: VideoCodec; label: string }[] = [
   { value: "hevc", label: "H.265 / HEVC" },
   { value: "proRes422", label: "Apple ProRes 422" },
   { value: "proRes422Hq", label: "Apple ProRes 422 HQ" },
+  { value: "dnxhrHq", label: "Avid DNxHR HQ" },
+  { value: "dnxhrHqx", label: "Avid DNxHR HQX (10 Bit)" },
+  { value: "av1", label: "AV1 (SVT-AV1)" },
 ];
 
-const isProRes = (c: VideoCodec) => c === "proRes422" || c === "proRes422Hq";
+/** Intra-frame codecs with a fixed rate per profile, written into .mov. */
+const isMezzanine = (c: VideoCodec) => c === "proRes422" || c === "proRes422Hq" || c === "dnxhrHq" || c === "dnxhrHqx";
+const isDnxhr = (c: VideoCodec) => c === "dnxhrHq" || c === "dnxhrHqx";
+const extFor = (s: Pick<ExportSettings, "videoCodec" | "audioCodec">) => (isMezzanine(s.videoCodec) || s.audioCodec === "pcm" ? "mov" : "mp4");
+const AV1_ENCODER = "libsvtav1";
+
+/** Why these settings cannot be exported with this FFmpeg, or null. */
+function blockedBy(s: ExportSettings, swEncoders: string[] | null | undefined): string | null {
+  if (s.videoCodec === "av1" && !swEncoders?.includes(AV1_ENCODER)) {
+    return swEncoders === null || swEncoders === undefined ? "Die Encoder von FFmpeg werden noch erkannt …" : `Das installierte FFmpeg enthält keinen AV1-Encoder (${AV1_ENCODER}). Für AV1 wird ein FFmpeg-Build mit SVT-AV1 gebraucht.`;
+  }
+  if (isDnxhr(s.videoCodec) && (s.width < 256 || s.height < 120)) return "DNxHR braucht mindestens 256 × 120 Pixel.";
+  return null;
+}
 const LAST_DIR_KEY = "kerf.export.dir";
 const CUSTOM_KEY = "kerf.export.presets";
 
@@ -126,11 +145,16 @@ function estimateBytes(s: ExportSettings, seconds: number): { bytes: number; exa
   const pixels = s.width * s.height * fpsOf(s.fps);
   let video: number;
   let exact = true;
-  if (isProRes(s.videoCodec)) {
-    video = pixels * (s.videoCodec === "proRes422Hq" ? 3.54 : 2.37);
+  if (isMezzanine(s.videoCodec)) {
+    // DNxHR HQ and HQX measured with FFmpeg's encoder: 3.54 bits per pixel at 360p to 1080p.
+    video = pixels * (s.videoCodec === "proRes422" ? 2.37 : 3.54);
     exact = false;
   } else if (s.rate.mode !== "quality") {
     video = s.rate.kbps * 1000;
+  } else if (s.videoCodec === "av1") {
+    // SVT-AV1 preset 8 on two synthetic 720p sources: 0.12 and 0.20 bits per pixel at CRF 30, about half per 12 CRF more.
+    video = pixels * 0.1 * Math.pow(2, (30 - s.rate.crf) / 12);
+    exact = false;
   } else {
     video = pixels * (s.videoCodec === "hevc" ? 0.06 : 0.1) * Math.pow(2, (18 - s.rate.crf) / 6);
     exact = false;
@@ -205,7 +229,8 @@ export function ExportPanel() {
   const seconds = framesToSeconds(Math.max(0, range[1] - range[0]), seq.settings.fps);
   const size = estimateBytes(s, seconds);
   const tight = free !== null && size.bytes > free * 0.95;
-  const ext = isProRes(s.videoCodec) || s.audioCodec === "pcm" ? "mov" : "mp4";
+  const ext = extFor(s);
+  const blocked = blockedBy(s, appInfo?.swEncoders);
   const kbps = s.rate.mode === "quality" ? 16000 : s.rate.kbps;
 
   const chooseOutput = async () => {
@@ -308,10 +333,12 @@ export function ExportPanel() {
   const batchItems = presets.filter((p) => batch.includes(p.id));
   const batchJobs = batchItems.map((p) => {
     const b = defaultSettings(seq, p, "");
-    return { preset: p, settings: { ...b, useInOut: s.useInOut, chapters: s.chapters, loudness: s.loudness }, ext: isProRes(b.videoCodec) || b.audioCodec === "pcm" ? "mov" : "mp4" };
+    return { preset: p, settings: { ...b, useInOut: s.useInOut, chapters: s.chapters, loudness: s.loudness }, ext: extFor(b) };
   });
   const batchBytes = batchJobs.reduce((a, j) => a + estimateBytes(j.settings, seconds).bytes, 0);
+  const batchBlocked = batchJobs.map((j) => ({ label: j.preset.label, why: blockedBy(j.settings, appInfo?.swEncoders) })).find((j) => j.why);
   const startBatch = async () => {
+    if (batchBlocked) return;
     let dir = batchDir;
     if (!dir) {
       const picked = await openDialog({ directory: true, title: "Zielordner für den Stapel-Export" });
@@ -414,7 +441,21 @@ export function ExportPanel() {
         </Section>
         <Section title="Video">
           <Field label="Codec">
-            <Select width={180} value={s.videoCodec} onChange={(v) => upd({ videoCodec: v, hardware: false, ...(isProRes(v) ? { audioCodec: "pcm" } : {}) })} options={CODECS} />
+            <Select
+              width={180}
+              value={s.videoCodec}
+              onChange={(v) =>
+                upd({
+                  videoCodec: v,
+                  hardware: false,
+                  ...(isMezzanine(v) ? { audioCodec: "pcm" } : {}),
+                  // AV1 goes into .mp4 (AAC), without CBR, and its CRF scale runs to 63.
+                  ...(v === "av1" ? { audioCodec: "aac", rate: s.rate.mode === "quality" ? { mode: "quality", crf: 30 } : { mode: "bitrate", kbps } } : {}),
+                  ...(s.videoCodec === "av1" && v !== "av1" && s.rate.mode === "quality" ? { rate: { mode: "quality", crf: 18 } } : {}),
+                })
+              }
+              options={CODECS}
+            />
           </Field>
           <Field label="Hardware">
             <Toggle label="Hardware-Encoder" checked={s.hardware && hw.length > 0} onChange={(v) => upd({ hardware: v })} />
@@ -428,7 +469,7 @@ export function ExportPanel() {
               className="truncate text-xs text-fg-3"
               title="Das Bild wird in Teilen gleichzeitig gerendert und ohne neue Kodierung zusammengefügt, der Ton in einem Stück daneben. Schneller bei aufwendigen Timelines (Effekte, animierte Transformationen, viele Ebenen); bei einfachen Schnitten lastet FFmpeg die CPU schon allein aus. Ab 20 s Länge und 4 Kernen, nicht mit Hardware-Encoder oder konstanter Bitrate."
             >
-              {s.hardware && hw.length > 0 && !isProRes(s.videoCodec) ? "nicht mit Hardware-Encoder" : s.rate.mode === "constant" && !isProRes(s.videoCodec) ? "nicht bei CBR" : "für aufwendige Timelines"}
+              {s.hardware && hw.length > 0 && !isMezzanine(s.videoCodec) ? "nicht mit Hardware-Encoder" : s.rate.mode === "constant" && !isMezzanine(s.videoCodec) ? "nicht bei CBR" : "für aufwendige Timelines"}
             </span>
           </Field>
           <Field label="Auflösung">
@@ -456,23 +497,23 @@ export function ExportPanel() {
               ]}
             />
           </Field>
-          {!isProRes(s.videoCodec) && (
+          {!isMezzanine(s.videoCodec) && (
             <>
               <Field label="Steuerung">
                 <Segmented
                   size="sm"
                   value={s.rate.mode}
-                  onChange={(m) => upd({ rate: m === "quality" ? { mode: "quality", crf: 18 } : { mode: m, kbps } })}
+                  onChange={(m) => upd({ rate: m === "quality" ? { mode: "quality", crf: s.videoCodec === "av1" ? 30 : 18 } : { mode: m, kbps } })}
                   options={[
-                    { value: "quality", label: "Qualität", title: "Konstante Qualität (CRF): Größe richtet sich nach dem Inhalt" },
-                    { value: "bitrate", label: "VBR", title: "Variable Bitrate um den Zielwert (Spitzen bis 1,5×)" },
-                    { value: "constant", label: "CBR", title: "Konstante Bitrate, z. B. für Streaming-Ingest oder Sendeabwicklung" },
+                    { value: "quality" as const, label: "Qualität", title: "Konstante Qualität (CRF): Größe richtet sich nach dem Inhalt" },
+                    { value: "bitrate" as const, label: "VBR", title: s.videoCodec === "av1" ? "Variable Bitrate um den Zielwert" : "Variable Bitrate um den Zielwert (Spitzen bis 1,5×)" },
+                    ...(s.videoCodec === "av1" ? [] : [{ value: "constant" as const, label: "CBR", title: "Konstante Bitrate, z. B. für Streaming-Ingest oder Sendeabwicklung" }]),
                   ]}
                 />
               </Field>
               {s.rate.mode === "quality" ? (
                 <Field label="Qualität (CRF)">
-                  <NumberField label="CRF" value={s.rate.crf} min={0} max={40} step={0.25} width={60} onCommit={(v) => upd({ rate: { mode: "quality", crf: Math.round(v) } })} />
+                  <NumberField label="CRF" value={s.rate.crf} min={s.videoCodec === "av1" ? 1 : 0} max={s.videoCodec === "av1" ? 63 : 40} step={0.25} width={60} onCommit={(v) => upd({ rate: { mode: "quality", crf: Math.round(v) } })} />
                   <span className="text-xs text-fg-4">niedriger = besser</span>
                 </Field>
               ) : (
@@ -490,8 +531,9 @@ export function ExportPanel() {
               value={s.audioCodec}
               onChange={(v) => upd({ audioCodec: v })}
               options={[
-                { value: "aac", label: "AAC" },
-                { value: "pcm", label: "PCM (MOV)" },
+                { value: "aac" as const, label: "AAC" },
+                // AV1 goes into .mp4, which holds no PCM.
+                ...(s.videoCodec === "av1" ? [] : [{ value: "pcm" as const, label: "PCM (MOV)" }]),
               ]}
             />
           </Field>
@@ -586,7 +628,13 @@ export function ExportPanel() {
               Das installierte FFmpeg ist älter als Version {appInfo.ffmpegMin}. Kerf übergibt den Filtergraphen mit einer Option, die es erst ab FFmpeg 7 gibt; mit dieser Version schlägt der Export fehl.
             </div>
           )}
-          <Button variant="primary" className="w-full" disabled={seconds <= 0 || !appInfo?.ffmpeg} onClick={() => void start()}>
+          {blocked && (
+            <div className="flex items-start gap-1.5 text-[10.5px] leading-snug text-warn">
+              <TriangleAlert size={12} className="mt-px shrink-0" />
+              {blocked}
+            </div>
+          )}
+          <Button variant="primary" className="w-full" disabled={seconds <= 0 || !appInfo?.ffmpeg || !!blocked} onClick={() => void start()}>
             {appInfo?.ffmpeg ? "Zur Render-Warteschlange hinzufügen" : "FFmpeg nicht gefunden"}
           </Button>
         </div>
@@ -625,7 +673,13 @@ export function ExportPanel() {
               {formatBytes(batchBytes)} zusammen
             </div>
           )}
-          <Button className="w-full" disabled={!batchJobs.length || seconds <= 0 || !appInfo?.ffmpeg} onClick={() => void startBatch()}>
+          {batchBlocked && (
+            <div className="flex items-start gap-1.5 text-[10.5px] leading-snug text-warn">
+              <TriangleAlert size={12} className="mt-px shrink-0" />
+              {batchBlocked.label}: {batchBlocked.why}
+            </div>
+          )}
+          <Button className="w-full" disabled={!batchJobs.length || seconds <= 0 || !appInfo?.ffmpeg || !!batchBlocked} onClick={() => void startBatch()}>
             {batchJobs.length ? `${batchJobs.length} ${batchJobs.length === 1 ? "Export" : "Exporte"} zur Warteschlange hinzufügen` : "Vorgaben auswählen"}
           </Button>
         </Section>

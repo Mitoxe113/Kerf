@@ -29,6 +29,8 @@ pub enum Job {
 pub struct MediaService {
     pub tools: Option<Tools>,
     pub hw_encoders: Mutex<Option<Vec<String>>>,
+    /// Optional software encoders this FFmpeg has (AV1), `None` while detecting.
+    pub sw_encoders: Mutex<Option<Vec<String>>>,
     analysis_tx: Mutex<Option<Sender<Uuid>>>,
     proxy_tx: Mutex<Option<Sender<Uuid>>>,
     /// Media currently queued or running, to avoid duplicate work.
@@ -50,6 +52,7 @@ impl MediaService {
         Self {
             tools,
             hw_encoders: Mutex::new(None),
+            sw_encoders: Mutex::new(None),
             analysis_tx: Mutex::new(None),
             proxy_tx: Mutex::new(None),
             pending: Mutex::new(HashSet::new()),
@@ -86,9 +89,11 @@ impl MediaService {
             let app = app.clone();
             std::thread::spawn(move || {
                 let encoders = tools.working_hw_encoders();
-                log::info!("hardware encoders: {encoders:?}");
+                let optional = tools.working_encoders(&[kerf_media::render::AV1_ENCODER]);
+                log::info!("hardware encoders: {encoders:?}, optional encoders: {optional:?}");
                 let state = app.state::<AppState>();
                 *lock(&state.media.hw_encoders) = Some(encoders);
+                *lock(&state.media.sw_encoders) = Some(optional);
                 let _ = app.emit("app-info-changed", ());
             });
         }

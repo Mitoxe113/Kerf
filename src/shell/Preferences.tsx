@@ -217,7 +217,10 @@ export function Preferences({ onClose }: { onClose: () => void }) {
             </span>
           </Field>
           <Field label="Encoder">
-            <span className="truncate text-xs text-fg-2">{info?.hwEncoders?.length ? info.hwEncoders.join(", ") : info?.hwEncoders === null ? "wird erkannt …" : "nur Software"}</span>
+            <span className="truncate text-xs text-fg-2">
+              {info?.hwEncoders?.length ? info.hwEncoders.join(", ") : info?.hwEncoders === null ? "wird erkannt …" : "nur Software"}
+              {info?.swEncoders?.includes("libsvtav1") ? " · AV1 (SVT-AV1)" : info?.swEncoders ? " · kein AV1" : ""}
+            </span>
           </Field>
         </Group>
 

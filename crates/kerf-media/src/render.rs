@@ -46,7 +46,23 @@ pub enum VideoCodec {
     Hevc,
     ProRes422,
     ProRes422Hq,
+    /// Avid DNxHR HQ, 8 bit 4:2:2 (FFmpeg's own `dnxhd` encoder).
+    DnxhrHq,
+    /// Avid DNxHR HQX, 10 bit 4:2:2.
+    DnxhrHqx,
+    /// AV1 with SVT-AV1 (`libsvtav1`), 8 bit 4:2:0, MP4 only.
+    Av1,
 }
+
+impl VideoCodec {
+    /// Intra-frame mezzanine codecs: a .mov file, a fixed rate per profile, 4:2:2.
+    pub fn is_mezzanine(self) -> bool {
+        matches!(self, Self::ProRes422 | Self::ProRes422Hq | Self::DnxhrHq | Self::DnxhrHqx)
+    }
+}
+
+/// The encoder an AV1 export needs; FFmpeg builds without it cannot write AV1.
+pub const AV1_ENCODER: &str = "libsvtav1";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1593,7 +1609,9 @@ fn segmented(
     let mut list = String::from("ffconcat version 1.0\n");
     let mut parts = Vec::new();
     for &(a, b) in ranges {
-        let output = work_dir.join(format!("part-{}.mov", Uuid::new_v4()));
+        // AV1 cannot go into .mov.
+        let ext = if s.video_codec == VideoCodec::Av1 { "mp4" } else { "mov" };
+        let output = work_dir.join(format!("part-{}.{ext}", Uuid::new_v4()));
         let part = plan_one(project, seq, &ExportSettings { output: output.clone(), ..picture.clone() }, work_dir, hw_encoders, Pass::Picture(a, b))?;
         list.push_str(&format!("file {}\nduration {}\n", concat_path(&output), num(part.frames as f64 / s.fps.as_f64())));
         parts.push(part);
@@ -1690,9 +1708,20 @@ fn plan_one(
     let intermediate = pass == Pass::Nested;
     let picture = matches!(pass, Pass::Picture(..));
     let container = if intermediate { "matroska" } else { container_of(&s.output)? };
-    let prores = !intermediate && matches!(s.video_codec, VideoCodec::ProRes422 | VideoCodec::ProRes422Hq);
-    if prores && container != "mov" {
-        return Err(MediaError::Unsupported("ProRes requires a .mov file".into()));
+    let mezzanine = !intermediate && s.video_codec.is_mezzanine();
+    if mezzanine && container != "mov" {
+        return Err(MediaError::Unsupported("ProRes and DNxHR require a .mov file".into()));
+    }
+    if !intermediate && s.video_codec == VideoCodec::Av1 {
+        if container != "mp4" {
+            return Err(MediaError::Unsupported("AV1 requires a .mp4 file".into()));
+        }
+        if !hw_encoders.iter().any(|e| e == AV1_ENCODER) {
+            return Err(MediaError::Unsupported(format!("AV1 needs an FFmpeg with {AV1_ENCODER}")));
+        }
+        if matches!(s.rate, RateControl::Constant { .. }) {
+            return Err(MediaError::Unsupported("AV1 is exported with quality or variable bitrate, not CBR".into()));
+        }
     }
     if s.audio_codec == AudioCodec::Pcm && container == "mp4" {
         return Err(MediaError::Unsupported("PCM audio requires a .mov file".into()));
@@ -2104,8 +2133,16 @@ fn plan_one(
         (s.output.with_extension(ext), write_subtitles(&cues, sf, t0, f))
     });
 
-    let pix_fmt = if prores { "yuv422p10le" } else { "yuv420p" };
     let (ow, oh) = (even(s.width as f64), even(s.height as f64));
+    if mezzanine && matches!(s.video_codec, VideoCodec::DnxhrHq | VideoCodec::DnxhrHqx) && (ow < 256 || oh < 120) {
+        // FFmpeg's encoder refuses smaller pictures.
+        return Err(MediaError::Unsupported("DNxHR needs at least 256 × 120 pixels".into()));
+    }
+    let pix_fmt = match s.video_codec {
+        _ if !mezzanine => "yuv420p",
+        VideoCodec::DnxhrHq => "yuv422p",
+        _ => "yuv422p10le",
+    };
     // A different output aspect (e.g. 9:16 from a 16:9 sequence) is letterboxed
     // on the sequence canvas first, so the colour conversion stays in one scale.
     let (target, src) = (ow as f64 / oh as f64, w / h);
@@ -2176,6 +2213,21 @@ fn plan_one(
             v.extend(["-c:v", "prores_ks", "-profile:v", profile, "-vendor", "apl0"].map(String::from));
             "prores_ks".to_string()
         }
+        VideoCodec::DnxhrHq | VideoCodec::DnxhrHqx => {
+            let profile = if s.video_codec == VideoCodec::DnxhrHqx { "dnxhr_hqx" } else { "dnxhr_hq" };
+            v.extend(["-c:v", "dnxhd", "-profile:v", profile].map(String::from));
+            "dnxhd".to_string()
+        }
+        VideoCodec::Av1 => {
+            // Preset 8: about as fast as x264 "medium" (measured at 720p).
+            v.extend(["-c:v", AV1_ENCODER, "-preset", "8"].map(String::from));
+            match rate {
+                RateControl::Quality { crf } => v.extend(["-crf".to_string(), crf.clamp(1, 63).to_string()]),
+                // SVT-AV1 ignores -maxrate here: the plain target (VBR).
+                RateControl::Bitrate { kbps } | RateControl::Constant { kbps } => v.extend(bitrate_args(kbps, false)),
+            }
+            AV1_ENCODER.to_string()
+        }
         codec => {
             let (sw_enc, family) = match codec {
                 VideoCodec::H264 => ("libx264", "h264"),
@@ -2241,7 +2293,9 @@ fn plan_one(
             }
             if family == "hevc" {
                 v.extend(["-tag:v", "hvc1"].map(String::from));
-            } else {
+            } else if hw.is_some() || rate != (RateControl::Quality { crf: 0 }) {
+                // x264 encodes CRF 0 losslessly, which the High profile cannot hold
+                // (FFmpeg refused to open the encoder): it picks High 4:4:4 itself.
                 v.extend(["-profile:v", "high"].map(String::from));
             }
             hw.unwrap_or_else(|| sw_enc.to_string())
@@ -2392,7 +2446,13 @@ fn quoted(args: &[OsString]) -> String {
 /// Runs FFmpeg with `-progress pipe:1`, handing each key/value pair to `on`.
 /// Returns whether it succeeded (None when cancelled) and its stderr.
 fn run_ffmpeg(tools: &Tools, args: &[OsString], cancel: &AtomicBool, mut on: impl FnMut(&str, &str)) -> Result<(Option<bool>, Vec<u8>), MediaError> {
-    let mut child = crate::tools::background_command(&tools.ffmpeg).args(args).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    let mut child = crate::tools::background_command(&tools.ffmpeg)
+        .args(args)
+        // SVT-AV1 prints its configuration at "info" whatever FFmpeg's log level; warnings and errors stay.
+        .env("SVT_LOG", "2")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
     let stderr = child.stderr.take().expect("piped");
     let err_thread = std::thread::spawn(move || {
         let mut s = Vec::new();
@@ -3065,6 +3125,42 @@ mod tests {
         assert!(plan(&p, p.sequence(seq).unwrap(), &s, Path::new("C:/tmp"), &[]).is_err());
         let empty = Project::new("e", 0);
         assert!(plan(&empty, &empty.sequences[0], &settings(), Path::new("C:/tmp"), &[]).is_err());
+    }
+
+    #[test]
+    fn dnxhr_and_av1_plan_their_encoders_and_containers() {
+        let (p, seq) = project_with_clip();
+        let seq = p.sequence(seq).unwrap();
+        let args = |plan: &RenderPlan| plan.args.iter().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>().join(" ");
+        let mut s = settings();
+        s.output = "C:/out/film.mov".into();
+        s.audio_codec = AudioCodec::Pcm;
+        s.video_codec = VideoCodec::DnxhrHq;
+        let hq = plan(&p, seq, &s, Path::new("C:/tmp"), &[]).unwrap();
+        assert!(args(&hq).contains("-c:v dnxhd -profile:v dnxhr_hq -pix_fmt yuv422p "), "{}", args(&hq));
+        assert_eq!(hq.encoder, "dnxhd");
+        s.video_codec = VideoCodec::DnxhrHqx;
+        assert!(args(&plan(&p, seq, &s, Path::new("C:/tmp"), &[]).unwrap()).contains("-profile:v dnxhr_hqx -pix_fmt yuv422p10le "));
+        (s.width, s.height) = (254, 144);
+        assert!(plan(&p, seq, &s, Path::new("C:/tmp"), &[]).is_err(), "DNxHR is at least 256 wide");
+        (s.width, s.height) = (1920, 1080);
+        s.output = "C:/out/film.mp4".into();
+        s.audio_codec = AudioCodec::Aac;
+        assert!(plan(&p, seq, &s, Path::new("C:/tmp"), &[]).is_err(), "DNxHR needs .mov");
+
+        let av1 = [AV1_ENCODER.to_string()];
+        s.video_codec = VideoCodec::Av1;
+        assert!(plan(&p, seq, &s, Path::new("C:/tmp"), &[]).is_err(), "no SVT-AV1 in this FFmpeg");
+        let q = plan(&p, seq, &s, Path::new("C:/tmp"), &av1).unwrap();
+        assert!(args(&q).contains("-c:v libsvtav1 -preset 8 -crf 18 -pix_fmt yuv420p "), "{}", args(&q));
+        s.rate = RateControl::Bitrate { kbps: 8000 };
+        let vbr = args(&plan(&p, seq, &s, Path::new("C:/tmp"), &av1).unwrap());
+        assert!(vbr.contains("-b:v 8000k") && !vbr.contains("maxrate"), "{vbr}");
+        s.rate = RateControl::Constant { kbps: 8000 };
+        assert!(plan(&p, seq, &s, Path::new("C:/tmp"), &av1).is_err(), "no CBR for AV1");
+        s.rate = RateControl::Quality { crf: 30 };
+        s.output = "C:/out/film.mov".into();
+        assert!(plan(&p, seq, &s, Path::new("C:/tmp"), &av1).is_err(), "AV1 cannot go into .mov");
     }
 
     #[test]

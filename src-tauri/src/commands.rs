@@ -81,6 +81,8 @@ pub struct AppInfo {
     pub ffmpeg_too_old: bool,
     pub ffmpeg_min: u32,
     pub hw_encoders: Option<Vec<String>>,
+    /// Optional software encoders found (e.g. `libsvtav1` for AV1), `None` while detecting.
+    pub sw_encoders: Option<Vec<String>>,
     pub cache_dir: PathBuf,
     /// Commit the binary was built from, and whether it is a debug build.
     pub build: String,
@@ -105,6 +107,7 @@ pub fn app_info(app: AppHandle, state: State<'_, AppState>) -> AppInfo {
         ffmpeg_min: kerf_media::tools::MIN_FFMPEG_MAJOR,
         ffmpeg,
         hw_encoders: lock(&state.media.hw_encoders).clone(),
+        sw_encoders: lock(&state.media.sw_encoders).clone(),
         cache_dir: state.paths.cache.clone(),
         build: env!("KERF_COMMIT").to_string(),
         debug: cfg!(debug_assertions),
@@ -439,7 +442,8 @@ pub fn export_start(app: AppHandle, state: State<'_, AppState>, sequence: Uuid, 
             return Err(CommandError::new("exportFailed", "output folder does not exist"));
         }
     }
-    let hw = lock(&state.media.hw_encoders).clone().unwrap_or_default();
+    let mut hw = lock(&state.media.hw_encoders).clone().unwrap_or_default();
+    hw.extend(lock(&state.media.sw_encoders).clone().unwrap_or_default());
     let (plan, name) = {
         let s = lock(&state.session);
         let seq = s.project.sequence(sequence).ok_or(EditError::SequenceNotFound)?;

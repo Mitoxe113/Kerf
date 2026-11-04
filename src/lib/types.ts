@@ -635,7 +635,7 @@ export type EditCommand =
 
 // --- export ------------------------------------------------------------------
 
-export type VideoCodec = "h264" | "hevc" | "proRes422" | "proRes422Hq";
+export type VideoCodec = "h264" | "hevc" | "proRes422" | "proRes422Hq" | "dnxhrHq" | "dnxhrHqx" | "av1";
 export type AudioCodec = "aac" | "pcm";
 /** quality = CRF/CQ; bitrate = VBR around kbps; constant = CBR. */
 export type RateControl = { mode: "quality"; crf: number } | { mode: "bitrate"; kbps: number } | { mode: "constant"; kbps: number };
@@ -742,6 +742,8 @@ export interface AppInfo {
   ffmpegTooOld: boolean;
   ffmpegMin: number;
   hwEncoders: string[] | null;
+  /** Optional software encoders of this FFmpeg ("libsvtav1" for AV1), null while detecting. */
+  swEncoders: string[] | null;
   cacheDir: string;
   build: string;
   debug: boolean;

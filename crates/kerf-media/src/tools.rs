@@ -110,8 +110,12 @@ impl Tools {
     /// Encoders that actually work on this machine (a 1-frame test encode
     /// each), so the export dialog never offers a codec that cannot run.
     pub fn working_hw_encoders(&self) -> Vec<String> {
-        const CANDIDATES: [&str; 6] = ["h264_nvenc", "hevc_nvenc", "h264_qsv", "hevc_qsv", "h264_amf", "hevc_amf"];
-        CANDIDATES
+        self.working_encoders(&["h264_nvenc", "hevc_nvenc", "h264_qsv", "hevc_qsv", "h264_amf", "hevc_amf"])
+    }
+
+    /// Those of `candidates` that encode a test frame with this FFmpeg.
+    pub fn working_encoders(&self, candidates: &[&str]) -> Vec<String> {
+        candidates
             .iter()
             .filter(|enc| {
                 self.ffmpeg_cmd()
