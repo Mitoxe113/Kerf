@@ -12,6 +12,7 @@ Format nach [Keep a Changelog](https://keepachangelog.com/de/1.1.0/), Versionen 
 - Keyframes für Effektparameter: Radius des Gaußschen Weichzeichners, Stärke der Vignette und Parameter von 11 Katalog-Effekten (u. a. Strudel, Welle, Luma-Key, Formmaske), im Inspector mit Stoppuhr und Rauten.
 - Freiform-Maske (3 bis 32 Punkte) mit Punkte-Editor im Programmmonitor, weicher Kante, Umkehren und animierbarem Versatz; Vorschau und Export rastern dieselbe Maske.
 - Intelligente Ablagen (Smart Bins): zeigen alle Medien, die Regeln zu Typ, Text, Tags, Farbe, Favorit, Verwendung und Offline-Status erfüllen.
+- Stapel-Export: mehrere Export-Vorgaben ankreuzen und in einem Schritt als Aufträge in die Render-Warteschlange stellen; vorhandene Dateien werden vorher genannt.
 - Metadaten-Editor im Panel *Projekt*: Name, Favorit, Farbe, Tags und Notiz; für mehrere Medien Favorit, Farbe und Tags auf einmal. Die Suche im Medienbrowser findet auch Notizen und Tags.
 
 ### Behoben

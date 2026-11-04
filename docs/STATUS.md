@@ -166,6 +166,7 @@ Dieser Abschnitt hat einen anderen Prüfstand als „Fertig und verifiziert“: 
 - H.264, HEVC, ProRes 422/HQ; AAC oder PCM; Qualität (CRF), VBR oder CBR; Stereo oder Mono; Auflösung, Bildrate, Abtastrate; ganze Sequenz oder In bis Out. Vorgaben inkl. Plattformen und eigener Vorgaben; abweichende Seitenverhältnisse mit Balken.
 - **Segmentiertes Rendern** (Schalter im Export-Panel): Das Bild wird in Teilen parallel kodiert, der Ton in einem Stück daneben, und die Teile werden ohne neue Kodierung zusammengefügt. Teilgrenzen liegen auf Bildern, die Sequenz- und Ausgaberate gemeinsam haben. Test: segmentiert und in einem Stück sind bildgenau gleich (PSNR je Bild), der Ton ist bitidentisch.
 - Verschachtelte Sequenzen werden vorab verlustfrei mit Alpha gerendert (FFV1, PCM) und wie Medien gelesen, tiefste zuerst.
+- **Stapel-Export:** mehrere Vorgaben (auch eigene) ankreuzen, einen Ordner wählen; je Vorgabe ein Auftrag in der Render-Warteschlange („<Sequenz> - <Vorgabe>.mp4/.mov“, eindeutige Namen). Vorhandene Dateien werden vor dem Start genannt und nur nach Bestätigung ersetzt; Speicherplatz wird für die Summe geprüft. In Headless-Chromium mit simuliertem Backend durchgespielt (3 Aufträge mit den Einstellungen der Vorgaben), nicht in der Tauri-App.
 - Größenschätzung und Speicherplatzprüfung, Render-Warteschlange mit Fortschritt, Restzeit, Abbruch, Erneut versuchen, Datei öffnen, Im Explorer zeigen, Protokoll; **Prüfung nach dem Rendern** (Dauer, Auflösung, Bildrate, Codecs, Kanäle, EBU R128).
 
 **Arbeitsumgebung**
@@ -207,7 +208,7 @@ Dieser Abschnitt hat einen anderen Prüfstand als „Fertig und verifiziert“: 
 | `kerf-library` | 13 | Migrationen, Presets (Prüfung, Export/Import), Favoriten, Recents, Titelvorlagen, Assets und Sammlungen, Schriften (Import, Ablehnung, Entfernen) |
 | `kerf-assets` | 10 | Anbieter-Parser, Lizenzzuordnung, URL-Regeln, Inhaltsprüfung, Berichte; Mock-Server: Suche, Schlüssel, Download, abgelehnte Inhalte und Weiterleitungen, Abbruch, 429 |
 | App-Crate | 7 | Versionen, Projektdatei-Argument, Endung beim Speichern, Untertitel-Kodierung, Datumsformat, Relink-Suche, Wiederherstellung nach Absturz |
-| Frontend (Vitest) | 128 | Timecode, Regeln der intelligenten Ablagen, Timeline-Constraints, Lautstärke-Gummiband, Lernbereich des Rauschprofils, Keyframes/Easing/Bezier, Zeitabbildung, Effekte und Kurven, Effekt-Keyframes, Rasterung der Freiform-Maske mit den Werten der Rust-Tests, Audio-DSP gegen FFmpeg-Fixtures, Textsatz und Textanimation, Deltas, Docking, unscharfe Suche, Tastaturprofile, Assistenten-Befehle (Bereiche entfernen, Marker, Szenen), Projektprüfung, Beenden mit laufenden Aufträgen, unbekannte Projektfelder, Codec-Prüfung der Vorschau |
+| Frontend (Vitest) | 130 | Timecode, Regeln der intelligenten Ablagen, Dateinamen des Stapel-Exports, Timeline-Constraints, Lautstärke-Gummiband, Lernbereich des Rauschprofils, Keyframes/Easing/Bezier, Zeitabbildung, Effekte und Kurven, Effekt-Keyframes, Rasterung der Freiform-Maske mit den Werten der Rust-Tests, Audio-DSP gegen FFmpeg-Fixtures, Textsatz und Textanimation, Deltas, Docking, unscharfe Suche, Tastaturprofile, Assistenten-Befehle (Bereiche entfernen, Marker, Szenen), Projektprüfung, Beenden mit laufenden Aufträgen, unbekannte Projektfelder, Codec-Prüfung der Vorschau |
 
 In dieser Arbeitsumgebung lief die Pipeline mit FFmpeg 6.1 über einen Adapter für `-/filter_complex`: 18 von 19 bestanden, `reverse_and_speed_ramps_render` scheitert nur dort (Rampen-Frame 116 statt 115). Mit aktuellem FFmpeg in der CI unter Windows bestand dieser Test in jedem Lauf, zuletzt für Commit `9867ea9` mit damals 17 Pipeline-Tests. Zusätzlich gibt es einen Zeitmesstest für große Projekte (`cargo test -p kerf-core --release --test large_project -- --ignored --nocapture`).
 
@@ -236,7 +237,7 @@ Alle Tests laufen in der CI unter Windows.
 - Überwachte Ordner, wählbarer Cache-Ordner und automatisches Aufräumen
 - Transkription, automatische Untertitel, Übersetzung, Smart Reframe, Tracking, KI-Masken (kein lokales Modell eingebunden)
 - Einstellungsebenen, Compound Clips (verschachtelte Sequenzen gibt es), Spurgruppen
-- Stapel-Export mehrerer Exportprofile in einem Schritt, AV1/DNxHR (die Render-Warteschlange gibt es)
+- AV1 und DNxHR als Export-Codecs
 - Plugins, Makros, Skripte; universelle Suche über die Befehlspalette hinaus, visuelle Zwischenablage, Referenzmonitor, Brand Kits, Versionsvergleich
 - HDR, wählbare Farbmatrix für ungetaggte Quellen
 - Native GPU-Pipeline (wgpu) für den Export

@@ -53,7 +53,8 @@ Zuverlässigkeit (Deltas, geteilte Undo-Schnappschüsse, Autosave, Versionen, Wi
 - ✅ Projektprüfung, Relink-Suche, Projekt archivieren, portable Pfade, Cache-Verwaltung, Metadaten
 - ✅ Intelligente Ablagen (Smart Bins) mit Regeln, Metadaten-Editor (Tags, Notiz, Farbe, Favorit, auch für mehrere Medien)
 - ☐ Transkription und automatische Untertitel (lokales Sprachmodell nötig), Smart Reframe
-- ☐ Stapel-Export mehrerer Profile, Einstellungsebenen, Compound Clips, überwachte Ordner, Plugins und Makros
+- ✅ Stapel-Export: mehrere Vorgaben in einem Schritt in die Render-Warteschlange
+- ☐ Einstellungsebenen, Compound Clips, überwachte Ordner, Plugins und Makros
 
 ## Als Nächstes
 

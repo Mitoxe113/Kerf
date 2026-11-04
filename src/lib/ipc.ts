@@ -127,6 +127,7 @@ export const api = {
   titlePng: (png: Uint8Array) => invoke<string>("title_png", png),
   /** Free bytes on the drive holding `path`, null when unknown. */
   diskFree: (path: string) => invoke<number | null>("disk_free", { path }),
+  existingPaths: (paths: string[]) => invoke<string[]>("existing_paths", { paths }),
   openPath: (path: string) => invoke<void>("open_path", { path }),
   jsonRead: (path: string) => invoke<string>("json_read", { path }),
   /** The project Kerf was launched with (double-click on a .kerf file), once. */

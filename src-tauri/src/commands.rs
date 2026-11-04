@@ -444,6 +444,12 @@ pub fn export_log(state: State<'_, AppState>, id: Uuid) -> Option<String> {
     state.exports.log(id)
 }
 
+/// The given paths that already exist (a batch export asks before replacing them).
+#[tauri::command]
+pub fn existing_paths(paths: Vec<String>) -> Vec<String> {
+    paths.into_iter().take(1000).filter(|p| Path::new(p).exists()).collect()
+}
+
 /// Free bytes on the volume holding `path` (a file or folder), if known.
 #[tauri::command]
 pub fn disk_free(path: String) -> Option<u64> {

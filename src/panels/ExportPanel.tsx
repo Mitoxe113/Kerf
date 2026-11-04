@@ -1,7 +1,8 @@
-import { save } from "@tauri-apps/plugin-dialog";
+import { open as openDialog, save } from "@tauri-apps/plugin-dialog";
 import { CheckCircle2, CircleSlash, FolderOpen, Loader2, Play, RotateCcw, Save, ScrollText, Trash2, TriangleAlert, X, XCircle } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { confirm, prompt } from "../actions/project";
+import { batchOutputs } from "../lib/batch";
 import { api } from "../lib/ipc";
 import { formatBytes } from "../lib/media";
 import { formatDuration, formatRate, fpsOf, framesToSeconds, STANDARD_RATES } from "../lib/time";
@@ -159,6 +160,14 @@ export function ExportPanel() {
   const [s, setS] = useState<ExportSettings | null>(null);
   const [free, setFree] = useState<number | null>(null);
   const [subs, setSubs] = useState<{ burn: boolean; sidecar: "srt" | "vtt" | null; embed: boolean }>({ burn: true, sidecar: null, embed: false });
+  const [batch, setBatch] = useState<string[]>([]);
+  const [batchDir, setBatchDir] = useState(() => {
+    try {
+      return localStorage.getItem(LAST_DIR_KEY) ?? "";
+    } catch {
+      return "";
+    }
+  });
 
   useEffect(() => {
     if (!seq) return;
@@ -212,24 +221,17 @@ export function ExportPanel() {
     }
   };
 
-  const start = async () => {
-    let output = s.output;
-    if (!output) {
-      const path = await save({ defaultPath: `${seq.name}.${ext}`, filters: [{ name: ext.toUpperCase(), extensions: [ext] }] });
-      if (!path) return;
-      output = path;
-      upd({ output });
-    }
-    output = output.replace(/\.(mp4|mov|m4v)$/i, "") + "." + ext;
-    const room = await api.diskFree(dirOf(output)).catch(() => null);
-    if (room !== null && size.bytes > room * 0.95) {
+  // Checks before rendering: free space, missing fonts, licence hints. False = the user stopped.
+  const preflight = async (dir: string, bytes: number, exact: boolean): Promise<boolean> => {
+    const room = await api.diskFree(dir).catch(() => null);
+    if (room !== null && bytes > room * 0.95) {
       const go = await confirm({
         title: "Wenig Speicherplatz",
-        body: `Der Export braucht ${size.exact ? "" : "etwa "}${formatBytes(size.bytes)}, auf dem Ziellaufwerk sind nur ${formatBytes(room)} frei. Ein voller Datenträger bricht den Export ab.`,
+        body: `Der Export braucht ${exact ? "" : "etwa "}${formatBytes(bytes)}, auf dem Ziellaufwerk sind nur ${formatBytes(room)} frei. Ein voller Datenträger bricht den Export ab.`,
         confirm: "Trotzdem starten",
         danger: true,
       });
-      if (go !== true) return;
+      if (go !== true) return false;
     }
     // Never substitute fonts silently: list titles whose font is not available.
     await loadFonts();
@@ -243,7 +245,7 @@ export function ExportPanel() {
         body: `Nicht vorhanden: ${[...missing].join(", ")}. Betroffene Titel und Untertitel werden mit der Ersatzschrift Inter Variable gerendert. Die Schrift kann im Titel-Inspektor importiert werden.`,
         confirm: "Mit Ersatzschrift exportieren",
       });
-      if (go !== true) return;
+      if (go !== true) return false;
     }
     // License hints for downloaded assets (information only; Kerf cannot clear rights).
     const files = (useProject.getState().project?.media ?? []).filter((m) => m.path && !m.title).map((m) => m.path);
@@ -257,21 +259,82 @@ export function ExportPanel() {
           ". Details im Lizenzbericht (Stockmedien).",
       );
     }
+    return true;
+  };
+
+  // Titles, animated titles and burned-in subtitles, drawn once for every job of a start.
+  const renderInputs = async (): Promise<Pick<ExportSettings, "subtitles" | "titleFiles" | "titleSequences">> => {
+    const titles = await titleFiles(seq, useProject.getState().mediaById);
+    // Animated titles frame by frame (also inside nested sequences; clip ids are unique).
+    const titleSeqs: Record<string, string[]> = {};
+    for (const q of useProject.getState().project?.sequences ?? [seq]) Object.assign(titleSeqs, await titleSequences(q, useProject.getState().mediaById));
+    let subtitles: SubtitleOutput | undefined;
+    if (seq.subtitles.cues.length && (subs.burn || subs.sidecar || subs.embed)) {
+      const files = subs.burn ? await burnInFiles(seq, [range[0], range[1]]) : { burn: [], blank: null };
+      subtitles = { ...files, sidecar: subs.sidecar, embed: subs.embed };
+    }
+    return { subtitles, titleFiles: titles, titleSequences: titleSeqs };
+  };
+
+  const start = async () => {
+    let output = s.output;
+    if (!output) {
+      const path = await save({ defaultPath: `${seq.name}.${ext}`, filters: [{ name: ext.toUpperCase(), extensions: [ext] }] });
+      if (!path) return;
+      output = path;
+      upd({ output });
+    }
+    output = output.replace(/\.(mp4|mov|m4v)$/i, "") + "." + ext;
+    if (!(await preflight(dirOf(output), size.bytes, size.exact))) return;
     try {
-      // Titles and burned-in subtitles are drawn here and overlaid as PNGs.
-      const titles = await titleFiles(seq, useProject.getState().mediaById);
-      // Animated titles frame by frame (also inside nested sequences; clip ids are unique).
-      const titleSeqs: Record<string, string[]> = {};
-      for (const q of useProject.getState().project?.sequences ?? [seq]) Object.assign(titleSeqs, await titleSequences(q, useProject.getState().mediaById));
-      let subtitles: SubtitleOutput | undefined;
-      if (seq.subtitles.cues.length && (subs.burn || subs.sidecar || subs.embed)) {
-        const files = subs.burn ? await burnInFiles(seq, [range[0], range[1]]) : { burn: [], blank: null };
-        subtitles = { ...files, sidecar: subs.sidecar, embed: subs.embed };
-      }
-      const job = await api.exportStart(seq.id, { ...s, output, hardware: s.hardware && hw.length > 0, subtitles, titleFiles: titles, titleSequences: titleSeqs });
+      const job = await api.exportStart(seq.id, { ...s, output, hardware: s.hardware && hw.length > 0, ...(await renderInputs()) });
       useProject.getState().upsertExport(job);
       toast.info("Export gestartet", output.split(/[\\/]/).pop());
     } catch (e) {
+      reportError(e);
+    }
+  };
+
+  // Batch: one job per chosen preset, into one folder; range, subtitles, chapters and loudness as set above.
+  const batchItems = presets.filter((p) => batch.includes(p.id));
+  const batchJobs = batchItems.map((p) => {
+    const b = defaultSettings(seq, p, "");
+    return { preset: p, settings: { ...b, useInOut: s.useInOut, chapters: s.chapters, loudness: s.loudness }, ext: isProRes(b.videoCodec) || b.audioCodec === "pcm" ? "mov" : "mp4" };
+  });
+  const batchBytes = batchJobs.reduce((a, j) => a + estimateBytes(j.settings, seconds).bytes, 0);
+  const startBatch = async () => {
+    let dir = batchDir;
+    if (!dir) {
+      const picked = await openDialog({ directory: true, title: "Zielordner für den Stapel-Export" });
+      if (typeof picked !== "string") return;
+      dir = picked;
+      setBatchDir(dir);
+    }
+    const outputs = batchOutputs(dir, seq.name, batchJobs.map((j) => ({ label: j.preset.label, ext: j.ext })));
+    const existing = await api.existingPaths(outputs).catch(() => [] as string[]);
+    if (existing.length) {
+      const go = await confirm({
+        title: "Dateien ersetzen?",
+        body: `${existing.length === 1 ? "Diese Datei gibt es" : `Diese ${existing.length} Dateien gibt es`} schon: ${existing.map((p) => p.split(/[\\/]/).pop()).join(", ")}. Der Export ersetzt sie.`,
+        confirm: "Ersetzen",
+        danger: true,
+      });
+      if (go !== true) return;
+    }
+    if (!(await preflight(dir, batchBytes, batchJobs.every((j) => estimateBytes(j.settings, seconds).exact)))) return;
+    let started = 0;
+    try {
+      const inputs = await renderInputs();
+      for (const [i, j] of batchJobs.entries()) {
+        // Saved presets bring their own hardware choice; built-in ones follow the switch above.
+        const hwOk = (j.preset.custom ? j.settings.hardware : s.hardware) && hwFor(j.settings.videoCodec, appInfo?.hwEncoders ?? null).length > 0;
+        const job = await api.exportStart(seq.id, { ...j.settings, output: outputs[i], hardware: hwOk, ...inputs });
+        useProject.getState().upsertExport(job);
+        started++;
+      }
+      toast.info("Stapel-Export gestartet", `${started} ${started === 1 ? "Auftrag" : "Aufträge"} in der Render-Warteschlange`);
+    } catch (e) {
+      if (started) toast.info("Stapel-Export unvollständig", `${started} von ${batchJobs.length} Aufträgen wurden hinzugefügt.`);
       reportError(e);
     }
   };
@@ -518,6 +581,45 @@ export function ExportPanel() {
             {appInfo?.ffmpeg ? "Zur Render-Warteschlange hinzufügen" : "FFmpeg nicht gefunden"}
           </Button>
         </div>
+        <Section title="Stapel-Export">
+          <p className="text-[10.5px] leading-snug text-fg-4">Eine Datei je gewählter Vorgabe in einen Ordner. Bereich, Untertitel, Kapitel und Lautheit wie oben eingestellt; die Aufträge laufen nacheinander in der Render-Warteschlange.</p>
+          <div className="max-h-48 space-y-0.5 overflow-auto">
+            {presets.map((p) => (
+              <label key={p.id} className="flex h-6 cursor-default items-center gap-2 rounded-sm px-1 text-xs text-fg-2 hover:bg-hover">
+                <input
+                  type="checkbox"
+                  className="accent-[var(--color-signal)]"
+                  checked={batch.includes(p.id)}
+                  onChange={(e) => setBatch((b) => (e.target.checked ? [...b, p.id] : b.filter((x) => x !== p.id)))}
+                />
+                <span className="truncate">{p.label}</span>
+                <span className="ml-auto shrink-0 text-[10.5px] text-fg-4">{p.group}</span>
+              </label>
+            ))}
+          </div>
+          <Field label="Ordner">
+            <button
+              onClick={async () => {
+                const picked = await openDialog({ directory: true, title: "Zielordner für den Stapel-Export", defaultPath: batchDir || undefined });
+                if (typeof picked === "string") setBatchDir(picked);
+              }}
+              className="flex h-6 min-w-0 flex-1 items-center gap-1.5 rounded-sm bg-field px-2 text-left text-xs text-fg-2 hover:bg-hover"
+              title={batchDir}
+            >
+              <FolderOpen size={12} className="shrink-0 text-fg-3" />
+              <span className="truncate">{batchDir || "Ordner wählen …"}</span>
+            </button>
+          </Field>
+          {batchJobs.length > 0 && (
+            <div className="text-[10.5px] text-fg-4">
+              {batchJobs.length} Dateien · {batchJobs.some((j) => !estimateBytes(j.settings, seconds).exact) ? "≈ " : ""}
+              {formatBytes(batchBytes)} zusammen
+            </div>
+          )}
+          <Button className="w-full" disabled={!batchJobs.length || seconds <= 0 || !appInfo?.ffmpeg} onClick={() => void startBatch()}>
+            {batchJobs.length ? `${batchJobs.length} ${batchJobs.length === 1 ? "Export" : "Exporte"} zur Warteschlange hinzufügen` : "Vorgaben auswählen"}
+          </Button>
+        </Section>
         <RenderQueue jobs={jobs} />
       </div>
     </div>
