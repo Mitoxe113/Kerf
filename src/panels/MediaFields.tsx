@@ -1,13 +1,15 @@
-// Editable project metadata of media: name, favourite, colour label, tags and
-// note. With several media selected, favourite and label apply to all of
-// them, and tags can be added to or removed from all of them in one step.
+// Editable project metadata of media: name, favourite, colour label, tags,
+// note and the colour matrix of videos. With several media selected,
+// favourite, label and matrix apply to all of them, and tags can be added to
+// or removed from all of them in one step.
 
 import { Star, X } from "lucide-react";
 import { useEffect, useState } from "react";
+import { readYcc, taggedYcc, webviewYcc, type Ycc } from "../engine/ycc";
 import { LABEL_COLORS, LABEL_NAMES, LABELS } from "../lib/labels";
-import type { EditCommand, LabelColor, MediaAsset } from "../lib/types";
+import type { EditCommand, LabelColor, MatrixChoice, MediaAsset } from "../lib/types";
 import { edit } from "../state/project";
-import { cx } from "../ui/primitives";
+import { cx, Segmented } from "../ui/primitives";
 
 const parseTags = (s: string) => s.split(",").map((t) => t.trim()).filter(Boolean);
 
@@ -59,6 +61,42 @@ function LabelPicker({ value, onChange }: { value: LabelColor | null; onChange: 
         </button>
       ))}
     </>
+  );
+}
+
+const YCC_NAMES: Record<Ycc, string> = { bt601: "BT.601", bt709: "BT.709" };
+
+/**
+ * Y'CbCr matrix of videos whose tag is BT.601, BT.709 or missing (kerf_core
+ * MediaPatch::matrix). Automatic follows what the preview decodes with; the
+ * hint says whether that comes from the file's tag or is a guess.
+ */
+function MatrixRow({ media, onChange }: { media: MediaAsset[]; onChange: (m: MatrixChoice) => void }) {
+  const videos = media.flatMap((m) => (m.kind === "video" && !m.title && m.info?.video && taggedYcc(m.info.video) !== undefined ? [{ m, v: m.info.video }] : []));
+  if (!videos.length || videos.length !== media.length) return null;
+  const choice = (m: MediaAsset) => m.matrix ?? "auto";
+  const value = media.every((m) => choice(m) === choice(media[0])) ? choice(media[0]) : null;
+  const autos = new Set(videos.map(({ m, v }) => readYcc(v, "auto", m.derived.previewNative)));
+  const auto = autos.size === 1 ? [...autos][0] : undefined;
+  // From the tag where the WebView honours it (webviewYcc), else guessed from codec and size.
+  const tagged = videos.every(({ m, v }) => taggedYcc(v) && webviewYcc(v, m.derived.previewNative) === taggedYcc(v));
+  const guessed = videos.every(({ m, v }) => !(taggedYcc(v) && webviewYcc(v, m.derived.previewNative) === taggedYcc(v)));
+  const hint = auto ? `Automatisch liest ${YCC_NAMES[auto]}${tagged ? " (Tag der Datei)" : guessed ? " (geschätzt, die Datei hat keinen gültigen Tag)" : ""}.` : "Automatisch liest je nach Medium BT.601 oder BT.709.";
+  return (
+    <Row label="Farbmatrix">
+      <Segmented<MatrixChoice | "">
+        size="sm"
+        value={value ?? ""}
+        onChange={(v) => v && onChange(v)}
+        options={[
+          { value: "auto", label: "Automatisch", title: "Wie die Vorschau die Datei dekodiert" },
+          { value: "bt601", label: "BT.601", title: "Y'CbCr als BT.601 lesen (Standardauflösung)" },
+          { value: "bt709", label: "BT.709", title: "Y'CbCr als BT.709 lesen (HD)" },
+        ]}
+      />
+      {value === null && <span className="text-fg-4">gemischt</span>}
+      <span className="w-full text-[11px] text-fg-4">{hint} Wirkt in Vorschau und Export. Wähle die andere Matrix, wenn die Farben von der Kamera oder einem anderen Programm abweichen.</span>
+    </Row>
   );
 }
 
@@ -122,6 +160,7 @@ export function MediaFields({ media }: { media: MediaAsset[] }) {
           </Row>
         </>
       )}
+      <MatrixRow media={media} onChange={(m) => patch({ matrix: m })} />
       {one && (
         <Row label="Notiz">
           <CommitInput area value={one.note} placeholder="Notiz zum Medium (Strg+Enter übernimmt)" onCommit={(v) => patch({ note: v })} />

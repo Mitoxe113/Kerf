@@ -26,8 +26,8 @@ use std::time::{Duration, Instant};
 
 use kerf_core::audio::{active as active_effects, AudioEffect, AudioEffectKind, EqShape, LIMITER_ATTACK_MS};
 use kerf_core::model::{
-    Clip, ColorTags, Cue, CurvePoint, Ease, Effect, EffectKind, Keyframe, MediaAsset, MediaKind, MediaStatus, Param, Project, Sequence, TrackKind, TransitionKind,
-    TransitionSpan, VideoInfo,
+    Clip, ColorTags, Cue, CurvePoint, Ease, Effect, EffectKind, Keyframe, MediaAsset, MediaKind, MediaStatus, Param, Project, Sequence, TrackKind,
+    TransitionKind, TransitionSpan, Ycc,
 };
 use kerf_core::text::{write_subtitles, SubtitleFormat};
 use kerf_core::time::{Frame, Rational};
@@ -850,13 +850,26 @@ fn filter_path(p: &Path) -> String {
     p.to_string_lossy().replace('\\', "/").replace(':', "\\:").replace('\'', r"'\\\''")
 }
 
-/// The preview (Chromium) decodes video without a colour matrix tag as
-/// BT.709 from 720 lines up and as BT.601 below; FFmpeg always assumes
-/// BT.601. Untagged HD input is therefore tagged BT.709 before the RGB
-/// conversion so export and preview show the same colours.
-fn assumed_color(v: &VideoInfo) -> Option<String> {
-    (v.color.space.is_none() && v.height >= 720)
-        .then(|| format!("setparams=colorspace=bt709:range={}", v.color.range.as_deref().unwrap_or("tv")))
+/// The preview (Chromium) does not always decode with the matrix FFmpeg
+/// reads from the tag: untagged H.264 and VP8 from 720 lines up become
+/// BT.709, and except for VP9 a matrix tag without primaries and transfer is ignored
+/// ([`kerf_core::model::VideoInfo::webview_ycc`]); FFmpeg reads the tag, else BT.601. The input
+/// is tagged with the matrix it is read with ([`kerf_core::model::VideoInfo::read_ycc`]: the
+/// user's choice, else the preview's) where FFmpeg would read it differently,
+/// before the RGB conversion, so export and preview show the same colours.
+fn assumed_color(asset: &MediaAsset) -> Option<String> {
+    let v = asset.info.as_ref()?.video.as_ref()?;
+    let ffmpeg = match v.tagged_ycc() {
+        Ok(Some(y)) => y,
+        Ok(None) => Ycc::Bt601,
+        Err(_) => return None,
+    };
+    let space = match v.read_ycc(asset.matrix, asset.derived.preview_native)? {
+        y if y == ffmpeg => return None,
+        Ycc::Bt709 => "bt709",
+        Ycc::Bt601 => "smpte170m",
+    };
+    Some(format!("setparams=colorspace={space}:range={}", v.color.range.as_deref().unwrap_or("tv")))
 }
 
 fn num(v: f64) -> String {
@@ -1218,7 +1231,9 @@ fn audio_mix(project: &Project, seq: &Sequence, s: &ExportSettings, (t0, t1): (F
 /// source frame under the clip's position, as the preview does. Reversed
 /// clips are read in pieces of at most ~2 s that are reversed one by one,
 /// which bounds the memory the `reverse` filter holds.
-fn warped_video(clip: &Clip, seg: &Segment, info: &kerf_core::model::MediaInfo, sf: Rational, path: &Path, k: usize) -> (Vec<OsString>, String, usize) {
+fn warped_video(clip: &Clip, seg: &Segment, asset: &MediaAsset, sf: Rational, k: usize) -> (Vec<OsString>, String, usize) {
+    let info = asset.info.as_ref().expect("checked");
+    let path = &asset.path;
     let video = info.video.as_ref();
     let m = video.map(|v| v.fps).filter(|r| r.is_valid()).unwrap_or(sf).as_f64();
     let sfps = sf.as_f64();
@@ -1228,7 +1243,7 @@ fn warped_video(clip: &Clip, seg: &Segment, info: &kerf_core::model::MediaInfo, 
     // Media frames a..b cover the source positions lo..hi.
     let a = ((lo / sfps * m + 1e-6).floor() as i64).clamp(0, total - 1);
     let b = ((hi / sfps * m - 1e-6).ceil() as i64).clamp(a + 1, total);
-    let assumed = video.and_then(assumed_color).map(|p| format!("{p},")).unwrap_or_default();
+    let assumed = assumed_color(asset).map(|p| format!("{p},")).unwrap_or_default();
     let mut args: Vec<OsString> = Vec::new();
     let mut input = |from: i64, frames: i64| {
         // A quarter frame early so the seek lands on frame `from`; trim counts the frames.
@@ -1771,7 +1786,7 @@ fn plan_one(
             let mut src = format!("{k}:v:0");
             let mut f: Vec<String> = Vec::new();
             if clip.is_warped() && !image {
-                let (wargs, chain, n) = warped_video(clip, &seg, info, sf, &asset.path, k);
+                let (wargs, chain, n) = warped_video(clip, &seg, asset, sf, k);
                 args.extend(wargs);
                 inputs += n;
                 chains.push(chain);
@@ -1807,7 +1822,7 @@ fn plan_one(
                     args.push(s.title_files.get(&asset.id).unwrap_or(&asset.path).clone().into_os_string());
                 }
                 inputs += 1;
-                if let Some(p) = info.video.as_ref().filter(|_| !image).and_then(assumed_color) {
+                if let Some(p) = assumed_color(asset).filter(|_| !image) {
                     f.push(p);
                 }
                 f.push(format!("setpts=(PTS-STARTPTS)/{}", num(clip.speed)));
@@ -2683,6 +2698,7 @@ fn render_one(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kerf_core::model::{MatrixChoice, VideoInfo};
 
     #[test]
     fn an_export_never_replaces_a_source_file() {
@@ -2739,6 +2755,7 @@ mod tests {
             imported_at: 0,
             derived: Derived::default(),
             marks: Default::default(),
+            matrix: Default::default(),
             title: None,
         });
         let seq = p.active_sequence;
@@ -2950,16 +2967,43 @@ mod tests {
     #[test]
     fn untagged_hd_is_read_as_bt709() {
         let (mut p, seq) = project_with_clip();
-        let g = plan(&p, p.sequence(seq).unwrap(), &settings(), Path::new("C:/tmp"), &[]).unwrap().graph;
-        assert!(g.contains("[0:v:0]setparams=colorspace=bt709:range=tv,"), "{g}");
-        let v = p.media[0].info.as_mut().unwrap().video.as_mut().unwrap();
-        v.color.space = Some("smpte170m".into());
-        let g = plan(&p, p.sequence(seq).unwrap(), &settings(), Path::new("C:/tmp"), &[]).unwrap().graph;
-        assert!(!g.contains("setparams"), "tagged input keeps its own matrix: {g}");
-        let v = p.media[0].info.as_mut().unwrap().video.as_mut().unwrap();
-        (v.color.space, v.height) = (None, 480);
-        let g = plan(&p, p.sequence(seq).unwrap(), &settings(), Path::new("C:/tmp"), &[]).unwrap().graph;
-        assert!(!g.contains("setparams"), "untagged SD stays BT.601: {g}");
+        let graph = |p: &Project| plan(p, p.sequence(seq).unwrap(), &settings(), Path::new("C:/tmp"), &[]).unwrap().graph;
+        fn video(p: &mut Project) -> &mut VideoInfo {
+            p.media[0].info.as_mut().unwrap().video.as_mut().unwrap()
+        }
+        let bt709 = "[0:v:0]setparams=colorspace=bt709:range=tv,";
+        assert!(graph(&p).contains(bt709), "{}", graph(&p));
+        // A full tag is decoded as tagged; a matrix tag alone Chromium ignores for H.264.
+        video(&mut p).color = ColorTags { space: Some("smpte170m".into()), range: None, transfer: Some("smpte170m".into()), primaries: Some("smpte170m".into()) };
+        assert!(!graph(&p).contains("setparams"), "tagged input keeps its own matrix: {}", graph(&p));
+        video(&mut p).color.primaries = None;
+        assert!(graph(&p).contains(bt709), "matrix tag alone is read like the preview: {}", graph(&p));
+        (video(&mut p).color.space, video(&mut p).height) = (None, 480);
+        assert!(!graph(&p).contains("setparams"), "untagged SD stays BT.601: {}", graph(&p));
+        // VP9 decoded natively: BT.601 without a tag, and its matrix tag alone counts.
+        (video(&mut p).codec, video(&mut p).height) = ("vp9".into(), 1080);
+        p.media[0].derived.preview_native = true;
+        assert!(!graph(&p).contains("setparams"), "untagged VP9 is BT.601 in both: {}", graph(&p));
+        video(&mut p).color.space = Some("bt709".into());
+        assert!(!graph(&p).contains("setparams"), "VP9 matrix tag alone: {}", graph(&p));
+        // Through its H.264 proxy the same tag is ignored: the preview shows BT.709 at 720 lines.
+        (video(&mut p).color.space, p.media[0].derived.preview_native) = (Some("smpte170m".into()), false);
+        assert!(graph(&p).contains(bt709), "{}", graph(&p));
+        video(&mut p).color.space = None;
+
+        // The user's choice wins where the tag allows one.
+        (video(&mut p).codec, video(&mut p).height) = ("h264".into(), 480);
+        p.media[0].matrix = MatrixChoice::Bt709;
+        assert!(graph(&p).contains(bt709), "untagged SD read as BT.709");
+        (video(&mut p).height, video(&mut p).color.range) = (1080, Some("pc".into()));
+        p.media[0].matrix = MatrixChoice::Bt601;
+        assert!(!graph(&p).contains("setparams"), "FFmpeg reads untagged HD as BT.601 itself");
+        video(&mut p).color.space = Some("bt709".into());
+        assert!(graph(&p).contains("[0:v:0]setparams=colorspace=smpte170m:range=pc,"), "a wrong BT.709 tag is overridden");
+        video(&mut p).color.space = Some("bt2020nc".into());
+        assert!(!graph(&p).contains("setparams"), "BT.2020 keeps its own matrix");
+        let v = p.media[0].info.as_ref().unwrap().video.as_ref().unwrap();
+        assert_eq!((v.tagged_ycc().is_err(), v.read_ycc(MatrixChoice::Bt601, false)), (true, Some(Ycc::Bt709)), "partial BT.2020 tag: preview guesses, no override");
     }
 
     #[test]

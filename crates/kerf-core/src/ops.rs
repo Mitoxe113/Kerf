@@ -63,6 +63,8 @@ pub struct MediaPatch {
     pub label: Option<LabelColor>,
     pub tags: Option<Vec<String>>,
     pub note: Option<String>,
+    /// Only for videos whose tag is BT.601, BT.709 or missing (see [`VideoInfo::tagged_ycc`]).
+    pub matrix: Option<MatrixChoice>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -584,9 +586,15 @@ pub fn apply(project: &mut Project, cmd: &EditCommand) -> Result<EditOutcome> {
         }
         C::UpdateMedia { media, patch } => {
             all_media(project, media)?;
+            if let Some(m) = patch.matrix.filter(|m| !m.is_auto()) {
+                let video = |id: &Uuid| project.media(*id).filter(|a| a.kind == MediaKind::Video).and_then(|a| a.info.as_ref()?.video.as_ref());
+                if !media.iter().all(|id| video(id).is_some_and(|v| v.tagged_ycc().is_ok())) {
+                    return Err(EditError::Invalid(format!("matrix {m:?} needs a video tagged BT.601, BT.709 or not at all")));
+                }
+            }
             for id in media {
                 let asset = project.media_mut(*id).ok_or(EditError::MediaNotFound)?;
-                let before = (asset.favorite, asset.label, asset.tags.clone(), asset.note.clone());
+                let before = (asset.favorite, asset.label, asset.tags.clone(), asset.note.clone(), asset.matrix);
                 if let Some(v) = patch.favorite {
                     asset.favorite = v;
                 }
@@ -603,7 +611,10 @@ pub fn apply(project: &mut Project, cmd: &EditCommand) -> Result<EditOutcome> {
                 if let Some(v) = &patch.note {
                     asset.note = v.chars().filter(|c| !c.is_control() || matches!(c, '\n' | '\t')).take(MAX_NOTE).collect();
                 }
-                out.changed |= before != (asset.favorite, asset.label, asset.tags.clone(), asset.note.clone());
+                if let Some(m) = patch.matrix {
+                    asset.matrix = m;
+                }
+                out.changed |= before != (asset.favorite, asset.label, asset.tags.clone(), asset.note.clone(), asset.matrix);
             }
             out.media_changed = out.changed;
         }
@@ -2592,6 +2603,7 @@ mod tests {
             imported_at: 0,
             derived: Derived::default(),
             marks: Default::default(),
+            matrix: Default::default(),
             title: None,
         }
     }
@@ -3339,6 +3351,34 @@ mod tests {
         assert!(old.smart.is_none());
         let partial: SmartRules = serde_json::from_str(r#"{"kinds":["audio"]}"#).unwrap();
         assert_eq!((partial.kinds, partial.usage), (vec![SmartKind::Audio], SmartUsage::Any));
+    }
+
+    #[test]
+    fn matrix_choice_only_for_videos_with_a_601_709_or_missing_tag() {
+        let mut fx = Fx::new(2.0, false);
+        let video = fx.media;
+        let mut still = video_asset(1.0, false);
+        still.kind = MediaKind::Image;
+        let still = {
+            let id = still.id;
+            fx.p.media.push(still);
+            id
+        };
+        let patch = |m| MediaPatch { matrix: Some(m), ..Default::default() };
+        let o = fx.run(EditCommand::UpdateMedia { media: vec![video], patch: patch(MatrixChoice::Bt601) });
+        assert!(o.changed);
+        assert_eq!(fx.p.media(video).unwrap().matrix, MatrixChoice::Bt601);
+        let v = fx.p.media(video).unwrap().info.as_ref().unwrap().video.as_ref().unwrap();
+        assert_eq!((v.webview_ycc(false), v.read_ycc(MatrixChoice::Bt601, false)), (Some(Ycc::Bt709), Some(Ycc::Bt601)));
+        // Not for images, and not for other tags; nothing changes then.
+        assert!(apply(&mut fx.p, &EditCommand::UpdateMedia { media: vec![video, still], patch: patch(MatrixChoice::Bt709) }).is_err());
+        fx.p.media_mut(video).unwrap().info.as_mut().unwrap().video.as_mut().unwrap().color.space = Some("bt2020nc".into());
+        assert!(apply(&mut fx.p, &EditCommand::UpdateMedia { media: vec![video], patch: patch(MatrixChoice::Bt709) }).is_err());
+        assert_eq!(fx.p.media(video).unwrap().matrix, MatrixChoice::Bt601);
+        // Back to automatic is always allowed; the file then stores nothing.
+        fx.run(EditCommand::UpdateMedia { media: vec![video, still], patch: patch(MatrixChoice::Auto) });
+        assert_eq!(fx.p.media(video).unwrap().matrix, MatrixChoice::Auto);
+        assert!(!serde_json::to_string(fx.p.media(video).unwrap()).unwrap().contains("matrix"));
     }
 
     #[test]

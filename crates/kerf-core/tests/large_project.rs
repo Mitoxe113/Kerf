@@ -24,6 +24,7 @@ fn asset(i: usize) -> MediaAsset {
         imported_at: 0,
         derived: Derived::default(),
         marks: Default::default(),
+        matrix: Default::default(),
         title: None,
     }
 }

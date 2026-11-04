@@ -70,6 +70,7 @@ fn import(tools: &Tools, path: &Path, cache: &Path) -> MediaAsset {
         imported_at: 0,
         derived,
         marks: Default::default(),
+        matrix: Default::default(),
         title: None,
     }
 }
@@ -1703,4 +1704,106 @@ fn animated_effects_match_their_values_per_frame() {
     // The masks went into the cache and are reused.
     let masks: Vec<_> = std::fs::read_dir(dir.path().join("cache/masks")).unwrap().collect();
     assert!(!masks.is_empty());
+}
+
+/// Mean RGB of the centre (64×64) of frame `n`, decoded with `matrix` when given (else the file's tag).
+fn centre_rgb(tools: &Tools, file: &Path, n: u32, matrix: Option<&str>) -> [f64; 3] {
+    let scale = matrix.map(|m| format!("scale=in_color_matrix={m}:in_range=tv,")).unwrap_or_default();
+    let out = tools
+        .ffmpeg_cmd()
+        .args(["-i"])
+        .arg(file)
+        .args(["-vf", &format!("select=eq(n\\,{n}),{scale}crop=64:64,format=rgb24"), "-frames:v", "1", "-f", "rawvideo", "pipe:1"])
+        .output()
+        .unwrap();
+    assert!(out.status.success() && out.stdout.len() == 64 * 64 * 3, "frame {n} of {}", file.display());
+    let mut sum = [0.0; 3];
+    for px in out.stdout.chunks(3) {
+        for c in 0..3 {
+            sum[c] += px[c] as f64;
+        }
+    }
+    sum.map(|s| s / (64.0 * 64.0))
+}
+
+/// Untagged HD is read as BT.709 like the preview; the user's choice of
+/// BT.601 reads the same file with the other matrix. Checked on a saturated
+/// colour where the two matrices differ by far more than the tolerance.
+#[test]
+fn matrix_choice_reads_untagged_video() {
+    let Some(tools) = tools() else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("flat.mp4");
+    ffmpeg(&tools, &["-f", "lavfi", "-i", "color=c=0xC02060:s=1280x720:r=25:d=0.4", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-y", &src.to_string_lossy()]);
+    let asset = import(&tools, &src, &dir.path().join("cache"));
+    assert_eq!(asset.info.as_ref().unwrap().video.as_ref().unwrap().color.space, None, "the source must be untagged");
+    let id = asset.id;
+    let mut p = Project::new("matrix", 0);
+    p.media.push(asset);
+    let seq = p.active_sequence;
+    let settings = SequenceSettings { width: 1280, height: 720, fps: Rational::new(25, 1), sample_rate: 48_000 };
+    kerf_core::ops::apply(&mut p, &EditCommand::UpdateSequenceSettings { sequence: seq, settings }).unwrap();
+    kerf_core::ops::apply(&mut p, &EditCommand::PlaceMedia {
+        sequence: seq, media: id, video_track: None, audio_track: None, at: 0,
+        mode: PlaceMode::Overwrite, source_in: Some(0), source_out: Some(10), match_sequence: false,
+    })
+    .unwrap();
+    let export = |p: &Project, name: &str| {
+        let file = dir.path().join(format!("{name}.mov"));
+        let s = ExportSettings {
+            output: file.clone(),
+            video_codec: VideoCodec::ProRes422Hq,
+            hardware: false,
+            width: 1280,
+            height: 720,
+            fps: Rational::new(25, 1),
+            rate: RateControl::Quality { crf: 18 },
+            audio_codec: AudioCodec::Aac,
+            audio_bitrate_kbps: 128,
+            sample_rate: 48_000,
+            audio_channels: 2,
+            use_in_out: false,
+            subtitles: Default::default(),
+            title_files: Default::default(),
+            title_sequences: Default::default(),
+            loudness: None,
+            segmented: false, chapters: false, cache_dir: Some(dir.path().join("cache")),
+        };
+        let plan = render::plan(p, p.sequence(seq).unwrap(), &s, dir.path(), &[]).unwrap();
+        let mut log = String::new();
+        let res = render::render_logged(&tools, &plan, &AtomicBool::new(false), |_| {}, &mut log);
+        assert!(res.is_ok(), "{name}: {res:?}\n{log}");
+        file
+    };
+    // The export path itself is a few levels off the direct decode (measured 1 to 3, same for both
+    // matrices), so the choice is checked by what it changes.
+    let close = |a: [f64; 3], b: [f64; 3]| a.iter().zip(&b).all(|(x, y)| (x - y).abs() <= 4.0);
+    let (as709, as601) = (centre_rgb(&tools, &src, 5, Some("bt709")), centre_rgb(&tools, &src, 5, Some("bt601")));
+    assert!(as709.iter().zip(&as601).any(|(x, y)| (x - y).abs() > 15.0), "the matrices must differ here: {as709:?} {as601:?}");
+
+    let auto = centre_rgb(&tools, &export(&p, "auto"), 5, None);
+    assert!(close(auto, as709), "automatic: {auto:?}, BT.709 reads {as709:?}");
+    kerf_core::ops::apply(&mut p, &EditCommand::UpdateMedia { media: vec![id], patch: kerf_core::ops::MediaPatch { matrix: Some(MatrixChoice::Bt601), ..Default::default() } }).unwrap();
+    let chosen = centre_rgb(&tools, &export(&p, "bt601"), 5, None);
+    assert!(close(chosen, as601), "BT.601 chosen: {chosen:?}, BT.601 reads {as601:?}");
+    for c in 0..3 {
+        let (want, got) = (as709[c] - as601[c], auto[c] - chosen[c]);
+        assert!((want - got).abs() <= 1.5, "channel {c}: the choice changes {got}, the matrices differ by {want}");
+    }
+
+    // Untagged VP9 is decoded as BT.601 by the preview even in HD, like FFmpeg: no correction.
+    let webm = dir.path().join("flat.webm");
+    ffmpeg(&tools, &["-f", "lavfi", "-i", "color=c=0xC02060:s=1280x720:r=25:d=0.4", "-c:v", "libvpx-vp9", "-b:v", "1M", "-pix_fmt", "yuv420p", "-y", &webm.to_string_lossy()]);
+    let vp9 = import(&tools, &webm, &dir.path().join("cache"));
+    assert!(vp9.derived.preview_native && vp9.info.as_ref().unwrap().video.as_ref().unwrap().color.space.is_none());
+    let vp9_id = vp9.id;
+    p.media.push(vp9);
+    kerf_core::ops::apply(&mut p, &EditCommand::PlaceMedia {
+        sequence: seq, media: vp9_id, video_track: None, audio_track: None, at: 0,
+        mode: PlaceMode::Overwrite, source_in: Some(0), source_out: Some(10), match_sequence: false,
+    })
+    .unwrap();
+    let vp9_auto = centre_rgb(&tools, &export(&p, "vp9"), 5, None);
+    let vp9_601 = centre_rgb(&tools, &webm, 5, Some("bt601"));
+    assert!(close(vp9_auto, vp9_601), "untagged VP9: {vp9_auto:?}, BT.601 reads {vp9_601:?}");
 }

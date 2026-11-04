@@ -37,6 +37,8 @@ export interface Layer {
   crop: [number, number, number, number];
   opacity: number;
   color: ColorAdjust;
+  /** Correction to the colour matrix the user chose for the video (engine/ycc.ts); before `color`. */
+  fix?: Mat3 | null;
   /** Active effects in order; needs `work` and `fxScale`. */
   effects?: EffectKind[];
   /** Size in canvas pixels of the clip at scale 1 (where effects run). */
@@ -80,6 +82,8 @@ const FS = `#version 300 es
 precision highp float;
 in vec2 v_uv;
 uniform sampler2D u_tex;
+uniform mat3 u_fix;
+uniform float u_fixOn;
 uniform mat3 u_color;
 uniform float u_contrast;
 uniform float u_opacity;
@@ -109,6 +113,8 @@ void main() {
   if (u_mask > 0 && !shown()) discard;
   vec4 s = texture(u_tex, v_uv);
   if (u_unpremul > 0.5) s.rgb = s.a > 0.0 ? s.rgb / s.a : vec3(0.0);
+  // Another Y'CbCr matrix than the WebView decoded with, clipped like FFmpeg's RGB conversion.
+  if (u_fixOn > 0.5) s.rgb = clamp(u_fix * s.rgb, 0.0, 1.0);
   vec3 rgb = clamp(u_color * s.rgb, 0.0, 1.0);
   rgb = clamp((rgb - 0.5) * u_contrast + 0.5, 0.0, 1.0);
   float a = s.a * u_opacity;
@@ -221,7 +227,7 @@ export class Compositor {
     this.gl = gl;
     this.program = link(gl, VS, FS);
     this.loc = Object.fromEntries(
-      ["u_matrix", "u_crop", "u_tex", "u_color", "u_contrast", "u_opacity", "u_premul", "u_unpremul", "u_mask", "u_prog", "u_frame"].map((n) => [n, gl.getUniformLocation(this.program, n)]),
+      ["u_matrix", "u_crop", "u_tex", "u_fix", "u_fixOn", "u_color", "u_contrast", "u_opacity", "u_premul", "u_unpremul", "u_mask", "u_prog", "u_frame"].map((n) => [n, gl.getUniformLocation(this.program, n)]),
     );
     const vao = gl.createVertexArray()!;
     gl.bindVertexArray(vao);
@@ -282,9 +288,11 @@ export class Compositor {
     return f;
   }
 
-  private quad(matrix: Mat3, crop: [number, number, number, number], color: ColorAdjust, opacity: number, premul: boolean, unpremul = false) {
+  private quad(matrix: Mat3, crop: [number, number, number, number], color: ColorAdjust, opacity: number, premul: boolean, unpremul = false, fix: Mat3 | null = null) {
     const gl = this.gl;
     gl.uniform1f(this.loc.u_unpremul, unpremul ? 1 : 0);
+    gl.uniform1f(this.loc.u_fixOn, fix ? 1 : 0);
+    if (fix) gl.uniformMatrix3fv(this.loc.u_fix, false, fix);
     gl.uniformMatrix3fv(this.loc.u_matrix, false, matrix);
     gl.uniform4fv(this.loc.u_crop, crop);
     gl.uniformMatrix3fv(this.loc.u_color, false, colorMatrix(color));
@@ -315,7 +323,7 @@ export class Compositor {
     }
     const unpremul = !!group;
     if (!l.effects?.length || !l.work) {
-      this.quad(this.placed(l.matrix), l.crop, l.color, l.opacity, true, unpremul);
+      this.quad(this.placed(l.matrix), l.crop, l.color, l.opacity, true, unpremul, l.fix ?? null);
     } else {
       // Crop and colour into a framebuffer at the fitted size, run the effects, then place.
       const [w, h] = l.work.map((v) => Math.max(1, Math.round(v)));
@@ -323,7 +331,7 @@ export class Compositor {
       gl.bindFramebuffer(gl.FRAMEBUFFER, first.fbo);
       gl.viewport(0, 0, w, h);
       gl.disable(gl.BLEND);
-      this.quad(FULL_QUAD, l.crop, l.color, 1, false, unpremul);
+      this.quad(FULL_QUAD, l.crop, l.color, 1, false, unpremul, l.fix ?? null);
       const out = this.fx.apply(first, l.effects, l.fxScale ?? 1, l.fxFrame ?? 0);
       this.bindMain(target, width, height);
       gl.bindTexture(gl.TEXTURE_2D, out.tex);

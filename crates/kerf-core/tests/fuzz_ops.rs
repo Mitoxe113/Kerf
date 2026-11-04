@@ -72,6 +72,7 @@ fn asset(name: &str, kind: MediaKind, seconds: f64, video: bool, audio: bool) ->
         imported_at: 0,
         derived: Derived::default(),
         marks: Default::default(),
+        matrix: Default::default(),
         title: None,
     }
 }

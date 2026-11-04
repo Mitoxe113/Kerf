@@ -11,6 +11,7 @@ import type { Angle, MediaAsset } from "../lib/types";
 import { useEditor } from "../state/editor";
 import { useActiveSequence, useProject } from "../state/project";
 import { cx, PanelHeader } from "../ui/primitives";
+import { useYccFilter } from "../ui/YccFilter";
 
 /** Seconds a playing angle may drift from the playhead before it is sought. */
 const MAX_DRIFT_S = 0.25;
@@ -20,6 +21,7 @@ function AngleTile({ index, angle, asset, time, rate, active }: { index: number;
   const useProxies = useEditor((s) => s.useProxies);
   const src = asset ? previewSource(asset, useProxies) : null;
   const length = asset?.info?.duration ?? 0;
+  const ycc = useYccFilter(asset, useProxies);
   const inside = time >= 0 && time < length;
   useEffect(() => {
     const el = ref.current;
@@ -41,7 +43,8 @@ function AngleTile({ index, angle, asset, time, rate, active }: { index: number;
       title={`Kamera ${index + 1}: ${angle.name} (Taste ${index + 1})`}
       onClick={() => void switchAngle(index)}
     >
-      {src ? <video ref={ref} src={src} muted playsInline preload="auto" className={cx("h-full w-full object-contain", !inside && "opacity-20")} /> : <span className="text-xs text-fg-4">Wird vorbereitet …</span>}
+      {src && ycc.svg}
+      {src ? <video ref={ref} src={src} muted playsInline preload="auto" style={{ filter: ycc.filter }} className={cx("h-full w-full object-contain", !inside && "opacity-20")} /> : <span className="text-xs text-fg-4">Wird vorbereitet …</span>}
       {!inside && <span className="absolute text-xs text-fg-3">Kein Bild</span>}
       <span className={cx("absolute left-1 top-1 rounded-xs px-1 font-mono text-[11px]", active ? "bg-signal text-black" : "bg-black/70 text-fg-2")}>{index + 1}</span>
       <span className="absolute bottom-1 left-1 max-w-[90%] truncate rounded-xs bg-black/70 px-1 text-[11px] text-fg-2">{angle.name}</span>

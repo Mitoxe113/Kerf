@@ -64,9 +64,10 @@ Zuverlässigkeit (Deltas, geteilte Undo-Schnappschüsse, Autosave, Versionen, Wi
 4. **macOS und Linux (derzeit nicht geplant):** Vor einer Rückkehr müsste unter Linux die Wiedergabe über das `asset:`-Protokoll in WebKitGTK gelöst werden (siehe STATUS, *Release 0.1.0*); unter macOS Dateizuordnung über `RunEvent::Opened`, Dialoge und Wiedergabe in WKWebView prüfen.
 5. **Assistenten in der App durchspielen:** Szenen, Stille, Beats, Ducking, Archiv, Relink, Cache, intelligente Ablagen und den Metadaten-Editor mit echten Projekten in der Tauri-App bedienen; Kapitel in einem Abspieler prüfen.
 6. **Effekt-Keyframes und Freiform-Maske in der App durchspielen:** im Programmmonitor der Tauri-App (WebView2) Punkte setzen, animieren und gegen den Export vergleichen.
+7. **Farbmatrix in WebView2 prüfen:** Die Regeln für Material ohne gültigen Tag sind in Chromium unter Linux gemessen. Unter Windows einfarbige Testclips erzeugen, z. B. `ffmpeg -f lavfi -i color=c=0xC02060:s=1280x720:r=25:d=2 -vf format=yuv420p -c:v libx264 h264.mp4` und dasselbe mit `-c:v libvpx-vp9 -b:v 1M vp9.webm`, importieren und die Farbe im Programmmonitor (Pipette eines Bildschirmfotos) mit 205/50/95 (BT.709) und 192/31/95 (BT.601) vergleichen: erwartet sind BT.709 für H.264 und BT.601 für VP9. Weicht WebView2 ab, die Regel in `VideoInfo::webview_ycc` und `src/engine/ycc.ts` anpassen.
 
 ## Später
 
 - Medienverwaltung: überwachte Ordner
-- Farbmanagement: wählbare Matrix für ungetaggte Quellen, HDR-Metadaten
+- Farbmanagement: Primärfarben und Übertragung im Export wie in der Vorschau, HDR-Metadaten
 - Native Render-Pipeline (wgpu), falls der segmentierte Export bei sehr langen Timelines nicht reicht

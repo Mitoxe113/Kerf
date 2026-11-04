@@ -368,6 +368,7 @@ pub fn media_import(app: AppHandle, state: State<'_, AppState>, paths: Vec<Strin
                 imported_at: now,
                 derived: Derived::default(),
                 marks: Default::default(),
+                matrix: Default::default(),
                 title: None,
             }
         })
@@ -786,6 +787,7 @@ pub fn freeze_frame(app: AppHandle, state: State<'_, AppState>, sequence: Uuid, 
         imported_at: now_ms(),
         derived: Derived::default(),
         marks: Default::default(),
+        matrix: Default::default(),
         title: None,
     };
     let id = asset.id;

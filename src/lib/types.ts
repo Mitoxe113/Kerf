@@ -92,7 +92,12 @@ export interface MediaAsset {
   marks?: SourceMarks;
   /** Generated title; `path` is its rendered PNG. */
   title?: TitleSpec;
+  /** Colour matrix chosen by the user (absent = automatic). */
+  matrix?: MatrixChoice;
 }
+
+/** kerf_core MatrixChoice: read a video as BT.601 or BT.709 instead of its tag or the guess. */
+export type MatrixChoice = "auto" | "bt601" | "bt709";
 
 // --- text ----------------------------------------------------------------------
 
@@ -521,7 +526,7 @@ export type ClipPatch = Partial<
   Pick<Clip, "name" | "enabled" | "transform" | "opacity" | "volumeDb" | "pan" | "speed" | "fadeIn" | "fadeOut" | "color" | "label" | "channels" | "reverse" | "fxBypass" | "blendMode" | "denoise">
 >;
 export type TrackPatch = Partial<Pick<Track, "name" | "muted" | "solo" | "locked" | "hidden" | "volumeDb" | "color" | "height" | "effects" | "mono">>;
-export type MediaPatch = Partial<Pick<MediaAsset, "favorite" | "label" | "tags" | "note">>;
+export type MediaPatch = Partial<Pick<MediaAsset, "favorite" | "label" | "tags" | "note" | "matrix">>;
 
 export interface PasteItem {
   clip: Clip;

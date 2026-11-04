@@ -17,12 +17,13 @@ import { fpsOf } from "../lib/time";
 import { api } from "../lib/ipc";
 import { animate, isWarped, sourceAt, speedAt } from "../lib/keys";
 import { denoiseKey } from "../lib/denoise";
-import { fileUrl, previewSource } from "../lib/media";
+import { fileUrl, playsOriginal, previewSource } from "../lib/media";
 import type { Clip, ClipPatch, Denoise, MediaAsset, Sequence, Subtitles, TitleSpec, Track, TrackKind, Uuid } from "../lib/types";
 import { AudioMixer, effectsMessage } from "./audio";
 import { transitionInto, type TransitionSpan } from "../timeline/geometry";
 import { Compositor, type DrawItem, type Layer, type LayerSource, wipeOf } from "./compositor";
 import { activeEffects, effectAt } from "./effects";
+import { yccFix } from "./ycc";
 import { dbToGain, IDENTITY_COLOR, IDENTITY_TRANSFORM, place, quadMatrix } from "./math";
 import { cueAt, cueCanvas, setFontListener, titleCanvas } from "./text";
 
@@ -909,6 +910,7 @@ export class PlaybackEngine {
       key = v?.key ?? `title:${s.path}${c.id}`;
     }
     const a = animate(c, frame);
+    const asset = this.media.get(c.mediaId);
     const t = a.transform;
     const opacity = a.opacity * fadeGain(c, frame);
     if (t.scale <= 0 || opacity <= 0) return null;
@@ -925,6 +927,7 @@ export class PlaybackEngine {
       crop: [t.cropLeft, t.cropTop, t.cropRight, t.cropBottom],
       opacity,
       color: a.color,
+      fix: group || !asset ? null : yccFix(asset, playsOriginal(asset, this.opts.useProxies)),
       effects,
       work: t.scale > 0 ? [(p.width / t.scale) * fxScale, (p.height / t.scale) * fxScale] : undefined,
       fxScale,

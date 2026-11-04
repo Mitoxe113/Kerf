@@ -112,7 +112,7 @@ Alle Tastaturbefehle sind unter *Bearbeiten → Tastaturbefehle …* (`Strg+Alt+
 
 **Effekte animieren:** Im Inspector (Tab *Effekte*) haben animierbare Parameter eine Stoppuhr. Ein Klick darauf setzt einen Keyframe am Playhead; danach setzt jede Änderung einen Keyframe dort, die Raute fügt einen hinzu oder entfernt ihn, Rechtsklick auf die Raute wählt die Interpolation.
 
-**Intelligente Ablagen und Metadaten:** Der Knopf mit der Lupe im Medienbrowser legt eine intelligente Ablage an, die alle Medien nach Regeln (Typ, Text, Tags, Farbe, Favorit, Verwendung, offline) zeigt. Rechtsklick auf ein Medium › *Metadaten bearbeiten* öffnet Tags, Notiz, Farbe und Favorit, auch für mehrere Medien.
+**Intelligente Ablagen und Metadaten:** Der Knopf mit der Lupe im Medienbrowser legt eine intelligente Ablage an, die alle Medien nach Regeln (Typ, Text, Tags, Farbe, Favorit, Verwendung, offline) zeigt. Rechtsklick auf ein Medium › *Metadaten bearbeiten* öffnet Tags, Notiz, Farbe und Favorit, auch für mehrere Medien, und für Videos die Farbmatrix (Automatisch, BT.601, BT.709), die in Vorschau und Export gilt.
 
 **Freiform-Maske:** Effekt *Freiform-Maske* (Kategorie Keying und Masken) auf einen Clip legen, *Im Monitor bearbeiten* wählen und bei ausgewähltem Clip die Punkte im Programmmonitor ziehen. Doppelklick auf eine Kante fügt einen Punkt ein, Rechtsklick auf einen Punkt entfernt ihn. Weiche Kante, Umkehren und ein animierbarer Versatz stehen im Inspector.
 

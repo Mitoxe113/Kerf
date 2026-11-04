@@ -14,6 +14,7 @@ Format nach [Keep a Changelog](https://keepachangelog.com/de/1.1.0/), Versionen 
 - Intelligente Ablagen (Smart Bins): zeigen alle Medien, die Regeln zu Typ, Text, Tags, Farbe, Favorit, Verwendung und Offline-Status erfüllen.
 - Stapel-Export: mehrere Export-Vorgaben ankreuzen und in einem Schritt als Aufträge in die Render-Warteschlange stellen; vorhandene Dateien werden vorher genannt.
 - Metadaten-Editor im Panel *Projekt*: Name, Favorit, Farbe, Tags und Notiz; für mehrere Medien Favorit, Farbe und Tags auf einmal. Die Suche im Medienbrowser findet auch Notizen und Tags.
+- Farbmatrix je Video wählbar (Automatisch, BT.601, BT.709) im Panel *Projekt › Metadaten*; die Wahl gilt in Vorschau und Export.
 
 ### Behoben
 - Schnitt: Teilen und Slip runden die Quellposition nicht mehr auf; ein Teil konnte sonst ein Bild über das Clipende oder das Medium hinausreichen.
@@ -28,6 +29,8 @@ Format nach [Keep a Changelog](https://keepachangelog.com/de/1.1.0/), Versionen 
 - Favorit setzen und Medien-Metadaten ändern veränderten bei einer Liste mit einem unbekannten Medium die Medien davor, ohne Undo-Schritt; jetzt wird zuerst die ganze Liste geprüft.
 - Import oder Titel in eine Ablage, die es nicht mehr gibt (z. B. nach Rückgängig), machten die Medien unsichtbar; sie landen jetzt im Projektstamm. Beim Laden repariert Kerf Verweise auf fehlende Ablagen und Ablage-Schleifen.
 - Medienbrowser: Verschwindet die geöffnete Ablage, springt die Ansicht zum Projektstamm statt leer zu bleiben.
+- Farbe: Ungetaggtes VP9 und AV1 in HD las der Export als BT.709, die Vorschau zeigt es als BT.601 (in Chromium gemessen). H.264 und VP8 mit Matrix-Tag, aber ohne Primärfarben und Übertragung zeigt die Vorschau wie ungetaggt, der Export las den Tag. Beides liest der Export jetzt wie die Vorschau.
+- Farbe: Mit eingeschalteten Proxys zeigte die Vorschau ungetaggtes VP9 und AV1 in HD andere Farben als ohne; sie gleicht den Proxy jetzt aus.
 - In schmalen Bereichen mit vielen Tabs schoben die Tabs die Knöpfe des Panels (z. B. Import, Neue Ablage) und den Ablagepfad aus dem sichtbaren Bereich; die Tab-Leiste scrollt jetzt.
 
 - Doku: Der Effekt-Katalog hat 39 Effekte (nicht 38); die Paritätsangabe nennt jetzt die vier Effekte mit größeren Ausreißern.

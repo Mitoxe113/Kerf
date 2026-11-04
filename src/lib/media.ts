@@ -6,13 +6,17 @@ import type { MediaAsset } from "./types";
 
 export const fileUrl = (path: string) => convertFileSrc(path);
 
+const playsProxy = (asset: MediaAsset, useProxies: boolean) => !!asset.derived.proxy && (useProxies || !asset.derived.previewNative);
+
+/** Whether the preview decodes the original file (not its proxy). */
+export const playsOriginal = (asset: MediaAsset, useProxies: boolean) => !playsProxy(asset, useProxies) && asset.derived.previewNative;
+
 /** Source the preview engine should decode, or null while a proxy is pending. */
 export function previewSource(asset: MediaAsset, useProxies: boolean): string | null {
   // Titles are generated PNGs; the browser decodes them directly.
   if (asset.title) return fileUrl(asset.path);
-  const { proxy, previewNative } = asset.derived;
-  if (proxy && (useProxies || !previewNative)) return fileUrl(proxy);
-  if (previewNative) return fileUrl(asset.path);
+  if (playsProxy(asset, useProxies)) return fileUrl(asset.derived.proxy!);
+  if (asset.derived.previewNative) return fileUrl(asset.path);
   return null;
 }
 

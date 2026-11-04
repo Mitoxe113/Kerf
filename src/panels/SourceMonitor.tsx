@@ -11,6 +11,7 @@ import { useProject } from "../state/project";
 import { attachPlayer, NO_MARKS, source, sourceDuration, sourceFps, useSource } from "../state/source";
 import { setMediaDragRange, startMediaDrag } from "../ui/dnd";
 import { cx, IconButton, PanelHeader, Select } from "../ui/primitives";
+import { useYccFilter } from "../ui/YccFilter";
 
 const tc = (seconds: number, fps: number) => formatTimecode(Math.round(seconds * fps), { num: Math.round(fps * 1000), den: 1000 });
 
@@ -45,6 +46,7 @@ export function SourceMonitor() {
   const marks = asset?.marks ?? NO_MARKS;
   const names = useProject((s) => s.mediaById);
   const useProxies = useEditor((s) => s.useProxies);
+  const ycc = useYccFilter(asset, useProxies);
   const playerRef = useRef<HTMLVideoElement | HTMLAudioElement | null>(null);
   // Narrow panels (e.g. a tab next to the media browser) drop secondary controls.
   const rootRef = useRef<HTMLDivElement>(null);
@@ -106,9 +108,11 @@ export function SourceMonitor() {
           </div>
         )}
         {asset?.kind === "image" && <img src={fileUrl(asset.path)} alt="" draggable={false} className="absolute inset-0 h-full w-full object-contain" />}
+        {asset?.kind === "video" && src && ycc.svg}
         {asset?.kind === "video" && src && (
           <video
             key={src}
+            style={{ filter: ycc.filter }}
             ref={playerRef as React.RefObject<HTMLVideoElement>}
             src={src}
             preload="auto"
