@@ -6,6 +6,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api } from "../lib/ipc";
 import { engine } from "../engine/playback";
 import { useEditor } from "../state/editor";
+import { holdingBin } from "../lib/smart";
 import { edit, reportError, useProject } from "../state/project";
 import { toast } from "../state/toasts";
 import { useAssets } from "../state/assets";
@@ -149,7 +150,7 @@ export async function importMedia(paths?: string[], directory = false) {
   }
   if (!files.length) return;
   try {
-    const d = await api.importMedia(files, useEditor.getState().currentBin);
+    const d = await api.importMedia(files, holdingBin(useProject.getState().project?.bins ?? [], useEditor.getState().currentBin));
     useProject.getState().applyDelta(d);
     const n = d.outcome.created.length;
     if (n === 0) toast.info("Keine neuen Medien", "Die Dateien sind bereits im Projekt oder werden nicht unterstützt.");

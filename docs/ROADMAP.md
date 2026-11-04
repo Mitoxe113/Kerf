@@ -51,6 +51,7 @@ Zuverlässigkeit (Deltas, geteilte Undo-Schnappschüsse, Autosave, Versionen, Wi
 - ✅ Szenen, Stille, Beats und Momente lokal erkennen, prüfen und als ein Undo-Schritt übernehmen; Ducking als Lautstärke-Keyframes
 - ✅ Marker mit Kategorie, Bereich und Kapitel, Marker-Panel, Kapitel im Export
 - ✅ Projektprüfung, Relink-Suche, Projekt archivieren, portable Pfade, Cache-Verwaltung, Metadaten
+- ✅ Intelligente Ablagen (Smart Bins) mit Regeln, Metadaten-Editor (Tags, Notiz, Farbe, Favorit, auch für mehrere Medien)
 - ☐ Transkription und automatische Untertitel (lokales Sprachmodell nötig), Smart Reframe
 - ☐ Stapel-Export mehrerer Profile, Einstellungsebenen, Compound Clips, überwachte Ordner, Plugins und Makros
 
@@ -60,11 +61,11 @@ Zuverlässigkeit (Deltas, geteilte Undo-Schnappschüsse, Autosave, Versionen, Wi
 2. **Updates über GitHub einschalten:** 0.1.0 ist ohne Update-Daten veröffentlicht. Den privaten Updater-Schlüssel (passend zum öffentlichen in `tauri.conf.json`) und sein Passwort als Secrets `TAURI_SIGNING_PRIVATE_KEY` und `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` hinterlegen, dann bekommt 0.1.1 ein `latest.json`. Den Weg 0.1.0 → 0.1.1 über GitHub einmal mit einer installierten 0.1.0 durchspielen.
 3. **Code-Signierung:** Ein Authenticode-Zertifikat für Windows besorgen und als Secret hinterlegen; der Release-Workflow ist dafür vorbereitet. Bis dahin warnt SmartScreen beim Installer.
 4. **macOS und Linux (derzeit nicht geplant):** Vor einer Rückkehr müsste unter Linux die Wiedergabe über das `asset:`-Protokoll in WebKitGTK gelöst werden (siehe STATUS, *Release 0.1.0*); unter macOS Dateizuordnung über `RunEvent::Opened`, Dialoge und Wiedergabe in WKWebView prüfen.
-5. **Assistenten in der App durchspielen:** Szenen, Stille, Beats, Ducking, Archiv, Relink und Cache mit echten Projekten in der Tauri-App bedienen; Kapitel in einem Abspieler prüfen.
+5. **Assistenten in der App durchspielen:** Szenen, Stille, Beats, Ducking, Archiv, Relink, Cache, intelligente Ablagen und den Metadaten-Editor mit echten Projekten in der Tauri-App bedienen; Kapitel in einem Abspieler prüfen.
 6. **Effekt-Keyframes und Freiform-Maske in der App durchspielen:** im Programmmonitor der Tauri-App (WebView2) Punkte setzen, animieren und gegen den Export vergleichen.
 
 ## Später
 
-- Medienverwaltung: Smart Bins, Metadaten-Editor, überwachte Ordner
+- Medienverwaltung: überwachte Ordner
 - Farbmanagement: wählbare Matrix für ungetaggte Quellen, HDR-Metadaten
 - Native Render-Pipeline (wgpu), falls der segmentierte Export bei sehr langen Timelines nicht reicht

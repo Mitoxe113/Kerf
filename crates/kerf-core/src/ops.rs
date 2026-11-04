@@ -129,6 +129,8 @@ pub enum BatchLabel {
     Ducking,
     AnalysisMarkers,
     RelinkMedia,
+    /// Tags added to or removed from several media.
+    MediaTags,
 }
 
 impl BatchLabel {
@@ -139,12 +141,22 @@ impl BatchLabel {
             BatchLabel::Ducking => "ducking",
             BatchLabel::AnalysisMarkers => "analysisMarkers",
             BatchLabel::RelinkMedia => "relinkMedia",
+            BatchLabel::MediaTags => "mediaTags",
         }
     }
 }
 
 /// Longest marker category.
 const MAX_CATEGORY: usize = 40;
+/// Longest tag, most tags and longest note of a medium.
+pub const MAX_TAG: usize = 60;
+pub const MAX_TAGS: usize = 64;
+pub const MAX_NOTE: usize = 10_000;
+
+/// Trimmed, one line, at most `max` characters.
+fn clean_line(s: &str, max: usize) -> String {
+    s.chars().filter(|c| !c.is_control()).collect::<String>().trim().chars().take(max).collect::<String>().trim_end().to_string()
+}
 
 fn category(s: &str) -> String {
     s.trim().chars().filter(|c| !c.is_control()).take(MAX_CATEGORY).collect()
@@ -207,7 +219,15 @@ pub enum EditCommand {
     RelinkMedia { media: Uuid, path: PathBuf },
     /// Changes a title's definition and its rendered PNG.
     UpdateTitle { media: Uuid, title: TitleSpec, path: PathBuf },
-    CreateBin { name: String, parent: Option<Uuid> },
+    /// With `smart` rules the bin is a smart bin (see [`Bin::smart`]).
+    CreateBin {
+        name: String,
+        parent: Option<Uuid>,
+        #[serde(default)]
+        smart: Option<SmartRules>,
+    },
+    /// Replaces the rules of a smart bin.
+    SetSmartRules { bin: Uuid, rules: SmartRules },
     RenameBin { bin: Uuid, name: String },
     RemoveBin { bin: Uuid },
 
@@ -353,6 +373,7 @@ impl EditCommand {
             C::CreateBin { .. } => "createBin",
             C::RenameBin { .. } => "renameBin",
             C::RemoveBin { .. } => "removeBin",
+            C::SetSmartRules { .. } => "setSmartRules",
             C::AddSequence { .. } => "addSequence",
             C::NestClips { .. } => "nestClips",
             C::CreateMulticam { .. } => "createMulticam",
@@ -515,7 +536,8 @@ pub fn apply(project: &mut Project, cmd: &EditCommand) -> Result<EditOutcome> {
             if assets.iter().any(|a| project.media(a.id).is_some()) {
                 return Err(EditError::Invalid("duplicate media id".into()));
             }
-            project.media.extend(assets.iter().cloned());
+            let held: Vec<MediaAsset> = assets.iter().map(|a| MediaAsset { bin: holding_bin(project, a.bin), ..a.clone() }).collect();
+            project.media.extend(held);
             out.created = assets.iter().map(|a| a.id).collect();
             out.changed = !assets.is_empty();
             out.media_changed = out.changed;
@@ -552,6 +574,7 @@ pub fn apply(project: &mut Project, cmd: &EditCommand) -> Result<EditOutcome> {
             out.media_changed = out.changed;
         }
         C::SetMediaFavorite { media, favorite } => {
+            all_media(project, media)?;
             for id in media {
                 let asset = project.media_mut(*id).ok_or(EditError::MediaNotFound)?;
                 out.changed |= asset.favorite != *favorite;
@@ -560,6 +583,7 @@ pub fn apply(project: &mut Project, cmd: &EditCommand) -> Result<EditOutcome> {
             out.media_changed = out.changed;
         }
         C::UpdateMedia { media, patch } => {
+            all_media(project, media)?;
             for id in media {
                 let asset = project.media_mut(*id).ok_or(EditError::MediaNotFound)?;
                 let before = (asset.favorite, asset.label, asset.tags.clone(), asset.note.clone());
@@ -570,13 +594,14 @@ pub fn apply(project: &mut Project, cmd: &EditCommand) -> Result<EditOutcome> {
                     asset.label = v;
                 }
                 if let Some(v) = &patch.tags {
-                    let mut tags: Vec<String> = v.iter().map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).collect();
+                    let mut tags: Vec<String> = v.iter().map(|t| clean_line(t, MAX_TAG)).filter(|t| !t.is_empty()).collect();
                     tags.sort();
                     tags.dedup();
+                    tags.truncate(MAX_TAGS);
                     asset.tags = tags;
                 }
                 if let Some(v) = &patch.note {
-                    asset.note = v.clone();
+                    asset.note = v.chars().filter(|c| !c.is_control() || matches!(c, '\n' | '\t')).take(MAX_NOTE).collect();
                 }
                 out.changed |= before != (asset.favorite, asset.label, asset.tags.clone(), asset.note.clone());
             }
@@ -598,8 +623,9 @@ pub fn apply(project: &mut Project, cmd: &EditCommand) -> Result<EditOutcome> {
         }
         C::MoveMediaToBin { media, bin } => {
             if let Some(b) = bin {
-                if !project.bins.iter().any(|x| x.id == *b) {
-                    return Err(EditError::BinNotFound);
+                let target = project.bins.iter().find(|x| x.id == *b).ok_or(EditError::BinNotFound)?;
+                if target.smart.is_some() {
+                    return Err(EditError::Invalid("a smart bin holds no media".into()));
                 }
             }
             for id in media {
@@ -638,13 +664,14 @@ pub fn apply(project: &mut Project, cmd: &EditCommand) -> Result<EditOutcome> {
             out.changed = true;
             out.media_changed = true;
         }
-        C::CreateBin { name, parent } => {
+        C::CreateBin { name, parent, smart } => {
             if let Some(p) = parent {
-                if !project.bins.iter().any(|b| b.id == *p) {
-                    return Err(EditError::BinNotFound);
+                let p = project.bins.iter().find(|b| b.id == *p).ok_or(EditError::BinNotFound)?;
+                if p.smart.is_some() {
+                    return Err(EditError::Invalid("a smart bin holds no bins".into()));
                 }
             }
-            let bin = Bin { id: Uuid::new_v4(), name: non_empty(name)?, parent: *parent };
+            let bin = Bin { id: Uuid::new_v4(), name: non_empty(name)?, parent: *parent, smart: smart.as_ref().map(SmartRules::sanitized) };
             out.created.push(bin.id);
             project.bins.push(bin);
             out.changed = true;
@@ -655,6 +682,16 @@ pub fn apply(project: &mut Project, cmd: &EditCommand) -> Result<EditOutcome> {
             let b = project.bins.iter_mut().find(|b| b.id == *bin).ok_or(EditError::BinNotFound)?;
             out.changed = b.name != name;
             b.name = name;
+            out.media_changed = out.changed;
+        }
+        C::SetSmartRules { bin, rules } => {
+            let b = project.bins.iter_mut().find(|b| b.id == *bin).ok_or(EditError::BinNotFound)?;
+            let Some(old) = b.smart.as_mut() else {
+                return Err(EditError::Invalid("not a smart bin".into()));
+            };
+            let rules = rules.sanitized();
+            out.changed = *old != rules;
+            *old = rules;
             out.media_changed = out.changed;
         }
         C::RemoveBin { bin } => {
@@ -1200,6 +1237,20 @@ fn edit_sequence(seq: &mut Sequence, media: &[MediaAsset], cmd: &EditCommand, ou
     }
 }
 
+/// Fails unless every id names a medium, so a command checks before it changes anything.
+fn all_media(project: &Project, media: &[Uuid]) -> Result<()> {
+    match media.iter().all(|id| project.media(*id).is_some()) {
+        true => Ok(()),
+        false => Err(EditError::MediaNotFound),
+    }
+}
+
+/// `bin` if it is an existing bin that holds media, else the project root. A
+/// bin can be gone when the browser still shows it after an undo.
+fn holding_bin(project: &Project, bin: Option<Uuid>) -> Option<Uuid> {
+    bin.filter(|b| project.bins.iter().any(|x| x.id == *b && x.smart.is_none()))
+}
+
 /// Adds `asset` to the project and places it on `track` for `duration` frames.
 #[allow(clippy::too_many_arguments)]
 fn add_still(project: &mut Project, sequence: Uuid, asset: &MediaAsset, track: Uuid, at: Frame, duration: Frame, mode: PlaceMode, out: &mut EditOutcome) -> Result<()> {
@@ -1224,7 +1275,7 @@ fn add_still(project: &mut Project, sequence: Uuid, asset: &MediaAsset, track: U
     seq.tracks.iter_mut().for_each(|t| {
         t.tidy_transitions();
     });
-    project.media.push(asset.clone());
+    project.media.push(MediaAsset { bin: holding_bin(project, asset.bin), ..asset.clone() });
     *project.sequence_mut(sequence).expect("sequence exists") = seq;
     out.sequence = Some(sequence);
     out.changed = true;
@@ -3217,6 +3268,112 @@ mod tests {
         );
         let nan = vec![effect(EffectKind::Vignette { amount: f32::NAN })];
         assert!(apply(&mut fx.p, &EditCommand::SetEffects { sequence: fx.seq, clips: vec![v], effects: nan }).is_err());
+    }
+
+    #[test]
+    fn smart_bins_hold_rules_but_no_media_or_bins() {
+        let mut fx = Fx::new(2.0, false);
+        let rules = SmartRules {
+            kinds: vec![SmartKind::Video, SmartKind::Video, SmartKind::Title],
+            text: "  interview ".into(),
+            tags: vec![" A ".into(), "a".into(), "".into(), "b".into()],
+            labels: vec![LabelColor::Red, LabelColor::Red],
+            ..Default::default()
+        };
+        let smart = fx.run(EditCommand::CreateBin { name: "Smart".into(), parent: None, smart: Some(rules) }).created[0];
+        let r = fx.p.bins[0].smart.clone().expect("smart bin");
+        assert_eq!(r.kinds, vec![SmartKind::Video, SmartKind::Title]);
+        assert_eq!(r.text, "interview");
+        assert_eq!(r.tags, vec!["A".to_string(), "b".to_string()]);
+        assert_eq!(r.labels, vec![LabelColor::Red]);
+
+        // Neither media nor bins go into a smart bin.
+        let media = fx.media;
+        assert!(apply(&mut fx.p, &EditCommand::MoveMediaToBin { media: vec![media], bin: Some(smart) }).is_err());
+        assert!(apply(&mut fx.p, &EditCommand::CreateBin { name: "x".into(), parent: Some(smart), smart: None }).is_err());
+
+        // Rules change only on a smart bin; the same rules are no change.
+        let plain = fx.run(EditCommand::CreateBin { name: "Ordner".into(), parent: None, smart: None }).created[0];
+        assert!(apply(&mut fx.p, &EditCommand::SetSmartRules { bin: plain, rules: SmartRules::default() }).is_err());
+        let o = fx.run(EditCommand::SetSmartRules { bin: smart, rules: SmartRules { favorites: true, usage: SmartUsage::Unused, ..Default::default() } });
+        assert!(o.changed && o.media_changed);
+        let o = fx.run(EditCommand::SetSmartRules { bin: smart, rules: SmartRules { favorites: true, usage: SmartUsage::Unused, ..Default::default() } });
+        assert!(!o.changed);
+        let long = SmartRules { text: "x".repeat(SMART_TEXT_MAX + 50), tags: (0..40).map(|i| format!("t{i}")).collect(), ..Default::default() };
+        fx.run(EditCommand::SetSmartRules { bin: smart, rules: long });
+        let r = fx.p.bins.iter().find(|b| b.id == smart).and_then(|b| b.smart.clone()).unwrap();
+        assert_eq!((r.text.chars().count(), r.tags.len()), (SMART_TEXT_MAX, SMART_TAGS_MAX));
+
+        // A list with an unknown medium changes nothing (the edit is not in the history).
+        let ghost = Uuid::new_v4();
+        let patch = MediaPatch { note: Some("x".into()), ..Default::default() };
+        assert!(apply(&mut fx.p, &EditCommand::UpdateMedia { media: vec![media, ghost], patch }).is_err());
+        assert!(apply(&mut fx.p, &EditCommand::SetMediaFavorite { media: vec![media, ghost], favorite: true }).is_err());
+        let m = fx.p.media(media).unwrap();
+        assert_eq!((m.note.as_str(), m.favorite), ("", false));
+        let tags: Vec<String> = [" b ", "a", "b", "", "x\ny", &"t".repeat(MAX_TAG + 9)].iter().map(|t| t.to_string()).chain((0..80).map(|i| format!("z{i:02}"))).collect();
+        let note = format!("Zeile 1\nZeile 2\u{7}{}", "n".repeat(MAX_NOTE));
+        fx.run(EditCommand::UpdateMedia { media: vec![media], patch: MediaPatch { tags: Some(tags), note: Some(note), ..Default::default() } });
+        let m = fx.p.media(media).unwrap();
+        assert_eq!(m.tags.len(), MAX_TAGS);
+        assert_eq!(&m.tags[..3], &["a".to_string(), "b".to_string(), "t".repeat(MAX_TAG)]);
+        assert!(m.tags.contains(&"xy".to_string()));
+        assert!(m.note.starts_with("Zeile 1\nZeile 2n") && m.note.chars().count() == MAX_NOTE);
+
+        // Imports into a smart or a missing bin land in the project root.
+        let mut a = video_asset(1.0, false);
+        a.bin = Some(smart);
+        let mut b = video_asset(1.0, false);
+        b.bin = Some(Uuid::new_v4());
+        let mut c = video_asset(1.0, false);
+        c.bin = Some(plain);
+        let ids = [a.id, b.id, c.id];
+        fx.run(EditCommand::ImportMedia { assets: vec![a, b, c] });
+        let bins: Vec<_> = ids.iter().map(|id| fx.p.media(*id).unwrap().bin).collect();
+        assert_eq!(bins, vec![None, None, Some(plain)]);
+
+        // Plain bins stay plain in the file; old files without the field load.
+        let json = serde_json::to_string(&fx.p.bins).unwrap();
+        assert_eq!(json.matches("\"smart\"").count(), 1);
+        let old: Bin = serde_json::from_str(r#"{"id":"00000000-0000-0000-0000-000000000001","name":"a","parent":null}"#).unwrap();
+        assert!(old.smart.is_none());
+        let partial: SmartRules = serde_json::from_str(r#"{"kinds":["audio"]}"#).unwrap();
+        assert_eq!((partial.kinds, partial.usage), (vec![SmartKind::Audio], SmartUsage::Any));
+    }
+
+    #[test]
+    fn loading_repairs_broken_bin_references() {
+        let mut p = Project::new("t", 0);
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        let s = Uuid::new_v4();
+        p.bins = vec![
+            Bin { id: a, name: "a".into(), parent: Some(b), smart: None },
+            Bin { id: b, name: "b".into(), parent: Some(a), smart: None },
+            Bin { id: s, name: "s".into(), parent: None, smart: Some(SmartRules::default()) },
+            Bin { id: Uuid::new_v4(), name: "c".into(), parent: Some(s), smart: None },
+            Bin { id: Uuid::new_v4(), name: "d".into(), parent: Some(Uuid::new_v4()), smart: None },
+            Bin { id: a, name: "dup".into(), parent: None, smart: None },
+        ];
+        let mut m1 = video_asset(1.0, false);
+        m1.bin = Some(s);
+        let mut m2 = video_asset(1.0, false);
+        m2.bin = Some(Uuid::new_v4());
+        let mut m3 = video_asset(1.0, false);
+        m3.bin = Some(b);
+        p.media = vec![m1, m2, m3];
+        p.normalize();
+        assert_eq!(p.bins.len(), 5);
+        // The loop a -> b -> a is broken; every walk up ends at the root.
+        for bin in &p.bins {
+            let mut at = bin.parent;
+            for _ in 0..=p.bins.len() {
+                at = at.and_then(|id| p.bins.iter().find(|x| x.id == id).and_then(|x| x.parent));
+            }
+            assert!(at.is_none(), "{}", bin.name);
+        }
+        assert!(p.bins.iter().filter(|x| x.name == "c" || x.name == "d").all(|x| x.parent.is_none()));
+        assert_eq!(p.media.iter().map(|m| m.bin).collect::<Vec<_>>(), vec![None, None, Some(b)]);
     }
 
     #[test]

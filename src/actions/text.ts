@@ -7,6 +7,7 @@ import { api } from "../lib/ipc";
 import { fpsOf } from "../lib/time";
 import type { Cue, MediaAsset, Sequence, TitleSpec, Uuid } from "../lib/types";
 import { useEditor } from "../state/editor";
+import { holdingBin } from "../lib/smart";
 import { activeSequence, edit, reportError, useProject } from "../state/project";
 import { toast } from "../state/toasts";
 import { confirm } from "./project";
@@ -34,7 +35,7 @@ function titleAsset(spec: TitleSpec, path: string, s: Sequence): MediaAsset {
       video: { codec: "png", profile: null, width: spec.width, height: spec.height, fps: s.settings.fps, pixFmt: "rgba", bitRate: null, rotation: 0 },
       audio: null,
     },
-    bin: useEditor.getState().currentBin,
+    bin: holdingBin(useProject.getState().project?.bins ?? [], useEditor.getState().currentBin),
     favorite: false,
     label: "none",
     tags: [],

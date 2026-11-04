@@ -19,7 +19,7 @@ Ein Konto, eine Anmeldung oder eine Internetverbindung braucht Kerf dafür nicht
 - **Versionen:** Jedes Speichern legt eine Version an (*Datei › Versionen*), Anzahl in den Einstellungen.
 - **Beenden:** Kerf fragt nach ungespeicherten Änderungen und nach laufenden Exporten und Downloads. Beim Beenden werden laufende Aufträge abgebrochen, unvollständige Dateien gelöscht.
 - **Neuere Projektdateien:** Enthält eine Datei Angaben, die diese Version nicht kennt, warnt Kerf beim Öffnen und fragt vor dem Überschreiben.
-- **Panel Projekt:** *Prüfung* (fehlende Medien und Schriften, leere Bereiche, ungewöhnliche Bildraten u. a.), *Verknüpfen* (fehlende Medien in Ordnern suchen), *Archiv* (Projekt mit allen Medien in einen leeren Ordner kopieren), *Cache* (Größe und Leeren), *Metadaten*.
+- **Panel Projekt:** *Prüfung* (fehlende Medien und Schriften, leere Bereiche, ungewöhnliche Bildraten u. a.), *Verknüpfen* (fehlende Medien in Ordnern suchen), *Archiv* (Projekt mit allen Medien in einen leeren Ordner kopieren), *Cache* (Größe und Leeren), *Metadaten* (Name, Favorit, Farbe, Tags und Notiz bearbeiten, technische Angaben der Datei).
 
 ## Medien
 
@@ -27,6 +27,9 @@ Ein Konto, eine Anmeldung oder eine Internetverbindung braucht Kerf dafür nicht
 - Nach dem Import erzeugt Kerf Vorschaubild, Filmstreifen und Wellenform. Kann die Vorschau einen Codec nicht abspielen (z. B. HEVC, ProRes, 10 Bit), entsteht automatisch ein Proxy; der Export liest immer das Original.
 - **Offline-Medien** (Datei verschoben oder gelöscht) sind markiert. Rechtsklick › *Neu verknüpfen* oder im Panel *Projekt › Verknüpfen* mehrere auf einmal suchen.
 - **Quellmonitor:** Doppelklick auf ein Medium, In/Out setzen, mit `,` (Einfügen) oder `.` (Überschreiben) in die Timeline.
+- **Ablagen:** *Neue Ablage* legt einen Ordner an; Medien per Ziehen oder Rechtsklick › *In Ablage verschieben* hineinlegen.
+- **Intelligente Ablagen:** *Neue intelligente Ablage* (Knopf mit Lupe im Medienbrowser) zeigt alle Medien, die alle gesetzten Regeln erfüllen: Typ, Text in Name, Notiz oder Tag, Tags, Farbe, nur Favoriten, in Sequenzen verwendet oder nicht, nur offline. Rechtsklick › *Regeln bearbeiten*. Sie enthält selbst nichts; Medien bleiben, wo sie sind.
+- **Metadaten:** Rechtsklick auf ein Medium › *Metadaten bearbeiten* öffnet *Projekt › Metadaten*. Tags werden mit Komma getrennt. Sind mehrere Medien ausgewählt, gelten Favorit und Farbe für alle, Tags lassen sich bei allen hinzufügen oder entfernen. Die Suche im Medienbrowser durchsucht Namen, Notizen und Tags.
 
 ## Timeline
 

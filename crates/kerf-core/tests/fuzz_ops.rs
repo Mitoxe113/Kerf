@@ -9,7 +9,7 @@
 
 use kerf_core::history::History;
 use kerf_core::model::*;
-use kerf_core::ops::{ClipPatch, Edge, EditCommand, PasteItem, PlaceMode, TrackPatch, TransitionEdit};
+use kerf_core::ops::{ClipPatch, Edge, EditCommand, MediaPatch, PasteItem, PlaceMode, TrackPatch, TransitionEdit};
 use kerf_core::time::{Frame, Rational};
 use uuid::Uuid;
 
@@ -158,6 +158,24 @@ fn invariants(p: &Project) -> Result<(), String> {
     if p.sequence(p.active_sequence).is_none() {
         return Err("active sequence missing".into());
     }
+    // Media and bins sit in existing bins that hold things (not smart ones), without loops.
+    let holds = |id: Uuid| p.bins.iter().any(|b| b.id == id && b.smart.is_none());
+    if let Some(m) = p.media.iter().find(|m| m.bin.is_some_and(|b| !holds(b))) {
+        return Err(format!("media {} in a missing or smart bin", m.name));
+    }
+    for b in &p.bins {
+        let mut at = b.parent;
+        for _ in 0..=p.bins.len() {
+            match at {
+                Some(id) if !holds(id) || id == b.id => return Err(format!("bin {} under a missing or smart bin, or in a loop", b.name)),
+                Some(id) => at = p.bins.iter().find(|x| x.id == id).and_then(|x| x.parent),
+                None => break,
+            }
+        }
+        if at.is_some() {
+            return Err(format!("bin {} in a loop", b.name));
+        }
+    }
     Ok(())
 }
 
@@ -174,7 +192,26 @@ fn random_command(r: &mut Rng, p: &Project, clipboard: &[PasteItem]) -> EditComm
     let media_ids: Vec<Uuid> = p.media.iter().map(|m| m.id).chain(p.sequences.iter().filter(|s| s.id != sequence).map(|s| s.id)).collect();
     let mode = if r.chance(50) { PlaceMode::Insert } else { PlaceMode::Overwrite };
     let multicams: Vec<Uuid> = p.multicams.iter().map(|m| m.id).collect();
-    match r.below(32) {
+    match r.below(33) {
+        32 => {
+            // Media and bins, sometimes with an id that does not exist.
+            let bins: Vec<Uuid> = p.bins.iter().map(|b| b.id).chain([Uuid::new_v4()]).collect();
+            let mut media: Vec<Uuid> = p.media.iter().map(|m| m.id).filter(|_| r.chance(50)).collect();
+            if r.chance(20) {
+                media.push(Uuid::new_v4());
+            }
+            match r.below(6) {
+                0 => EditCommand::UpdateMedia { media, patch: MediaPatch { favorite: Some(r.chance(50)), tags: Some(vec![" a ".into(), "b".into(), "a".into()]), note: Some("Notiz".into()), ..Default::default() } },
+                1 => EditCommand::SetMediaFavorite { media, favorite: r.chance(50) },
+                2 => EditCommand::MoveMediaToBin { media, bin: r.chance(80).then(|| r.pick(&bins)).flatten() },
+                3 => {
+                    let smart = r.chance(50).then(|| SmartRules { kinds: vec![SmartKind::Video], tags: vec!["a".into()], usage: SmartUsage::Unused, ..Default::default() });
+                    EditCommand::CreateBin { name: "Ablage".into(), parent: r.chance(60).then(|| r.pick(&bins)).flatten(), smart }
+                }
+                4 => EditCommand::SetSmartRules { bin: r.pick(&bins).unwrap_or_default(), rules: SmartRules { favorites: r.chance(50), ..Default::default() } },
+                _ => EditCommand::RemoveBin { bin: r.pick(&bins).unwrap_or_default() },
+            }
+        }
         24 => {
             let fps = [Rational::new(25, 1), Rational::new(50, 1), Rational::new(24, 1), Rational::new(30000, 1001), Rational::new(60, 1)][r.below(5)];
             EditCommand::UpdateSequenceSettings { sequence, settings: SequenceSettings { fps, ..seq.settings } }

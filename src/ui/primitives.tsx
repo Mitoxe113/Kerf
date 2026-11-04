@@ -582,7 +582,7 @@ export function PanelHeader({ title, children, tabs }: { title?: ReactNode; chil
     >
       {group}
       {tabs ?? (!group && <span className="panel-title min-w-0 truncate">{title}</span>)}
-      <div className="ml-auto flex items-center gap-0.5">{children}</div>
+      <div className="ml-auto flex shrink-0 items-center gap-0.5">{children}</div>
     </div>
   );
 }

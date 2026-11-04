@@ -185,6 +185,26 @@ export interface Bin {
   id: Uuid;
   name: string;
   parent: Uuid | null;
+  /** A smart bin holds nothing itself; it shows every medium matching its rules. */
+  smart?: SmartRules;
+}
+
+export type SmartKind = "video" | "audio" | "image" | "title";
+export type SmartUsage = "any" | "used" | "unused";
+
+/** Rules of a smart bin (kerf_core::model::SmartRules); a medium must meet all. */
+export interface SmartRules {
+  /** Any of these kinds; empty = all. */
+  kinds: SmartKind[];
+  /** Text in name, note or a tag; empty = any. */
+  text: string;
+  /** Tags the medium must all have. */
+  tags: string[];
+  /** Any of these labels; empty = any. */
+  labels: LabelColor[];
+  favorites: boolean;
+  usage: SmartUsage;
+  missing: boolean;
 }
 
 export interface SequenceSettings {
@@ -399,7 +419,7 @@ export interface NewMarker {
   chapter?: boolean;
 }
 
-export type BatchLabel = "sceneCuts" | "removeSilence" | "ducking" | "analysisMarkers" | "relinkMedia";
+export type BatchLabel = "sceneCuts" | "removeSilence" | "ducking" | "analysisMarkers" | "relinkMedia" | "mediaTags";
 
 export interface Sequence {
   id: Uuid;
@@ -524,7 +544,8 @@ export type EditCommand =
   | { type: "setAudioEffects"; sequence: Uuid; items: { clip: Uuid; effects: AudioEffect[] }[] }
   | { type: "moveMediaToBin"; media: Uuid[]; bin: Uuid | null }
   | { type: "relinkMedia"; media: Uuid; path: string }
-  | { type: "createBin"; name: string; parent: Uuid | null }
+  | { type: "createBin"; name: string; parent: Uuid | null; smart?: SmartRules }
+  | { type: "setSmartRules"; bin: Uuid; rules: SmartRules }
   | { type: "renameBin"; bin: Uuid; name: string }
   | { type: "removeBin"; bin: Uuid }
   | { type: "addSequence"; name: string; settings: SequenceSettings }

@@ -53,7 +53,8 @@ Gleicher Prüfstand wie das Kreativ-Ökosystem: implementiert, durch automatisch
 - **Projekt archivieren**: kopiert benutzte (wahlweise alle) Medien und LUTs in einen leeren Zielordner, schreibt ein Projekt mit relativen Pfaden und eine `ARCHIV.txt` (mit nicht mitkopierten Schriften), prüft Größen und liest das Projekt zurück. Kopien laufen über `.part`-Dateien; Abbruch, voller Datenträger und nicht leere Ziele werden gemeldet. Abgeleitete Dateien (Proxys, Wellenformen) werden nicht mitkopiert, sondern am Ziel neu erzeugt.
 - **Portable Projekte**: Projektdateien dürfen relative Medienpfade enthalten (`portablePaths`); alte Projekte bleiben unverändert lesbar.
 - **Cache-Verwaltung**: Größe je Art (Proxys, Miniaturen, Wellenformen, Sonstiges wie Vorschaudateien und Analysen) und davon ungenutzt, freier Speicher; Leeren je Art, wahlweise auch für geöffnete Medien (diese werden neu erzeugt). Nur Ordner mit Kerfs Fingerabdruck-Namen im Cache werden gelöscht, nie Originale oder Projektdateien.
-- **Metadaten**: vollständige `ffprobe`-Ausgabe je Medium mit Farbunterabtastung und Bittiefe.
+- **Metadaten**: vollständige `ffprobe`-Ausgabe je Medium mit Farbunterabtastung und Bittiefe. Darüber bearbeitbar: Name, Favorit, Farbe, Tags und Notiz; bei mehreren Medien Favorit und Farbe für alle sowie Tags für alle hinzufügen oder entfernen (ein Undo-Schritt). Tags höchstens 64 je Medium mit je 60 Zeichen, Notizen höchstens 10.000 Zeichen.
+- **Intelligente Ablagen (Smart Bins)**: zeigen alle Medien des Projekts, die ihre Regeln erfüllen (Typ inklusive Titel, Text in Name, Notiz oder Tag, alle Tags, Farbe, Favorit, in Sequenzen verwendet oder nicht, offline). Sie enthalten selbst nichts; Verschieben in eine solche Ablage lehnt der Kern ab, Import und neue Ablagen landen daneben. Die Suche im Medienbrowser findet jetzt auch Notizen und Tags.
 
 ## Kreativ-Ökosystem (Effekte, Typografie, Stockmedien)
 
@@ -197,16 +198,16 @@ Dieser Abschnitt hat einen anderen Prüfstand als „Fertig und verifiziert“: 
 
 | Bereich | Anzahl | Was |
 | --- | --- | --- |
-| `kerf-core` Unit | 85 | Zeit/Timecode, alle Edit-Befehle (inkl. `addEffects`, `addMarkers`, `batch`), Effekt-Keyframes und Freiform-Masken, Ducking-Kurve, Archiv, Zeitabbildung (Rampen, Rückwärts), Übergänge und Masken, verschachtelte Sequenzen, Multicam, Untertitel, Textstil und Animation, Keyframes inkl. Bezier, Undo, Projektdatei inkl. unbekannter Felder und unterbrochenem Speichern |
+| `kerf-core` Unit | 87 | Zeit/Timecode, alle Edit-Befehle (inkl. `addEffects`, `addMarkers`, `batch`), intelligente Ablagen und Reparatur kaputter Ablage-Verweise beim Laden, Effekt-Keyframes und Freiform-Masken, Ducking-Kurve, Archiv, Zeitabbildung (Rampen, Rückwärts), Übergänge und Masken, verschachtelte Sequenzen, Multicam, Untertitel, Textstil und Animation, Keyframes inkl. Bezier, Undo, Projektdatei inkl. unbekannter Felder und unterbrochenem Speichern |
 | `kerf-core` Parität | 1 | Farbmatrix gegen gemeinsame Fixture |
-| `kerf-core` Fuzz | 1 | Zufällige Befehlsfolgen über `History` (300 Seeds, `KERF_FUZZ_SEEDS` für mehr; 40 000 bestanden): nach jedem Schritt sortierte Clips, jedes gezeigte Bild im Medium, gültige Geschwindigkeiten, Blenden, Keyframes, Übergänge, Marker und Untertitel, exaktes Undo/Redo, unverändertes Projekt nach Fehlern, verlustfreies JSON |
+| `kerf-core` Fuzz | 1 | Zufällige Befehlsfolgen über `History` (300 Seeds, `KERF_FUZZ_SEEDS` für mehr; 40 000 bestanden, nach dem Hinzufügen der Medien- und Ablagebefehle 5 000): nach jedem Schritt sortierte Clips, gültige Ablage-Verweise, jedes gezeigte Bild im Medium, gültige Geschwindigkeiten, Blenden, Keyframes, Übergänge, Marker und Untertitel, exaktes Undo/Redo, unverändertes Projekt nach Fehlern, verlustfreies JSON |
 | `kerf-media` Unit | 38 | Probe-Parsing, FFmpeg-Versionserkennung, Filtergraph, Rauschunterdrückung (Filter, Cache-Name, Profil aus dem Protokoll), Rasterung der Freiform-Maske (Kreuzungsregel, weiche Kante, Verschiebung, Kante genau auf einem Pixel), CBR/Mono/Letterbox, EBU-R128-Parser, Teilgrenzen und Plan des segmentierten Exports, Titel-Folgen, Kapitel, Szenen/Stille/Beats/Momente an synthetischen Signalen |
 | `kerf-media` Erkennung | 1 | Echtes FFmpeg: Schnitte bei 2 s und 4 s, Bereichsanalyse, Stille 1,5–3 s, Abbruch |
 | `kerf-media` Pipeline | 19 | Echtes FFmpeg: Schnitt → Render → Pixelprüfung, Abbruch, Keyframes, animierte Farbe, Effekt-Stapel, animierte Effektparameter und Freiform-Masken je Bild, Lautheit, Untertitel, Übergänge inkl. Masken, Schieben und Hereingleiten, Mischmodi, animierte Titel, Audio-Effekte und Loudnorm, Rauschunterdrückung mit gelerntem Profil, Rückwärts und Rampen, verschachtelte Sequenzen, Multicam-Synchronisation, segmentiert = ein Stück (inkl. Kapitel) |
 | `kerf-library` | 13 | Migrationen, Presets (Prüfung, Export/Import), Favoriten, Recents, Titelvorlagen, Assets und Sammlungen, Schriften (Import, Ablehnung, Entfernen) |
 | `kerf-assets` | 10 | Anbieter-Parser, Lizenzzuordnung, URL-Regeln, Inhaltsprüfung, Berichte; Mock-Server: Suche, Schlüssel, Download, abgelehnte Inhalte und Weiterleitungen, Abbruch, 429 |
 | App-Crate | 7 | Versionen, Projektdatei-Argument, Endung beim Speichern, Untertitel-Kodierung, Datumsformat, Relink-Suche, Wiederherstellung nach Absturz |
-| Frontend (Vitest) | 122 | Timecode, Timeline-Constraints, Lautstärke-Gummiband, Lernbereich des Rauschprofils, Keyframes/Easing/Bezier, Zeitabbildung, Effekte und Kurven, Effekt-Keyframes, Rasterung der Freiform-Maske mit den Werten der Rust-Tests, Audio-DSP gegen FFmpeg-Fixtures, Textsatz und Textanimation, Deltas, Docking, unscharfe Suche, Tastaturprofile, Assistenten-Befehle (Bereiche entfernen, Marker, Szenen), Projektprüfung, Beenden mit laufenden Aufträgen, unbekannte Projektfelder, Codec-Prüfung der Vorschau |
+| Frontend (Vitest) | 128 | Timecode, Regeln der intelligenten Ablagen, Timeline-Constraints, Lautstärke-Gummiband, Lernbereich des Rauschprofils, Keyframes/Easing/Bezier, Zeitabbildung, Effekte und Kurven, Effekt-Keyframes, Rasterung der Freiform-Maske mit den Werten der Rust-Tests, Audio-DSP gegen FFmpeg-Fixtures, Textsatz und Textanimation, Deltas, Docking, unscharfe Suche, Tastaturprofile, Assistenten-Befehle (Bereiche entfernen, Marker, Szenen), Projektprüfung, Beenden mit laufenden Aufträgen, unbekannte Projektfelder, Codec-Prüfung der Vorschau |
 
 In dieser Arbeitsumgebung lief die Pipeline mit FFmpeg 6.1 über einen Adapter für `-/filter_complex`: 18 von 19 bestanden, `reverse_and_speed_ramps_render` scheitert nur dort (Rampen-Frame 116 statt 115). Mit aktuellem FFmpeg in der CI unter Windows bestand dieser Test in jedem Lauf, zuletzt für Commit `9867ea9` mit damals 17 Pipeline-Tests. Zusätzlich gibt es einen Zeitmesstest für große Projekte (`cargo test -p kerf-core --release --test large_project -- --ignored --nocapture`).
 
@@ -232,7 +233,7 @@ Alle Tests laufen in der CI unter Windows.
 
 ## Noch nicht umgesetzt
 
-- Smart Bins, Metadaten-Editor, überwachte Ordner, wählbarer Cache-Ordner und automatisches Aufräumen
+- Überwachte Ordner, wählbarer Cache-Ordner und automatisches Aufräumen
 - Transkription, automatische Untertitel, Übersetzung, Smart Reframe, Tracking, KI-Masken (kein lokales Modell eingebunden)
 - Einstellungsebenen, Compound Clips (verschachtelte Sequenzen gibt es), Spurgruppen
 - Stapel-Export mehrerer Exportprofile in einem Schritt, AV1/DNxHR (die Render-Warteschlange gibt es)

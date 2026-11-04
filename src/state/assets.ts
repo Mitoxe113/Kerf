@@ -7,6 +7,7 @@ import { create } from "zustand";
 import { api, events } from "../lib/ipc";
 import type { AssetQuery, AssetRecord, DownloadJob, MediaAsset, ProviderId, ProviderInfo, RemoteAsset, SearchKind, Uuid } from "../lib/types";
 import { useEditor } from "./editor";
+import { holdingBin } from "../lib/smart";
 import { reportError, useProject } from "./project";
 import { toast } from "./toasts";
 
@@ -178,7 +179,7 @@ export async function addToProject(a: AssetRecord): Promise<Uuid | null> {
   const existing = mediaWithPath(a.filePath);
   if (existing) return existing.id;
   try {
-    const d = await api.importMedia([a.filePath], useEditor.getState().currentBin);
+    const d = await api.importMedia([a.filePath], holdingBin(useProject.getState().project?.bins ?? [], useEditor.getState().currentBin));
     useProject.getState().applyDelta(d);
     const id = d.outcome.created[0] ?? mediaWithPath(a.filePath)?.id ?? null;
     if (id) useEditor.getState().set({ mediaSelection: [id] });

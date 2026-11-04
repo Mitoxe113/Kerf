@@ -2,7 +2,7 @@
 // resize handles; sizes persist per workspace. A panel dragged by its tab or
 // header docks onto another area: as a tab (middle, tab row) or beside it.
 
-import { Component, Fragment, useRef, type ReactNode } from "react";
+import { Component, Fragment, useEffect, useRef, type ReactNode } from "react";
 import { movePanel, zoneAt, type DockZone } from "../state/dock";
 import { currentLayout, isBranch, leafTabs, PANEL_LABELS, useEditor, type LayoutChild, type LayoutNode, type PanelGroup, type PanelId, type WorkspaceLayout } from "../state/editor";
 import { Button, cx, PanelDock, PanelGroupTabs } from "../ui/primitives";
@@ -126,19 +126,39 @@ function Leaf({ id, dockable, group, hidden, panels, onSelect }: { id: string; d
   const shown = all.filter((p) => !hidden.includes(p));
   const wanted = typeof group === "string" ? group : all[group.active];
   const active = shown.includes(wanted) ? wanted : shown[0];
-  // The tab strip replaces the panel's own title in its header row.
+  const stripRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = stripRef.current;
+    const tab = el?.querySelector<HTMLElement>("[aria-selected=true]");
+    if (!el || !tab) return;
+    const [t, s] = [tab.getBoundingClientRect(), el.getBoundingClientRect()];
+    if (t.left < s.left) el.scrollLeft -= s.left - t.left;
+    else if (t.right > s.right) el.scrollLeft += t.right - s.right;
+  }, [active]);
+  // The tab strip replaces the panel's own title in its header row. It
+  // scrolls sideways when the area is narrow, so the panel's own controls
+  // at the end of the row stay visible.
   const strip =
     shown.length > 1 ? (
-      <div className="flex gap-3 self-stretch">
+      <div
+        role="tablist"
+        className="flex min-w-0 gap-3 self-stretch overflow-x-auto [scrollbar-width:none]"
+        onWheel={(e) => {
+          if (e.deltaY && !e.deltaX) e.currentTarget.scrollLeft += e.deltaY;
+        }}
+        ref={stripRef}
+      >
         {shown.map((p) => (
           <button
             key={p}
+            role="tab"
+            aria-selected={p === active}
             onClick={() => onSelect(all.indexOf(p))}
             onPointerDown={(e) => {
               e.stopPropagation();
               if (dockable) startDock(e, p);
             }}
-            className={cx("panel-title -mb-px border-b-2 pt-0.5", p === active ? "border-signal text-fg" : "border-transparent hover:text-fg-2")}
+            className={cx("panel-title -mb-px shrink-0 whitespace-nowrap border-b-2 pt-0.5", p === active ? "border-signal text-fg" : "border-transparent hover:text-fg-2")}
           >
             {PANEL_LABELS[p]}
           </button>

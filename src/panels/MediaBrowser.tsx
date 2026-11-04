@@ -1,10 +1,11 @@
 import { useShallow } from "zustand/react/shallow";
-import { AlertTriangle, ChevronRight, Film, Folder, FolderPlus, Image as ImageIcon, LayoutGrid, List, Loader2, Music, Plus, Search, Star } from "lucide-react";
+import { AlertTriangle, ChevronRight, Film, Folder, FolderPlus, FolderSearch, Image as ImageIcon, LayoutGrid, List, Loader2, Music, Plus, Search, Star } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { placeMedia } from "../actions/editing";
 import { importMedia, relinkMedia } from "../actions/project";
 import { api } from "../lib/ipc";
 import { codecLabel, fileUrl, formatBytes } from "../lib/media";
+import { describeRules, holdingBin, smartMatch, textMatch, usedMedia } from "../lib/smart";
 import { formatDuration, formatRate } from "../lib/time";
 import type { Bin, MediaAsset, Uuid } from "../lib/types";
 import { useEditor } from "../state/editor";
@@ -74,6 +75,8 @@ export function MediaBrowser() {
 
   const bins = project?.bins ?? [];
   const childBins = bins.filter((b) => b.parent === ed.currentBin);
+  const smart = bins.find((b) => b.id === ed.currentBin)?.smart;
+  const used = useMemo(() => (project && smart?.usage !== "any" ? usedMedia(project) : new Set<Uuid>()), [project, smart?.usage]);
   const crumbs = useMemo(() => {
     const out: Bin[] = [];
     let id = ed.currentBin;
@@ -87,9 +90,10 @@ export function MediaBrowser() {
   }, [bins, ed.currentBin]);
 
   const items = useMemo(() => {
-    let list = (project?.media ?? []).filter((m) => (ed.mediaSearch ? true : m.bin === ed.currentBin));
+    // A smart bin shows every matching medium; the search spans the whole project.
+    let list = (project?.media ?? []).filter((m) => (smart ? smartMatch(smart, m, used) : ed.mediaSearch ? true : m.bin === ed.currentBin));
     const q = ed.mediaSearch.trim().toLowerCase();
-    if (q) list = list.filter((m) => m.name.toLowerCase().includes(q));
+    if (q) list = list.filter((m) => textMatch(m, q));
     if (ed.mediaFilter === "favorites") list = list.filter((m) => m.favorite);
     else if (ed.mediaFilter !== "all") list = list.filter((m) => m.kind === ed.mediaFilter);
     const cmp: Record<string, (a: MediaAsset, b: MediaAsset) => number> = {
@@ -99,7 +103,13 @@ export function MediaBrowser() {
       kind: (a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name, "de", { numeric: true }),
     };
     return [...list].sort(cmp[ed.mediaSort]);
-  }, [project?.media, ed.currentBin, ed.mediaSearch, ed.mediaFilter, ed.mediaSort]);
+  }, [project?.media, smart, used, ed.currentBin, ed.mediaSearch, ed.mediaFilter, ed.mediaSort]);
+
+  // The open bin can vanish (undo, delete): fall back to the project root.
+  const binGone = !!ed.currentBin && !!project && !bins.some((b) => b.id === ed.currentBin);
+  useEffect(() => {
+    if (binGone) ed.set({ currentBin: null });
+  }, [binGone]);
 
   // Media can be dropped onto bins (and onto the browser to move to the current bin).
   useEffect(() => {
@@ -160,10 +170,17 @@ export function MediaBrowser() {
       { label: a.favorite ? "Favorit entfernen" : "Als Favorit markieren", onSelect: () => void edit({ type: "setMediaFavorite", media: ids, favorite: !a.favorite }) },
       { label: "Umbenennen", shortcut: "F2", onSelect: () => setRenaming(a.id) },
       {
+        label: "Metadaten bearbeiten …",
+        onSelect: () => {
+          useEditor.getState().set({ projectMeta: true });
+          useEditor.getState().focusPanel("project");
+        },
+      },
+      {
         label: "In Ablage verschieben",
         submenu: [
           { label: "Projektstamm", onSelect: () => void edit({ type: "moveMediaToBin", media: ids, bin: null }) },
-          ...bins.map((b) => ({ label: b.name, onSelect: () => void edit({ type: "moveMediaToBin", media: ids, bin: b.id }) })),
+          ...bins.filter((b) => !b.smart).map((b) => ({ label: b.name, onSelect: () => void edit({ type: "moveMediaToBin", media: ids, bin: b.id }) })),
         ],
       },
       { separator: true },
@@ -178,15 +195,20 @@ export function MediaBrowser() {
 
   const binMenu = (b: Bin): MenuItem[] => [
     { label: "Öffnen", onSelect: () => ed.set({ currentBin: b.id }) },
+    ...(b.smart ? [{ label: "Regeln bearbeiten …", onSelect: () => ed.set({ dialog: { kind: "smartBin", bin: b.id, parent: b.parent } }) }] : []),
     { label: "Umbenennen", onSelect: () => setRenaming(b.id) },
     { separator: true },
-    { label: "Ablage löschen (Inhalt bleibt erhalten)", danger: true, onSelect: () => void edit({ type: "removeBin", bin: b.id }) },
+    b.smart
+      ? { label: "Intelligente Ablage löschen (Medien bleiben)", danger: true, onSelect: () => void edit({ type: "removeBin", bin: b.id }) }
+      : { label: "Ablage löschen (Inhalt bleibt erhalten)", danger: true, onSelect: () => void edit({ type: "removeBin", bin: b.id }) },
   ];
 
+  // A smart bin holds nothing: new bins go next to it.
   const newBin = async () => {
-    const d = await edit({ type: "createBin", name: `Ablage ${bins.length + 1}`, parent: ed.currentBin });
+    const d = await edit({ type: "createBin", name: `Ablage ${bins.length + 1}`, parent: holdingBin(bins, ed.currentBin) });
     if (d?.outcome.created[0]) setRenaming(d.outcome.created[0]);
   };
+  const newSmartBin = () => ed.set({ dialog: { kind: "smartBin", bin: null, parent: holdingBin(bins, ed.currentBin) } });
 
   const stopRename = () => setRenaming(null);
 
@@ -203,7 +225,7 @@ export function MediaBrowser() {
         tabs={
           // In a tab group the tab already says "Medien"; the path only matters inside a bin.
           (!grouped || crumbs.length > 0) && (
-          <div className={cx("flex min-w-0 items-center gap-1 text-xs", grouped && "border-l border-line pl-2")}>
+          <div className={cx("flex min-w-0 items-center gap-1 text-xs", grouped && "max-w-[55%] shrink-0 border-l border-line pl-2")}>
             <button data-bin="root" className={cx("panel-title rounded-xs px-1 hover:text-fg-2", dropBin === "root" && "bg-signal-soft text-signal")} onClick={() => ed.set({ currentBin: null })}>
               Medien
             </button>
@@ -220,6 +242,7 @@ export function MediaBrowser() {
         }
       >
         <IconButton icon={<FolderPlus size={14} />} label="Neue Ablage" onClick={() => void newBin()} />
+        <IconButton icon={<FolderSearch size={14} />} label="Neue intelligente Ablage" onClick={newSmartBin} />
         <IconButton icon={<LayoutGrid size={14} />} label="Rasteransicht" active={ed.mediaView === "grid"} onClick={() => ed.set({ mediaView: "grid" })} />
         <IconButton icon={<List size={14} />} label="Listenansicht" active={ed.mediaView === "list"} onClick={() => ed.set({ mediaView: "list" })} />
         <IconButton icon={<Plus size={15} />} label="Medien importieren" shortcut="Strg+I" onClick={() => void importMedia()} />
@@ -273,6 +296,8 @@ export function MediaBrowser() {
             { label: "Medien importieren …", shortcut: "Strg+I", onSelect: () => void importMedia() },
             { label: "Ordner importieren …", onSelect: () => void importMedia(undefined, true) },
             { label: "Neue Ablage", onSelect: () => void newBin() },
+            { label: "Neue intelligente Ablage …", onSelect: newSmartBin },
+            ...(smart ? [{ label: "Regeln bearbeiten …", onSelect: () => ed.set({ dialog: { kind: "smartBin" as const, bin: ed.currentBin, parent: null } }) }] : []),
           ]);
         }}
       >
@@ -291,7 +316,8 @@ export function MediaBrowser() {
               childBins.map((b) => (
                 <div
                   key={b.id}
-                  data-bin={b.id}
+                  data-bin={b.smart ? undefined : b.id}
+                  title={b.smart ? `Intelligente Ablage: ${describeRules(b.smart)}` : undefined}
                   onDoubleClick={() => ed.set({ currentBin: b.id })}
                   onContextMenu={(e) => openContextMenu(e, binMenu(b))}
                   className={cx(
@@ -300,7 +326,7 @@ export function MediaBrowser() {
                   )}
                 >
                   <div className="flex aspect-video items-center justify-center rounded-sm bg-ground text-fg-3">
-                    <Folder size={28} strokeWidth={1.2} />
+                    {b.smart ? <FolderSearch size={28} strokeWidth={1.2} className="text-signal/80" /> : <Folder size={28} strokeWidth={1.2} />}
                   </div>
                   <div className="truncate px-0.5 text-xs text-fg-2">
                     {renaming === b.id ? <InlineRename id={b.id} initial={b.name} isBin onDone={stopRename} /> : b.name}
@@ -345,10 +371,10 @@ export function MediaBrowser() {
             <tbody>
               {!ed.mediaSearch &&
                 childBins.map((b) => (
-                  <tr key={b.id} data-bin={b.id} className={cx("h-7 text-fg-2 hover:bg-hover", dropBin === b.id && "bg-signal-soft")} onDoubleClick={() => ed.set({ currentBin: b.id })} onContextMenu={(e) => openContextMenu(e, binMenu(b))}>
+                  <tr key={b.id} data-bin={b.smart ? undefined : b.id} title={b.smart ? `Intelligente Ablage: ${describeRules(b.smart)}` : undefined} className={cx("h-7 text-fg-2 hover:bg-hover", dropBin === b.id && "bg-signal-soft")} onDoubleClick={() => ed.set({ currentBin: b.id })} onContextMenu={(e) => openContextMenu(e, binMenu(b))}>
                     <td className="truncate pl-1" colSpan={7}>
                       <span className="inline-flex items-center gap-2">
-                        <Folder size={13} className="text-fg-3" />
+                        {b.smart ? <FolderSearch size={13} className="text-signal/80" /> : <Folder size={13} className="text-fg-3" />}
                         {renaming === b.id ? <InlineRename id={b.id} initial={b.name} isBin onDone={stopRename} /> : b.name}
                       </span>
                     </td>
@@ -400,6 +426,7 @@ export function MediaBrowser() {
         <div className="flex h-6 shrink-0 items-center border-t border-line px-2.5 text-[10.5px] text-fg-4">
           {items.length} {items.length === 1 ? "Element" : "Elemente"}
           {ed.mediaSelection.length > 0 && ` · ${ed.mediaSelection.length} ausgewählt`}
+          {smart && <span className="ml-auto truncate pl-2" title={describeRules(smart)}>Regeln: {describeRules(smart)}</span>}
         </div>
       )}
     </div>

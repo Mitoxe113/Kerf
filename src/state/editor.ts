@@ -135,6 +135,7 @@ export type Dialog =
   | { kind: "normalize"; clips: Uuid[] }
   | { kind: "trackEffects"; sequence: Uuid; track: Uuid }
   | { kind: "multicam"; media: Uuid[] }
+  | { kind: "smartBin"; bin: Uuid | null; parent: Uuid | null }
   | { kind: "curve"; sequence: Uuid; clip: Uuid; params: KeyParam[]; at: number }
   | { kind: "palette"; query: string }
   | { kind: "preferences" }
@@ -191,6 +192,8 @@ interface EditorStore {
   focusedPanel: PanelId | null;
   /** Asks the media browser to start inline renaming of this item. */
   renameMedia: Uuid | null;
+  /** Asks the project panel to show its metadata tab. */
+  projectMeta: boolean;
   /** Seconds between recovery snapshots. */
   autosaveSeconds: number;
   /** Saved versions kept per project (0 = none). */
@@ -275,6 +278,7 @@ export const useEditor = create<EditorStore>((set, get) => ({
   trackResize: null,
   focusedPanel: null,
   renameMedia: null,
+  projectMeta: false,
   autosaveSeconds: 30,
   keepVersions: 20,
   checkUpdates: true,

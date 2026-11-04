@@ -10,6 +10,7 @@ const EDIT_LABELS: Record<string, string> = {
   createBin: "Ablage erstellen",
   renameBin: "Ablage umbenennen",
   removeBin: "Ablage löschen",
+  setSmartRules: "Regeln der Ablage ändern",
   addSequence: "Neue Sequenz",
   removeSequence: "Sequenz löschen",
   renameSequence: "Sequenz umbenennen",
@@ -59,6 +60,7 @@ const EDIT_LABELS: Record<string, string> = {
   removeSilence: "Pausen entfernen",
   ducking: "Ducking",
   analysisMarkers: "Analyse-Marker",
+  mediaTags: "Tags ändern",
 };
 
 export const editLabel = (key: string | null | undefined) => (key ? EDIT_LABELS[key] ?? key : "");

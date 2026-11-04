@@ -161,6 +161,41 @@ impl Project {
             }
             seq.markers.sort_by_key(|m| m.frame);
         }
+        self.normalize_bins();
+    }
+
+    /// Drops bin references that a damaged file could hold: media in a
+    /// missing or smart bin, bins under a missing or smart bin, parent loops.
+    fn normalize_bins(&mut self) {
+        let mut seen = HashSet::new();
+        self.bins.retain(|b| seen.insert(b.id));
+        let holds = |bins: &[Bin], id: Uuid| bins.iter().any(|b| b.id == id && b.smart.is_none());
+        for i in 0..self.bins.len() {
+            if let Some(p) = self.bins[i].parent {
+                if p == self.bins[i].id || !holds(&self.bins, p) {
+                    self.bins[i].parent = None;
+                }
+            }
+        }
+        for i in 0..self.bins.len() {
+            let mut at = self.bins[i].parent;
+            let mut steps = 0;
+            while let Some(p) = at {
+                steps += 1;
+                if p == self.bins[i].id || steps > self.bins.len() {
+                    self.bins[i].parent = None;
+                    break;
+                }
+                at = self.bins.iter().find(|b| b.id == p).and_then(|b| b.parent);
+            }
+        }
+        for m in &mut self.media {
+            if let Some(b) = m.bin {
+                if !holds(&self.bins, b) {
+                    m.bin = None;
+                }
+            }
+        }
     }
 }
 
@@ -331,6 +366,80 @@ pub struct Bin {
     pub id: Uuid,
     pub name: String,
     pub parent: Option<Uuid>,
+    /// A smart bin holds no media and no bins; it shows every medium that
+    /// matches its rules.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smart: Option<SmartRules>,
+}
+
+/// Kind of medium a smart bin can ask for (titles are images with a title).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SmartKind {
+    Video,
+    Audio,
+    Image,
+    Title,
+}
+
+/// Whether a medium is placed in any sequence.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SmartUsage {
+    #[default]
+    Any,
+    Used,
+    Unused,
+}
+
+/// Rules of a smart bin; a medium must meet all of them. Matching runs in
+/// the media browser (`src/lib/smart.ts`).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SmartRules {
+    /// Any of these kinds; empty = all.
+    pub kinds: Vec<SmartKind>,
+    /// Text in the name, the note or a tag (case does not matter); empty = any.
+    pub text: String,
+    /// Tags the medium must all have (case does not matter).
+    pub tags: Vec<String>,
+    /// Any of these labels; empty = any.
+    pub labels: Vec<LabelColor>,
+    pub favorites: bool,
+    pub usage: SmartUsage,
+    /// Only media whose file is missing.
+    pub missing: bool,
+}
+
+/// Longest text and most tags of smart rules.
+pub const SMART_TEXT_MAX: usize = 200;
+pub const SMART_TAGS_MAX: usize = 32;
+
+impl SmartRules {
+    /// Trimmed, without duplicates (tags compared without case), within the limits.
+    pub fn sanitized(&self) -> Self {
+        let mut kinds = Vec::new();
+        for k in &self.kinds {
+            if !kinds.contains(k) {
+                kinds.push(*k);
+            }
+        }
+        let mut labels = Vec::new();
+        for l in &self.labels {
+            if !labels.contains(l) {
+                labels.push(*l);
+            }
+        }
+        let mut tags: Vec<String> = Vec::new();
+        for t in &self.tags {
+            let t = t.trim();
+            if !t.is_empty() && !tags.iter().any(|x| x.to_lowercase() == t.to_lowercase()) && tags.len() < SMART_TAGS_MAX {
+                tags.push(t.to_string());
+            }
+        }
+        let text: String = self.text.trim().chars().take(SMART_TEXT_MAX).collect();
+        Self { kinds, text, tags, labels, favorites: self.favorites, usage: self.usage, missing: self.missing }
+    }
 }
 
 // ---------------------------------------------------------------------------

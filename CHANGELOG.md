@@ -11,6 +11,8 @@ Format nach [Keep a Changelog](https://keepachangelog.com/de/1.1.0/), Versionen 
 - Rauschunterdrückung für Audioclips (FFmpeg `afftdn`) mit Stärke, Rauschpegel, Nachführen und einem aus In/Out gelernten Rauschprofil. Vorschau und Export lesen denselben entrauschten Ton aus dem Cache.
 - Keyframes für Effektparameter: Radius des Gaußschen Weichzeichners, Stärke der Vignette und Parameter von 11 Katalog-Effekten (u. a. Strudel, Welle, Luma-Key, Formmaske), im Inspector mit Stoppuhr und Rauten.
 - Freiform-Maske (3 bis 32 Punkte) mit Punkte-Editor im Programmmonitor, weicher Kante, Umkehren und animierbarem Versatz; Vorschau und Export rastern dieselbe Maske.
+- Intelligente Ablagen (Smart Bins): zeigen alle Medien, die Regeln zu Typ, Text, Tags, Farbe, Favorit, Verwendung und Offline-Status erfüllen.
+- Metadaten-Editor im Panel *Projekt*: Name, Favorit, Farbe, Tags und Notiz; für mehrere Medien Favorit, Farbe und Tags auf einmal. Die Suche im Medienbrowser findet auch Notizen und Tags.
 
 ### Behoben
 - Schnitt: Teilen und Slip runden die Quellposition nicht mehr auf; ein Teil konnte sonst ein Bild über das Clipende oder das Medium hinausreichen.
@@ -22,6 +24,10 @@ Format nach [Keep a Changelog](https://keepachangelog.com/de/1.1.0/), Versionen 
 - Export: LUT-Pfade mit Apostroph brachen den Filtergraphen ab.
 - Export: Eine Zieldatei, die im Projekt als Medium verwendet wird, wird abgelehnt, statt das Original zu ersetzen.
 - Speichern unter „Film v1.2“ ergab „Film v1.kerf“; die Endung wird jetzt angehängt.
+- Favorit setzen und Medien-Metadaten ändern veränderten bei einer Liste mit einem unbekannten Medium die Medien davor, ohne Undo-Schritt; jetzt wird zuerst die ganze Liste geprüft.
+- Import oder Titel in eine Ablage, die es nicht mehr gibt (z. B. nach Rückgängig), machten die Medien unsichtbar; sie landen jetzt im Projektstamm. Beim Laden repariert Kerf Verweise auf fehlende Ablagen und Ablage-Schleifen.
+- Medienbrowser: Verschwindet die geöffnete Ablage, springt die Ansicht zum Projektstamm statt leer zu bleiben.
+- In schmalen Bereichen mit vielen Tabs schoben die Tabs die Knöpfe des Panels (z. B. Import, Neue Ablage) und den Ablagepfad aus dem sichtbaren Bereich; die Tab-Leiste scrollt jetzt.
 
 - Doku: Der Effekt-Katalog hat 39 Effekte (nicht 38); die Paritätsangabe nennt jetzt die vier Effekte mit größeren Ausreißern.
 

@@ -1,7 +1,8 @@
 // Project management: health check, relinking moved media, archiving the
-// project with its media, Kerf's cache of derived files, and technical
-// metadata of a media file. Nothing here changes the project without an
-// explicit click; relinking is an undoable edit.
+// project with its media, Kerf's cache of derived files, and the metadata of
+// media (editable project fields plus the technical data of the file).
+// Nothing here changes the project without an explicit action; relinking and
+// metadata changes are undoable edits.
 
 import { open } from "@tauri-apps/plugin-dialog";
 import { AlertCircle, AlertTriangle, FolderSearch, Info, Loader2, RefreshCw, X } from "lucide-react";
@@ -16,6 +17,7 @@ import { useEditor } from "../state/editor";
 import { fontAvailable, useFonts } from "../state/fonts";
 import { edit, reportError, useProject } from "../state/project";
 import { toast } from "../state/toasts";
+import { MediaFields } from "./MediaFields";
 import { Button, cx, PanelHeader, Progress, Segmented, Toggle } from "../ui/primitives";
 
 type Tab = "check" | "relink" | "archive" | "cache" | "meta";
@@ -342,8 +344,10 @@ function MetaRow({ k, v }: { k: string; v: React.ReactNode }) {
 type Probe = { format?: { format_long_name?: string; bit_rate?: string; tags?: Record<string, string> }; streams?: { codec_type?: string; codec_long_name?: string; tags?: Record<string, string>; [k: string]: unknown }[] };
 
 function MetaView() {
-  const sel = useEditor((s) => s.mediaSelection[0]);
-  const asset: MediaAsset | undefined = useProject((s) => (sel ? s.mediaById.get(sel) : undefined));
+  const selection = useEditor((s) => s.mediaSelection);
+  const mediaById = useProject((s) => s.mediaById);
+  const selected = useMemo(() => selection.map((id) => mediaById.get(id)).filter((m): m is MediaAsset => !!m), [selection, mediaById]);
+  const asset: MediaAsset | undefined = selected[0];
   const [raw, setRaw] = useState<Probe | null>(null);
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => {
@@ -360,6 +364,8 @@ function MetaView() {
   const timecode = Object.entries(tags).find(([k]) => k.toLowerCase().endsWith("timecode"))?.[1];
   return (
     <div className="min-h-0 flex-1 overflow-auto">
+      <MediaFields media={selected} />
+      {selected.length > 1 && <div className="px-2 pb-1 pt-2 text-[11px] uppercase tracking-wide text-fg-4">Technische Angaben: {asset.name}</div>}
       <MetaRow k="Datei" v={asset.path} />
       <MetaRow k="Container" v={raw?.format?.format_long_name ?? i?.container} />
       <MetaRow k="Dauer" v={i ? `${i.duration.toFixed(3)} s` : null} />
@@ -400,6 +406,12 @@ function MetaView() {
 
 export function ProjectPanel() {
   const [tab, setTab] = useState<Tab>("check");
+  const metaRequest = useEditor((s) => s.projectMeta);
+  useEffect(() => {
+    if (!metaRequest) return;
+    setTab("meta");
+    useEditor.getState().set({ projectMeta: false });
+  }, [metaRequest]);
   const missing = useProject((s) => s.project?.media.filter((m) => !m.title && m.status.state === "missing").length ?? 0);
   return (
     <div className="flex h-full min-h-0 flex-col">
