@@ -17,12 +17,13 @@ import {
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { gotoEdit, setIn, setOut } from "../actions/editing";
 import { usePlayhead, usePlaying, useRate } from "../engine/hooks";
+import { effectAt, MAX_MASK_POINTS } from "../engine/effects";
 import { corners, place, pointInPlacement, type Placement } from "../engine/math";
 import { clipAt, engine, type PlaybackStats } from "../engine/playback";
 import { animate, isAnimated, keysOf, playheadKeyPos, upsertKey } from "../lib/keys";
 import { displaySize } from "../lib/media";
 import { formatTimecode, parseTimecode } from "../lib/time";
-import type { Clip, Sequence, Transform } from "../lib/types";
+import type { Clip, Effect, EffectKind, Sequence, Transform } from "../lib/types";
 import { cancelPick, NO_GUIDES, useEditor, type Guides } from "../state/editor";
 import { edit, sourceAsset, useActiveSequence, useProject } from "../state/project";
 import { toggleOutputWindow } from "../shell/OutputWindow";
@@ -156,6 +157,93 @@ function Gizmo({ clip, seq, view, frame }: { clip: Clip; seq: Sequence; view: { 
   );
 }
 
+type Poly = Effect & Extract<EffectKind, { type: "polygonMask" }>;
+
+/**
+ * Point editor of a freeform mask of the selected clip: the outline (moved by
+ * the mask's offset at the playhead) mapped through the clip's placement.
+ * Drag a point; double-click an edge to insert one; right-click a point to
+ * remove it.
+ */
+function MaskGizmo({ clip, seq, view, frame, effect }: { clip: Clip; seq: Sequence; view: { x: number; y: number; s: number }; frame: number; effect: Poly }) {
+  const media = useProject((s) => s.mediaById.get(clip.mediaId)) ?? sourceAsset(clip.mediaId);
+  const [live, setLive] = useState<[number, number][] | null>(null);
+  const dims = engine.sourceSize(clip.id) ?? displaySize(media);
+  useEffect(() => setLive(null), [effect.points]);
+  if (!dims) return null;
+  const p = place(animate(clip, frame).transform, dims[0], dims[1], seq.settings.width, seq.settings.height);
+  if (p.width <= 0 || p.height <= 0) return null;
+  const off = effectAt(clip, effect, frame - clip.start) as Poly;
+  const [cos, sin] = [Math.cos(p.theta), Math.sin(p.theta)];
+  const toScreen = ([u, v]: [number, number]): [number, number] => {
+    const dx = (u + off.x - 0.5) * p.width;
+    const dy = (v + off.y - 0.5) * p.height;
+    return [view.x + (p.cx + dx * cos - dy * sin) * view.s, view.y + (p.cy + dx * sin + dy * cos) * view.s];
+  };
+  const toUv = (ev: { clientX: number; clientY: number }, el: Element): [number, number] => {
+    const r = el.closest("[data-monitor]")!.getBoundingClientRect();
+    const x = (ev.clientX - r.left - view.x) / view.s - p.cx;
+    const y = (ev.clientY - r.top - view.y) / view.s - p.cy;
+    const fit = (v: number) => Math.min(1, Math.max(0, Math.round(v * 1e4) / 1e4));
+    return [fit((x * cos + y * sin) / p.width + 0.5 - off.x), fit((-x * sin + y * cos) / p.height + 0.5 - off.y)];
+  };
+  const pts = live ?? effect.points;
+  const scr = pts.map(toScreen);
+  const withPoints = (points: [number, number][]) => (clip.effects ?? []).map((x) => (x.id === effect.id ? ({ ...x, points } as Effect) : x));
+  const commit = (points: [number, number][]) =>
+    void (async () => {
+      await edit({ type: "setEffects", sequence: seq.id, clips: [clip.id], effects: withPoints(points) });
+      setLive(null);
+      engine.setOverride(clip.id, null);
+    })();
+  const drag = (e: React.PointerEvent, i: number) => {
+    e.stopPropagation();
+    if (e.button !== 0) return;
+    const el = e.currentTarget;
+    let next = pts;
+    const move = (ev: PointerEvent) => {
+      next = pts.map((q, k) => (k === i ? toUv(ev, el) : q));
+      setLive(next);
+      engine.setOverride(clip.id, { effects: withPoints(next) });
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      if (next !== pts) commit(next);
+      else engine.setOverride(clip.id, null);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+  const remove = (e: React.MouseEvent, i: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (pts.length > 3) commit(pts.filter((_, k) => k !== i));
+  };
+  const insert = (e: React.MouseEvent, i: number) => {
+    e.stopPropagation();
+    if (pts.length < MAX_MASK_POINTS) commit([...pts.slice(0, i + 1), toUv(e, e.currentTarget), ...pts.slice(i + 1)]);
+  };
+  return (
+    <svg className="pointer-events-none absolute inset-0 h-full w-full overflow-visible">
+      <polygon points={scr.map((q) => q.join(",")).join(" ")} fill="none" stroke="var(--color-signal)" strokeWidth={1.25} strokeDasharray="5 3" />
+      {scr.map((a, i) => {
+        const b = scr[(i + 1) % scr.length];
+        return (
+          <line key={`e${i}`} x1={a[0]} y1={a[1]} x2={b[0]} y2={b[1]} stroke="transparent" strokeWidth={10} className="pointer-events-auto cursor-copy" onPointerDown={(e) => e.stopPropagation()} onDoubleClick={(e) => insert(e, i)}>
+            <title>Doppelklick: Punkt einfügen</title>
+          </line>
+        );
+      })}
+      {scr.map(([x, y], i) => (
+        <rect key={i} x={x - 4} y={y - 4} width={8} height={8} fill="var(--color-panel)" stroke="var(--color-signal)" strokeWidth={1.5} className="pointer-events-auto cursor-move" onPointerDown={(e) => drag(e, i)} onContextMenu={(e) => remove(e, i)}>
+          <title>Ziehen: verschieben, Rechtsklick: entfernen</title>
+        </rect>
+      ))}
+    </svg>
+  );
+}
+
 const ASPECTS: { value: number; label: string }[] = [
   { value: 2.39, label: "2,39:1 (Kino)" },
   { value: 1.85, label: "1,85:1" },
@@ -258,6 +346,8 @@ export function Monitor() {
   const [view, setView] = useState({ x: 0, y: 0, w: 0, h: 0, s: 1, W: 800 });
   const [loop, setLoop] = useState(engine.loop);
   const active = useActiveVisual(seq, frame);
+  const maskEdit = useEditor((s) => s.maskEdit);
+  const mask = active?.effects?.find((e): e is Poly => e.id === maskEdit && e.type === "polygonMask");
   useEffect(() => {
     if (!ed.picking) return;
     // Escape cancels the eyedropper before any other shortcut sees the key.
@@ -428,7 +518,7 @@ export function Monitor() {
         )}
         {active && !playing && !ed.picking && (
           <div className="absolute inset-0">
-            <Gizmo clip={active} seq={seq} view={view} frame={frame} />
+            {mask ? <MaskGizmo clip={active} seq={seq} view={view} frame={frame} effect={mask} /> : <Gizmo clip={active} seq={seq} view={view} frame={frame} />}
           </div>
         )}
         {duration === 0 && (

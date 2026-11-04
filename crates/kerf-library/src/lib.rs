@@ -147,7 +147,7 @@ pub fn validate_data(kind: &str, data: &serde_json::Value) -> Result<serde_json:
                         return Err(invalid(format!("unknown effect {fx}")));
                     }
                 }
-                clean.push(Effect { id: Uuid::new_v4(), enabled: e.enabled, name: clean_text(&e.name, 80), kind });
+                clean.push(Effect { enabled: e.enabled, name: clean_text(&e.name, 80), ..Effect::new(kind) });
             }
             Ok(serde_json::to_value(clean).expect("effects serialize"))
         }

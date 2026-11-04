@@ -12,6 +12,7 @@
 
 pub mod analysis;
 pub mod denoise;
+pub mod mask;
 pub mod detect;
 pub mod error;
 #[cfg(test)]

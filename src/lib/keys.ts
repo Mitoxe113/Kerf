@@ -197,8 +197,15 @@ export function baseValue(c: Clip, p: KeyParam): number {
  * curve between two keys runs over timeline time (kerf_core Clip::param_at).
  */
 export function paramAt(c: Clip, p: KeyParam, local: number): number {
-  const keys = keysOf(c, p);
-  if (!keys.length) return baseValue(c, p);
+  return keysValue(c, keysOf(c, p), baseValue(c, p), local);
+}
+
+/**
+ * Value of a property with `keys` (static value `base`) of clip `c` at
+ * clip-local frame `local` (kerf_core Clip::keys_value); see paramAt.
+ */
+export function keysValue(c: Clip, keys: Keyframe[], base: number, local: number): number {
+  if (!keys.length) return base;
   if (!isWarped(c)) return evalKeys(keys, sourceAt(c, local));
   const at = sourceAt(c, local);
   if (at <= keys[0].at) return keys[0].value;

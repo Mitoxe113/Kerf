@@ -240,6 +240,18 @@
     "over2": 0
   },
   {
+    "id": "polygonMask",
+    "max": 0,
+    "mean": 0,
+    "over2": 0
+  },
+  {
+    "id": "polygonMaskInvert",
+    "max": 0,
+    "mean": 0,
+    "over2": 0
+  },
+  {
     "id": "blur (existing)",
     "max": 19,
     "mean": 0.386,

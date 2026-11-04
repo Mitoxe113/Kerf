@@ -40,6 +40,16 @@ export interface EffectEntry {
   make: () => EffectKind | null;
 }
 
+/** Starting shapes of a freeform mask (0..1 of the clip's frame). */
+export const MASK_SHAPES: { label: string; points: () => [number, number][] }[] = [
+  { label: "Rechteck", points: () => [[0.2, 0.2], [0.8, 0.2], [0.8, 0.8], [0.2, 0.8]] },
+  {
+    label: "Ellipse (16 Punkte)",
+    points: () => Array.from({ length: 16 }, (_, i): [number, number] => [0.5 + 0.3 * Math.cos((i * Math.PI) / 8), 0.5 + 0.3 * Math.sin((i * Math.PI) / 8)].map((v) => Math.round(v * 1e4) / 1e4) as [number, number]),
+  },
+  { label: "Dreieck", points: () => [[0.5, 0.2], [0.8, 0.8], [0.2, 0.8]] },
+];
+
 const BUILTINS: EffectEntry[] = [
   { key: "builtin:blur", label: "Gaußscher Weichzeichner", category: "blur", heavy: false, description: "Weichzeichnen mit einstellbarem Radius.", make: () => ({ type: "blur", radius: 4 }) },
   { key: "builtin:sharpen", label: "Schärfen", category: "blur", heavy: false, description: "Unscharf maskieren: hebt Kanten an.", make: () => ({ type: "sharpen", amount: 0.6, radius: 1.5 }) },
@@ -54,6 +64,14 @@ const BUILTINS: EffectEntry[] = [
     make: () => ({ type: "chromaKey", color: [0, 1, 0], similarity: 0.12, blend: 0.08, spill: 0.5 }),
   },
   { key: "builtin:colorWheels", label: "Farbräder", category: "color", heavy: false, description: "Lift, Gamma und Gain je Farbkanal.", make: () => ({ type: "colorWheels", lift: [0, 0, 0], gamma: [1, 1, 1], gain: [1, 1, 1] }) },
+  {
+    key: "builtin:polygonMask",
+    label: "Freiform-Maske",
+    category: "keying",
+    heavy: false,
+    description: "Blendet den Clip außerhalb einer frei gezeichneten Form aus (Punkte im Monitor), mit weicher Kante, Umkehren und animierbarem Versatz.",
+    make: () => ({ type: "polygonMask", points: MASK_SHAPES[0].points(), feather: 0, invert: false, x: 0, y: 0 }),
+  },
   { key: "builtin:curves", label: "Kurven", category: "color", heavy: false, description: "Gradationskurven für Master, Rot, Grün und Blau.", make: () => ({ type: "curves", master: [], red: [], green: [], blue: [] }) },
 ];
 

@@ -329,8 +329,16 @@ export type EffectKind =
   | { type: "chromaKey"; color: Rgb; similarity: number; blend: number; spill: number }
   | { type: "colorWheels"; lift: Rgb; gamma: Rgb; gain: Rgb }
   | { type: "curves"; master: CurvePoint[]; red: CurvePoint[]; green: CurvePoint[]; blue: CurvePoint[] }
-  | { type: "fx"; fx: string; params: Record<string, number> };
-export type Effect = { id: Uuid; enabled: boolean; name?: string } & EffectKind;
+  | { type: "fx"; fx: string; params: Record<string, number> }
+  /** Freeform mask: polygon in 0..1 of the clip's frame, moved by x, y (fractions of the frame). */
+  | { type: "polygonMask"; points: [number, number][]; feather: number; invert: boolean; x: number; y: number };
+export type Effect = {
+  id: Uuid;
+  enabled: boolean;
+  name?: string;
+  /** Animated parameters by key (kerf_core EffectKind::animatable), on source positions like the clip's keys. */
+  keys?: Record<string, Keyframe[]>;
+} & EffectKind;
 
 export type ColorParam = "exposure" | "contrast" | "saturation" | "temperature" | "tint";
 export type KeyParam = "x" | "y" | "scale" | "rotation" | "opacity" | "volume" | "speed" | ColorParam;

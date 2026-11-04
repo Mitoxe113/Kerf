@@ -44,20 +44,24 @@ Ein Konto, eine Anmeldung oder eine Internetverbindung braucht Kerf dafür nicht
 - Übergänge: an Schnitten, mit Standard-Übergang `Strg+Umschalt+D`.
 - Titel: Schrift, Stil, Animation und Vorlagen; importierte Schriften lädt nur Kerf, sie werden nicht systemweit installiert.
 - Untertitel: Panel *Untertitel*, Import und Export von SRT und WebVTT; beim Export einbrennen, als Spur einbetten oder als Datei schreiben.
-- Nicht vorhanden: Masken, Tracking, automatische Untertitel (keine Spracherkennung).
+- Masken: Rechteck und Ellipse mit dem Effekt *Formmaske*, freie Formen mit *Freiform-Maske* (Punkte im Programmmonitor setzen: *Im Monitor bearbeiten*, Punkte ziehen, Doppelklick auf eine Kante fügt einen ein, Rechtsklick entfernt ihn).
+- Animierte Effekte: Bei Parametern mit Stoppuhr setzt ein Klick darauf einen Keyframe am Playhead; danach setzt jede Änderung einen Keyframe an der Playhead-Position.
+- Nicht vorhanden: Tracking, automatische Untertitel (keine Spracherkennung).
 
 ## Audio
 
 - Lautstärke, Pan und Keyframes je Clip; Mixer und Pegel mit LUFS-Anzeige.
 - Effekte: EQ, Kompressor, Noise-Gate, Limiter, in Vorschau und Export gleich berechnet.
 - Lautheit beim Export normalisieren (EBU R128, zwei Durchgänge).
-- Nicht vorhanden: Rauschunterdrückung, Stem-Export.
+- Rauschunterdrückung je Audioclip im Inspector, mit Rauschprofil aus einem In/Out-Bereich.
+- Nicht vorhanden: Stem-Export.
 
 ## Farbe
 
 - Arbeitsbereich *Farbe*: Belichtung, Kontrast, Sättigung, Temperatur, Tönung, Farbräder, Kurven, LUTs (`.cube`).
 - Scopes: Luma-Wellenform, RGB-Parade, Vektorskop, Histogramm.
-- Nicht vorhanden: sekundäre Korrektur, Qualifier, Masken, HDR.
+- Masken wirken auf die Deckkraft eines Clips (Effekte *Formmaske* und *Freiform-Maske*), nicht als Auswahl für eine Farbkorrektur.
+- Nicht vorhanden: Qualifier für die Farbkorrektur, HDR.
 
 ## Export
 

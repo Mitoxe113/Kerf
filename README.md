@@ -53,7 +53,7 @@ npm test
 npm run typecheck
 ```
 
-Die Rust-Tests enthalten 18 echte Läufe mit FFmpeg (`crates/kerf-media/tests/pipeline.rs`): Testmedien erzeugen → analysieren → schneiden → rendern → Pixel, Ton und Dauer des Ergebnisses prüfen, für Keyframes, Effekte, Übergänge, Untertitel, Audio-Effekte, Rauschunterdrückung, Rampen, verschachtelte Sequenzen, Multicam und den segmentierten Export. Ohne FFmpeg werden sie übersprungen; mit `KERF_REQUIRE_FFMPEG=1` (so in der CI) schlagen sie stattdessen fehl.
+Die Rust-Tests enthalten 19 echte Läufe mit FFmpeg (`crates/kerf-media/tests/pipeline.rs`): Testmedien erzeugen → analysieren → schneiden → rendern → Pixel, Ton und Dauer des Ergebnisses prüfen, für Keyframes, Effekte (auch animiert und mit Freiform-Masken), Übergänge, Untertitel, Audio-Effekte, Rauschunterdrückung, Rampen, verschachtelte Sequenzen, Multicam und den segmentierten Export. Ohne FFmpeg werden sie übersprungen; mit `KERF_REQUIRE_FFMPEG=1` (so in der CI) schlagen sie stattdessen fehl.
 
 Die [CI](.github/workflows/ci.yml) führt bei jedem Push alles unter Windows aus und baut den unsignierten Installer als Artefakt.
 
@@ -109,6 +109,10 @@ Alle Tastaturbefehle sind unter *Bearbeiten → Tastaturbefehle …* (`Strg+Alt+
 **Quellmonitor:** Doppelklick auf ein Medium öffnet es im Tab *Quelle*. Dort In/Out setzen und mit `,` / `.` an den Playhead der Timeline einfügen oder überschreiben (Dreipunktschnitt; ist in der Timeline In/Out gesetzt, gilt deren In-Point).
 
 **Keyframes:** Im Inspector neben einer animierbaren Eigenschaft (Bewegung, Deckkraft, Lautstärke, Geschwindigkeit, Farbkorrektur) auf die Raute klicken. Steht der Playhead auf einem Keyframe, wählt ein Rechtsklick auf die Raute die Interpolation (linear, Ease-In/-Out, Halten oder eine eigene Kurve im Kurveneditor). Die Pfeile daneben springen zum vorherigen und nächsten Keyframe. Über das Rechtsklick-Menü der Raute lässt sich ein Keyframe kopieren und am Playhead einfügen, auch in einem anderen Clip.
+
+**Effekte animieren:** Im Inspector (Tab *Effekte*) haben animierbare Parameter eine Stoppuhr. Ein Klick darauf setzt einen Keyframe am Playhead; danach setzt jede Änderung einen Keyframe dort, die Raute fügt einen hinzu oder entfernt ihn, Rechtsklick auf die Raute wählt die Interpolation.
+
+**Freiform-Maske:** Effekt *Freiform-Maske* (Kategorie Keying und Masken) auf einen Clip legen, *Im Monitor bearbeiten* wählen und bei ausgewähltem Clip die Punkte im Programmmonitor ziehen. Doppelklick auf eine Kante fügt einen Punkt ein, Rechtsklick auf einen Punkt entfernt ihn. Weiche Kante, Umkehren und ein animierbarer Versatz stehen im Inspector.
 
 **Rauschunterdrückung:** Im Inspector eines Audioclips den Schalter bei *Rauschunterdrückung* einschalten und Stärke und Rauschpegel einstellen. Für ein genaueres Ergebnis In- und Out-Punkt auf eine Stelle des Clips setzen, an der nur Rauschen zu hören ist, und *Aus In/Out lernen* wählen. Der entrauschte Ton wird einmal berechnet und im Cache abgelegt; Vorschau und Export verwenden dieselbe Datei.
 

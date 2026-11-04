@@ -173,6 +173,8 @@ interface EditorStore {
   dialog: Dialog | null;
   /** Eyedropper waiting for a click in the program monitor (null = cancelled). */
   picker: ((rgb: Rgb | null) => void) | null;
+  /** Freeform mask (effect id) whose points the program monitor edits (not persisted). */
+  maskEdit: Uuid | null;
   inspectorTab: "clip" | "title" | "color" | "effects" | "audio";
   /** Subtitle cue being edited in the subtitles panel. */
   activeCue: Uuid | null;
@@ -261,6 +263,7 @@ export const useEditor = create<EditorStore>((set, get) => ({
   keyClipboard: null,
   dialog: null,
   picker: null,
+  maskEdit: null,
   inspectorTab: "clip",
   activeCue: null,
   activeTransition: null,

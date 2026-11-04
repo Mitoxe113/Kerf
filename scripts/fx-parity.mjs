@@ -86,6 +86,8 @@ const CASES = [
   ["stroke", fx("stroke", { width: 3, colorR: 0, colorG: 0, colorB: 1 })],
   ["dropShadow", fx("dropShadow", { distance: 6, angle: 45, softness: 3, opacity: 0.7 })],
   ["dropShadowHard", fx("dropShadow", { distance: 6, angle: 45, softness: 0, opacity: 0.7 })],
+  ["polygonMask", { type: "polygonMask", points: [[0.5, 0.08], [0.93, 0.4], [0.76, 0.92], [0.22, 0.88], [0.06, 0.38]], feather: 6, invert: false, x: 0, y: 0 }],
+  ["polygonMaskInvert", { type: "polygonMask", points: [[0.1, 0.1], [0.8, 0.2], [0.45, 0.85]], feather: 0, invert: true, x: 0.05, y: -0.03 }],
   // Reference: the existing Gaussian blur (gblur vs. the separable shader).
   ["blur (existing)", { type: "blur", radius: 3 }],
 ].filter(([id]) => !only || only.includes(id));
@@ -95,7 +97,7 @@ const input = picture();
 writeFileSync(path.join(tmp, "in.raw"), input);
 
 // --- export side ---------------------------------------------------------------------
-const chains = execFileSync("cargo", ["run", "-q", "-p", "kerf-media", "--example", "fx_chain"], { cwd: root, input: JSON.stringify(CASES.map((c) => c[1])) })
+const chains = execFileSync("cargo", ["run", "-q", "-p", "kerf-media", "--example", "fx_chain", "--", String(W), String(H), tmp], { cwd: root, input: JSON.stringify(CASES.map((c) => c[1])) })
   .toString()
   .trim()
   .split("\n");

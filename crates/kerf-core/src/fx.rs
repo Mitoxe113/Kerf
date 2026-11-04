@@ -72,6 +72,9 @@ pub struct FxDef {
     /// Rough export cost: true when the export evaluates a per-pixel
     /// expression (`geq`), which is much slower than a native filter.
     pub heavy: bool,
+    /// Parameter keys that can be animated with keyframes (the export
+    /// evaluates them per frame in the effect's expressions).
+    pub animated: &'static [&'static str],
 }
 
 const PCT: ParamKind = ParamKind::Float { unit: " %", scale: 100.0 };
@@ -94,6 +97,7 @@ pub const CATALOG: &[FxDef] = &[
         description: "Hebt oder senkt alle Tonwerte und spreizt sie um das mittlere Grau.",
         params: &[p("brightness", "Helligkeit", -1.0, 1.0, 0.0, PCT), p("contrast", "Kontrast", -1.0, 1.0, 0.0, PCT)],
         heavy: false,
+        animated: &[],
     },
     FxDef {
         id: "levels",
@@ -109,6 +113,7 @@ pub const CATALOG: &[FxDef] = &[
             p("outWhite", "Ausgang Weiß", 0.0, 1.0, 1.0, PCT),
         ],
         heavy: false,
+        animated: &[],
     },
     FxDef {
         id: "tone",
@@ -123,6 +128,7 @@ pub const CATALOG: &[FxDef] = &[
             p("whites", "Weiß", -1.0, 1.0, 0.0, PCT),
         ],
         heavy: false,
+        animated: &[],
     },
     FxDef {
         id: "colorBalance",
@@ -142,6 +148,7 @@ pub const CATALOG: &[FxDef] = &[
             p("highB", "Lichter Blau", -1.0, 1.0, 0.0, PCT),
         ],
         heavy: false,
+        animated: &[],
     },
     FxDef {
         id: "vibrance",
@@ -151,6 +158,7 @@ pub const CATALOG: &[FxDef] = &[
         description: "Sättigt schwach gesättigte Farben stärker als kräftige.",
         params: &[p("amount", "Stärke", -1.0, 1.0, 0.3, PCT)],
         heavy: true,
+        animated: &["amount"],
     },
     FxDef {
         id: "hueShift",
@@ -160,6 +168,7 @@ pub const CATALOG: &[FxDef] = &[
         description: "Dreht alle Farbtöne um die Grauachse.",
         params: &[p("angle", "Winkel", -180.0, 180.0, 0.0, ParamKind::Angle)],
         heavy: false,
+        animated: &[],
     },
     FxDef {
         id: "hslSecondary",
@@ -176,6 +185,7 @@ pub const CATALOG: &[FxDef] = &[
             p("lightness", "Helligkeit", -1.0, 1.0, 0.0, PCT),
         ],
         heavy: true,
+        animated: &[],
     },
     FxDef {
         id: "blackWhite",
@@ -185,6 +195,7 @@ pub const CATALOG: &[FxDef] = &[
         description: "Entsättigt nach Rec.709-Luma.",
         params: &[p("amount", "Stärke", 0.0, 1.0, 1.0, PCT)],
         heavy: false,
+        animated: &[],
     },
     FxDef {
         id: "sepia",
@@ -194,6 +205,7 @@ pub const CATALOG: &[FxDef] = &[
         description: "Warmer, bräunlicher Altbild-Ton.",
         params: &[p("amount", "Stärke", 0.0, 1.0, 1.0, PCT)],
         heavy: false,
+        animated: &[],
     },
     FxDef {
         id: "colorize",
@@ -207,6 +219,7 @@ pub const CATALOG: &[FxDef] = &[
             p("amount", "Stärke", 0.0, 1.0, 1.0, PCT),
         ],
         heavy: false,
+        animated: &[],
     },
     FxDef {
         id: "invert",
@@ -216,6 +229,7 @@ pub const CATALOG: &[FxDef] = &[
         description: "Negativ der Farben.",
         params: &[p("amount", "Stärke", 0.0, 1.0, 1.0, PCT)],
         heavy: false,
+        animated: &[],
     },
     FxDef {
         id: "posterize",
@@ -225,6 +239,7 @@ pub const CATALOG: &[FxDef] = &[
         description: "Reduziert jeden Kanal auf wenige Stufen.",
         params: &[p("levels", "Stufen", 2.0, 32.0, 5.0, ParamKind::Int)],
         heavy: false,
+        animated: &[],
     },
     FxDef {
         id: "solarize",
@@ -234,6 +249,7 @@ pub const CATALOG: &[FxDef] = &[
         description: "Kehrt Tonwerte oberhalb der Schwelle um.",
         params: &[p("threshold", "Schwelle", 0.0, 1.0, 0.5, PCT)],
         heavy: false,
+        animated: &[],
     },
     // --- blur ---------------------------------------------------------------------
     FxDef {
@@ -244,6 +260,7 @@ pub const CATALOG: &[FxDef] = &[
         description: "Mittelwert über ein Quadrat, waagrecht und senkrecht getrennt.",
         params: &[p("radius", "Radius", 0.0, 60.0, 4.0, ParamKind::Int)],
         heavy: false,
+        animated: &[],
     },
     FxDef {
         id: "directionalBlur",
@@ -253,6 +270,7 @@ pub const CATALOG: &[FxDef] = &[
         description: "Bewegungsunschärfe entlang eines Winkels.",
         params: &[p("angle", "Winkel", -180.0, 180.0, 0.0, ParamKind::Angle), p("length", "Länge", 0.0, 200.0, 20.0, PX)],
         heavy: true,
+        animated: &[],
     },
     FxDef {
         id: "radialBlur",
@@ -262,6 +280,7 @@ pub const CATALOG: &[FxDef] = &[
         description: "Dreht die Unschärfe um einen Mittelpunkt.",
         params: &[p("angle", "Winkel", 0.0, 45.0, 6.0, ParamKind::Angle), CENTER],
         heavy: true,
+        animated: &[],
     },
     FxDef {
         id: "zoomBlur",
@@ -271,6 +290,7 @@ pub const CATALOG: &[FxDef] = &[
         description: "Unschärfe strahlenförmig vom Mittelpunkt.",
         params: &[p("amount", "Stärke", 0.0, 0.5, 0.1, PCT), CENTER],
         heavy: true,
+        animated: &["centerX", "centerY", "amount"],
     },
     FxDef {
         id: "tiltShift",
@@ -285,6 +305,7 @@ pub const CATALOG: &[FxDef] = &[
             p("radius", "Radius", 0.0, 60.0, 8.0, PX),
         ],
         heavy: false,
+        animated: &[],
     },
     FxDef {
         id: "softFocus",
@@ -294,6 +315,7 @@ pub const CATALOG: &[FxDef] = &[
         description: "Hellt mit einer weichgezeichneten Kopie auf (Aufhellen-Mischung).",
         params: &[p("amount", "Stärke", 0.0, 1.0, 0.5, PCT), p("radius", "Radius", 0.5, 60.0, 10.0, PX)],
         heavy: false,
+        animated: &[],
     },
     // --- light --------------------------------------------------------------------
     FxDef {
@@ -308,6 +330,7 @@ pub const CATALOG: &[FxDef] = &[
             p("intensity", "Intensität", 0.0, 3.0, 1.0, PCT),
         ],
         heavy: false,
+        animated: &[],
     },
     FxDef {
         id: "chromaticAberration",
@@ -317,6 +340,7 @@ pub const CATALOG: &[FxDef] = &[
         description: "Verschiebt Rot und Blau gegeneinander (RGB-Versatz).",
         params: &[p("amount", "Versatz", -30.0, 30.0, 4.0, ParamKind::Int), p("vertical", "Senkrecht", 0.0, 1.0, 0.0, ParamKind::Toggle)],
         heavy: false,
+        animated: &[],
     },
     // --- distort ------------------------------------------------------------------
     FxDef {
@@ -332,6 +356,7 @@ pub const CATALOG: &[FxDef] = &[
             p("vertical", "Senkrecht", 0.0, 1.0, 0.0, ParamKind::Toggle),
         ],
         heavy: true,
+        animated: &["amplitude", "wavelength", "phase"],
     },
     FxDef {
         id: "twirl",
@@ -341,6 +366,7 @@ pub const CATALOG: &[FxDef] = &[
         description: "Dreht das Bild zur Mitte hin stärker.",
         params: &[p("angle", "Winkel", -720.0, 720.0, 120.0, ParamKind::Angle), p("radius", "Radius", 0.05, 1.0, 0.5, PCT), CENTER],
         heavy: true,
+        animated: &["centerX", "centerY", "radius", "angle"],
     },
     FxDef {
         id: "bulge",
@@ -350,6 +376,7 @@ pub const CATALOG: &[FxDef] = &[
         description: "Positiv wölbt nach außen, negativ kneift nach innen.",
         params: &[p("amount", "Stärke", -1.0, 1.0, 0.5, PCT), p("radius", "Radius", 0.05, 1.0, 0.4, PCT), CENTER],
         heavy: true,
+        animated: &["centerX", "centerY", "radius", "amount"],
     },
     FxDef {
         id: "lensDistortion",
@@ -359,6 +386,7 @@ pub const CATALOG: &[FxDef] = &[
         description: "Tonne (positiv, Fischauge) oder Kissen (negativ).",
         params: &[p("amount", "Stärke", -1.0, 1.0, 0.3, PCT)],
         heavy: true,
+        animated: &["amount"],
     },
     FxDef {
         id: "kaleidoscope",
@@ -368,6 +396,7 @@ pub const CATALOG: &[FxDef] = &[
         description: "Spiegelt Kreissegmente um die Mitte.",
         params: &[p("segments", "Segmente", 2.0, 16.0, 6.0, ParamKind::Int), p("angle", "Drehung", -180.0, 180.0, 0.0, ParamKind::Angle)],
         heavy: true,
+        animated: &[],
     },
     FxDef {
         id: "mirror",
@@ -377,6 +406,7 @@ pub const CATALOG: &[FxDef] = &[
         description: "Spiegelt eine Bildhälfte auf die andere.",
         params: &[p("mode", "Richtung", 0.0, 3.0, 0.0, ParamKind::Choice { options: &["Links nach rechts", "Rechts nach links", "Oben nach unten", "Unten nach oben"] })],
         heavy: true,
+        animated: &[],
     },
     FxDef {
         id: "pixelate",
@@ -386,6 +416,7 @@ pub const CATALOG: &[FxDef] = &[
         description: "Blöcke in der Farbe ihrer Mitte.",
         params: &[p("size", "Blockgröße", 2.0, 200.0, 16.0, ParamKind::Int)],
         heavy: true,
+        animated: &[],
     },
     // --- stylize ------------------------------------------------------------------
     FxDef {
@@ -396,6 +427,7 @@ pub const CATALOG: &[FxDef] = &[
         description: "Abgedunkelte Zeilen wie auf einem Röhrenmonitor.",
         params: &[p("spacing", "Abstand", 2.0, 40.0, 4.0, ParamKind::Int), p("darkness", "Abdunkeln", 0.0, 1.0, 0.4, PCT)],
         heavy: true,
+        animated: &["darkness"],
     },
     FxDef {
         id: "filmGrain",
@@ -409,6 +441,7 @@ pub const CATALOG: &[FxDef] = &[
             p("color", "Farbiges Korn", 0.0, 1.0, 0.0, ParamKind::Toggle),
         ],
         heavy: true,
+        animated: &["amount"],
     },
     FxDef {
         id: "glitch",
@@ -424,6 +457,7 @@ pub const CATALOG: &[FxDef] = &[
             p("seed", "Variante", 0.0, 999.0, 1.0, ParamKind::Int),
         ],
         heavy: true,
+        animated: &[],
     },
     FxDef {
         id: "edgeDetect",
@@ -433,6 +467,7 @@ pub const CATALOG: &[FxDef] = &[
         description: "Sobel-Kanten der Helligkeit, hell auf dunkel.",
         params: &[p("amount", "Verstärkung", 0.1, 8.0, 1.0, NUM), p("invert", "Dunkel auf hell", 0.0, 1.0, 0.0, ParamKind::Toggle)],
         heavy: true,
+        animated: &["amount"],
     },
     // --- keying -------------------------------------------------------------------
     FxDef {
@@ -447,6 +482,7 @@ pub const CATALOG: &[FxDef] = &[
             p("invert", "Helles entfernen", 0.0, 1.0, 0.0, ParamKind::Toggle),
         ],
         heavy: true,
+        animated: &["threshold", "softness"],
     },
     FxDef {
         id: "matte",
@@ -456,6 +492,7 @@ pub const CATALOG: &[FxDef] = &[
         description: "Schrumpft (positiv) oder erweitert (negativ) die Alphamaske und macht ihre Kante weich.",
         params: &[p("choke", "Schrumpfen", -20.0, 20.0, 0.0, ParamKind::Int), p("feather", "Weiche Kante", 0.0, 40.0, 0.0, PX)],
         heavy: false,
+        animated: &[],
     },
     // --- transform / compositing ---------------------------------------------------
     FxDef {
@@ -466,6 +503,7 @@ pub const CATALOG: &[FxDef] = &[
         description: "Kippt das Bild waagrecht und/oder senkrecht.",
         params: &[p("horizontal", "Waagrecht", 0.0, 1.0, 1.0, ParamKind::Toggle), p("vertical", "Senkrecht", 0.0, 1.0, 0.0, ParamKind::Toggle)],
         heavy: false,
+        animated: &[],
     },
     FxDef {
         id: "shapeMask",
@@ -482,6 +520,7 @@ pub const CATALOG: &[FxDef] = &[
             p("invert", "Umkehren", 0.0, 1.0, 0.0, ParamKind::Toggle),
         ],
         heavy: true,
+        animated: &["centerX", "centerY", "width", "height", "feather"],
     },
     FxDef {
         id: "border",
@@ -491,6 +530,7 @@ pub const CATALOG: &[FxDef] = &[
         description: "Farbiger Rand innerhalb der Clipfläche.",
         params: &[p("width", "Breite", 0.0, 200.0, 12.0, ParamKind::Int), p("color", "Farbe", 0.0, 1.0, 1.0, ParamKind::Color)],
         heavy: true,
+        animated: &[],
     },
     FxDef {
         id: "stroke",
@@ -500,6 +540,7 @@ pub const CATALOG: &[FxDef] = &[
         description: "Farbige Kontur um die nicht transparenten Bereiche (z. B. Titel, freigestellte Personen).",
         params: &[p("width", "Breite", 1.0, 30.0, 4.0, ParamKind::Int), p("color", "Farbe", 0.0, 1.0, 0.0, ParamKind::Color)],
         heavy: false,
+        animated: &[],
     },
     FxDef {
         id: "dropShadow",
@@ -515,6 +556,7 @@ pub const CATALOG: &[FxDef] = &[
             p("color", "Farbe", 0.0, 1.0, 0.0, ParamKind::Color),
         ],
         heavy: true,
+        animated: &[],
     },
 ];
 

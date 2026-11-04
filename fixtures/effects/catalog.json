@@ -27,7 +27,8 @@
         "scale": 100.0
       }
     ],
-    "heavy": false
+    "heavy": false,
+    "animated": []
   },
   {
     "id": "levels",
@@ -87,7 +88,8 @@
         "scale": 100.0
       }
     ],
-    "heavy": false
+    "heavy": false,
+    "animated": []
   },
   {
     "id": "tone",
@@ -137,7 +139,8 @@
         "scale": 100.0
       }
     ],
-    "heavy": false
+    "heavy": false,
+    "animated": []
   },
   {
     "id": "colorBalance",
@@ -237,7 +240,8 @@
         "scale": 100.0
       }
     ],
-    "heavy": false
+    "heavy": false,
+    "animated": []
   },
   {
     "id": "vibrance",
@@ -257,7 +261,10 @@
         "scale": 100.0
       }
     ],
-    "heavy": true
+    "heavy": true,
+    "animated": [
+      "amount"
+    ]
   },
   {
     "id": "hueShift",
@@ -275,7 +282,8 @@
         "kind": "angle"
       }
     ],
-    "heavy": false
+    "heavy": false,
+    "animated": []
   },
   {
     "id": "hslSecondary",
@@ -337,7 +345,8 @@
         "scale": 100.0
       }
     ],
-    "heavy": true
+    "heavy": true,
+    "animated": []
   },
   {
     "id": "blackWhite",
@@ -357,7 +366,8 @@
         "scale": 100.0
       }
     ],
-    "heavy": false
+    "heavy": false,
+    "animated": []
   },
   {
     "id": "sepia",
@@ -377,7 +387,8 @@
         "scale": 100.0
       }
     ],
-    "heavy": false
+    "heavy": false,
+    "animated": []
   },
   {
     "id": "colorize",
@@ -415,7 +426,8 @@
         "scale": 100.0
       }
     ],
-    "heavy": false
+    "heavy": false,
+    "animated": []
   },
   {
     "id": "invert",
@@ -435,7 +447,8 @@
         "scale": 100.0
       }
     ],
-    "heavy": false
+    "heavy": false,
+    "animated": []
   },
   {
     "id": "posterize",
@@ -453,7 +466,8 @@
         "kind": "int"
       }
     ],
-    "heavy": false
+    "heavy": false,
+    "animated": []
   },
   {
     "id": "solarize",
@@ -473,7 +487,8 @@
         "scale": 100.0
       }
     ],
-    "heavy": false
+    "heavy": false,
+    "animated": []
   },
   {
     "id": "boxBlur",
@@ -491,7 +506,8 @@
         "kind": "int"
       }
     ],
-    "heavy": false
+    "heavy": false,
+    "animated": []
   },
   {
     "id": "directionalBlur",
@@ -519,7 +535,8 @@
         "scale": 1.0
       }
     ],
-    "heavy": true
+    "heavy": true,
+    "animated": []
   },
   {
     "id": "radialBlur",
@@ -545,7 +562,8 @@
         "kind": "point"
       }
     ],
-    "heavy": true
+    "heavy": true,
+    "animated": []
   },
   {
     "id": "zoomBlur",
@@ -573,7 +591,12 @@
         "kind": "point"
       }
     ],
-    "heavy": true
+    "heavy": true,
+    "animated": [
+      "centerX",
+      "centerY",
+      "amount"
+    ]
   },
   {
     "id": "tiltShift",
@@ -623,7 +646,8 @@
         "scale": 1.0
       }
     ],
-    "heavy": false
+    "heavy": false,
+    "animated": []
   },
   {
     "id": "softFocus",
@@ -653,7 +677,8 @@
         "scale": 1.0
       }
     ],
-    "heavy": false
+    "heavy": false,
+    "animated": []
   },
   {
     "id": "glow",
@@ -693,7 +718,8 @@
         "scale": 100.0
       }
     ],
-    "heavy": false
+    "heavy": false,
+    "animated": []
   },
   {
     "id": "chromaticAberration",
@@ -719,7 +745,8 @@
         "kind": "toggle"
       }
     ],
-    "heavy": false
+    "heavy": false,
+    "animated": []
   },
   {
     "id": "wave",
@@ -765,7 +792,12 @@
         "kind": "toggle"
       }
     ],
-    "heavy": true
+    "heavy": true,
+    "animated": [
+      "amplitude",
+      "wavelength",
+      "phase"
+    ]
   },
   {
     "id": "twirl",
@@ -801,7 +833,13 @@
         "kind": "point"
       }
     ],
-    "heavy": true
+    "heavy": true,
+    "animated": [
+      "centerX",
+      "centerY",
+      "radius",
+      "angle"
+    ]
   },
   {
     "id": "bulge",
@@ -839,7 +877,13 @@
         "kind": "point"
       }
     ],
-    "heavy": true
+    "heavy": true,
+    "animated": [
+      "centerX",
+      "centerY",
+      "radius",
+      "amount"
+    ]
   },
   {
     "id": "lensDistortion",
@@ -859,7 +903,10 @@
         "scale": 100.0
       }
     ],
-    "heavy": true
+    "heavy": true,
+    "animated": [
+      "amount"
+    ]
   },
   {
     "id": "kaleidoscope",
@@ -885,7 +932,8 @@
         "kind": "angle"
       }
     ],
-    "heavy": true
+    "heavy": true,
+    "animated": []
   },
   {
     "id": "mirror",
@@ -909,7 +957,8 @@
         ]
       }
     ],
-    "heavy": true
+    "heavy": true,
+    "animated": []
   },
   {
     "id": "pixelate",
@@ -927,7 +976,8 @@
         "kind": "int"
       }
     ],
-    "heavy": true
+    "heavy": true,
+    "animated": []
   },
   {
     "id": "scanlines",
@@ -955,7 +1005,10 @@
         "scale": 100.0
       }
     ],
-    "heavy": true
+    "heavy": true,
+    "animated": [
+      "darkness"
+    ]
   },
   {
     "id": "filmGrain",
@@ -991,7 +1044,10 @@
         "kind": "toggle"
       }
     ],
-    "heavy": true
+    "heavy": true,
+    "animated": [
+      "amount"
+    ]
   },
   {
     "id": "glitch",
@@ -1045,7 +1101,8 @@
         "kind": "int"
       }
     ],
-    "heavy": true
+    "heavy": true,
+    "animated": []
   },
   {
     "id": "edgeDetect",
@@ -1073,7 +1130,10 @@
         "kind": "toggle"
       }
     ],
-    "heavy": true
+    "heavy": true,
+    "animated": [
+      "amount"
+    ]
   },
   {
     "id": "lumaKey",
@@ -1111,7 +1171,11 @@
         "kind": "toggle"
       }
     ],
-    "heavy": true
+    "heavy": true,
+    "animated": [
+      "threshold",
+      "softness"
+    ]
   },
   {
     "id": "matte",
@@ -1139,7 +1203,8 @@
         "scale": 1.0
       }
     ],
-    "heavy": false
+    "heavy": false,
+    "animated": []
   },
   {
     "id": "flip",
@@ -1165,7 +1230,8 @@
         "kind": "toggle"
       }
     ],
-    "heavy": false
+    "heavy": false,
+    "animated": []
   },
   {
     "id": "shapeMask",
@@ -1233,7 +1299,14 @@
         "kind": "toggle"
       }
     ],
-    "heavy": true
+    "heavy": true,
+    "animated": [
+      "centerX",
+      "centerY",
+      "width",
+      "height",
+      "feather"
+    ]
   },
   {
     "id": "border",
@@ -1259,7 +1332,8 @@
         "kind": "color"
       }
     ],
-    "heavy": true
+    "heavy": true,
+    "animated": []
   },
   {
     "id": "stroke",
@@ -1285,7 +1359,8 @@
         "kind": "color"
       }
     ],
-    "heavy": false
+    "heavy": false,
+    "animated": []
   },
   {
     "id": "dropShadow",
@@ -1339,6 +1414,7 @@
         "kind": "color"
       }
     ],
-    "heavy": true
+    "heavy": true,
+    "animated": []
   }
 ]

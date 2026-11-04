@@ -89,7 +89,7 @@ Die in Phase 3 gefundenen Fehler sind bereits behoben (siehe STATUS).
 | Speicherzustand nur als Punkt | ✅ Statusleiste mit Uhrzeit des Speicherns und Autosaves |
 | Tastenkürzel nicht teilbar | ✅ Profile, JSON-Import/-Export |
 | Export: ein FFmpeg-Eingang pro Clipabschnitt | ⬜ unverändert (native Pipeline, Phase 10) |
-| Kein Erweiterungspunkt für Effekte | ⬜ offen; Keyframe-System ist als Grundlage für animierbare Effektparameter angelegt |
+| Kein Erweiterungspunkt für Effekte | ⬜ offen (Plugins); animierbare Effektparameter gibt es inzwischen (`Effect.keys`) |
 
 # Audit Phase 10: Werkzeuge und Projektverwaltung
 

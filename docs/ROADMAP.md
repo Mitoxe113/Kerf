@@ -39,11 +39,12 @@ Zuverlässigkeit (Deltas, geteilte Undo-Schnappschüsse, Autosave, Versionen, Wi
 
 ## Kreativ-Ökosystem ◐
 
-- ✅ Effekt-Katalog (38 Effekte), Effekt-Browser, Presets, Favoriten, Kopieren/Einfügen, Bypass, Vorher/Nachher
+- ✅ Effekt-Katalog (39 Effekte), Effekt-Browser, Presets, Favoriten, Kopieren/Einfügen, Bypass, Vorher/Nachher
+- ✅ Keyframebare Effektparameter (Weichzeichner, Vignette, 11 Katalog-Effekte), Freiform-Maske mit Punkte-Editor im Monitor und animierbarem Versatz; Rechteck- und Ellipsen-Maske über die animierbare Formmaske
 - ✅ Mischmodi je Clip, Masken-Übergänge, Schiebe- und Gleit-Übergänge, Übergangs-Presets
 - ✅ Schriften (System, importiert, mitgeliefert) mit Lizenzangaben aus der Datei, erweiterter Textstil, Textanimation, Titelvorlagen
 - ◐ Stockmedien: Pexels, GIPHY, Freesound, Openverse mit geprüften Downloads, Bibliothek und Lizenzbericht; **noch nicht live mit echten Schlüsseln geprüft**
-- ☐ Pixabay, Freesound-Originale (OAuth2), Online-Schriften, Plugin-Grundlage, keyframebare Effektparameter
+- ☐ Pixabay, Freesound-Originale (OAuth2), Online-Schriften, Plugin-Grundlage
 
 ## Werkzeuge und Projektverwaltung ◐
 
@@ -60,7 +61,7 @@ Zuverlässigkeit (Deltas, geteilte Undo-Schnappschüsse, Autosave, Versionen, Wi
 3. **Code-Signierung:** Ein Authenticode-Zertifikat für Windows besorgen und als Secret hinterlegen; der Release-Workflow ist dafür vorbereitet. Bis dahin warnt SmartScreen beim Installer.
 4. **macOS und Linux (derzeit nicht geplant):** Vor einer Rückkehr müsste unter Linux die Wiedergabe über das `asset:`-Protokoll in WebKitGTK gelöst werden (siehe STATUS, *Release 0.1.0*); unter macOS Dateizuordnung über `RunEvent::Opened`, Dialoge und Wiedergabe in WKWebView prüfen.
 5. **Assistenten in der App durchspielen:** Szenen, Stille, Beats, Ducking, Archiv, Relink und Cache mit echten Projekten in der Tauri-App bedienen; Kapitel in einem Abspieler prüfen.
-6. **Effekte:** Masken (Rechteck, Ellipse, Freiform, animierbar).
+6. **Effekt-Keyframes und Freiform-Maske in der App durchspielen:** im Programmmonitor der Tauri-App (WebView2) Punkte setzen, animieren und gegen den Export vergleichen.
 
 ## Später
 

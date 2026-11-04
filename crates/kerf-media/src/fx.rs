@@ -178,8 +178,45 @@ const TAPS: i32 = 13;
 /// the frame rate and `frame0` the clip-local index of the first frame this
 /// stream renders, for effects that change with every frame.
 pub fn filters(id: &str, params: &BTreeMap<String, f32>, k: usize, j: usize, rate: f64, frame0: i64) -> Vec<String> {
+    animated_filters(id, params, &BTreeMap::new(), k, j, rate, frame0)
+}
+
+/// Parameter values as the expressions use them: numbers, or for animated
+/// parameters an expression over the stream's time `T`.
+struct Vals<'a> {
+    p: &'a Params<'a>,
+    anim: &'a BTreeMap<String, String>,
+}
+
+impl Vals<'_> {
+    fn is(&self, key: &str) -> bool {
+        self.anim.contains_key(key)
+    }
+
+    /// The value of `key`.
+    fn x(&self, key: &str) -> String {
+        match self.anim.get(key) {
+            Some(e) => format!("({e})"),
+            None => n(self.p.get(key)),
+        }
+    }
+
+    /// `f` of the value of `key`; when animated the expression `e` with `@`
+    /// standing for the value.
+    fn f(&self, key: &str, f: impl Fn(f64) -> f64, e: &str) -> String {
+        match self.anim.get(key) {
+            Some(x) => format!("({})", e.replace('@', &format!("({x})"))),
+            None => n(f(self.p.get(key))),
+        }
+    }
+}
+
+/// [`filters`] with the animated parameters `anim` (key -> expression over
+/// `T`, see `kerf_core::fx::FxDef::animated`) evaluated per frame.
+pub fn animated_filters(id: &str, params: &BTreeMap<String, f32>, anim: &BTreeMap<String, String>, k: usize, j: usize, rate: f64, frame0: i64) -> Vec<String> {
     let Some(def) = fx::def(id) else { return Vec::new() };
     let p = Params::new(def, params);
+    let v = Vals { p: &p, anim };
     let l = |s: &str| format!("fx{k}e{j}{s}");
     let (a, b, c) = (l("a"), l("b"), l("c"));
     if let Some([r, g, bl]) = tone_bodies(id, &p) {
@@ -189,12 +226,12 @@ pub fn filters(id: &str, params: &BTreeMap<String, f32>, k: usize, j: usize, rat
         return vec![mixer(m)];
     }
     let frame = format!("mod(floor(T*{}+0.5)+{},65521)", n(rate), frame0);
-    let center = || (format!("({}*W)", n(p.get("centerX"))), format!("({}*H)", n(p.get("centerY"))));
+    let center = || (format!("({}*W)", v.x("centerX")), format!("({}*H)", v.x("centerY")));
     let round = |e: &str| format!("clip({e}+0.5,0,255)");
     match id {
         "vibrance" => {
             let pre = "st(0,r(X,Y));st(1,g(X,Y));st(2,b(X,Y));st(3,0.2126*ld(0)+0.7152*ld(1)+0.0722*ld(2));st(4,1+AMT*(1-(max(ld(0),max(ld(1),ld(2)))-min(ld(0),min(ld(1),ld(2))))/255));"
-                .replace("AMT", &n(p.get("amount")));
+                .replace("AMT", &v.x("amount"));
             let ch = |i: usize| format!("{pre}{}", round(&format!("ld(3)+(ld({i})-ld(3))*ld(4)")));
             vec![geq(&ch(0), &ch(1), &ch(2), "alpha(X,Y)")]
         }
@@ -226,14 +263,19 @@ pub fn filters(id: &str, params: &BTreeMap<String, f32>, k: usize, j: usize, rat
             vec![geq(&ch(3), &ch(4), &ch(6), "alpha(X,Y)")]
         }
         "lumaKey" => {
-            let t = p.get("threshold");
-            let s = p.get("softness");
+            let (t, s) = (v.x("threshold"), v.x("softness"));
             let l = format!("{}/255", luma_at("X", "Y"));
-            let m = match (s > 0.0, p.on("invert")) {
-                (true, false) => format!("clip(({l}-{})/{},0,1)", n(t), n(s)),
-                (true, true) => format!("clip(({}-{l})/{},0,1)", n(t), n(s)),
-                (false, false) => format!("gt({l},{})", n(t)),
-                (false, true) => format!("lte({l},{})", n(t)),
+            let (soft, hard) = if p.on("invert") {
+                (format!("clip(({t}-{l})/{s},0,1)"), format!("lte({l},{t})"))
+            } else {
+                (format!("clip(({l}-{t})/{s},0,1)"), format!("gt({l},{t})"))
+            };
+            let m = if v.is("softness") {
+                format!("if(gt({s},0),{soft},{hard})")
+            } else if p.get("softness") > 0.0 {
+                soft
+            } else {
+                hard
             };
             vec![geq("r(X,Y)", "g(X,Y)", "b(X,Y)", &round(&format!("alpha(X,Y)*{m}")))]
         }
@@ -261,7 +303,7 @@ pub fn filters(id: &str, params: &BTreeMap<String, f32>, k: usize, j: usize, rat
                             let (co, si) = (n(th.cos()), n(th.sin()));
                             format!("{f}({cx}+(X-{cx})*{co}-(Y-{cy})*{si},{cy}+(X-{cx})*{si}+(Y-{cy})*{co})")
                         } else {
-                            let s = n(1.0 - p.get("amount") * i as f64 / (TAPS - 1) as f64);
+                            let s = v.f("amount", |a| 1.0 - a * i as f64 / (TAPS - 1) as f64, &format!("1-@*{i}/{}", TAPS - 1));
                             format!("{f}({cx}+(X-{cx})*{s},{cy}+(Y-{cy})*{s})")
                         }
                     })
@@ -297,9 +339,9 @@ pub fn filters(id: &str, params: &BTreeMap<String, f32>, k: usize, j: usize, rat
             vec![if p.on("vertical") { format!("rgbashift=rv={d}:bv={}", -d) } else { format!("rgbashift=rh={d}:bh={}", -d) }]
         }
         "wave" => {
-            let amp = n(p.get("amplitude"));
-            let k = n(2.0 * PI / p.get("wavelength"));
-            let ph = n(p.get("phase").to_radians());
+            let amp = v.x("amplitude");
+            let k = v.f("wavelength", |w| 2.0 * PI / w, "2*PI/@");
+            let ph = v.f("phase", f64::to_radians, "@*PI/180");
             if p.on("vertical") {
                 vec![remap("", "X", &format!("Y+{amp}*sin(X*{k}+{ph})"))]
             } else {
@@ -310,21 +352,21 @@ pub fn filters(id: &str, params: &BTreeMap<String, f32>, k: usize, j: usize, rat
             let (cx, cy) = center();
             let pre = format!(
                 "st(0,X-{cx});st(1,Y-{cy});st(2,1-clip(sqrt(ld(0)*ld(0)+ld(1)*ld(1))/({}*min(W,H)),0,1));st(2,{}*ld(2)*ld(2));",
-                n(p.get("radius")),
-                n(p.get("angle").to_radians())
+                v.x("radius"),
+                v.f("angle", f64::to_radians, "@*PI/180")
             );
             vec![remap(&pre, &format!("{cx}+ld(0)*cos(ld(2))-ld(1)*sin(ld(2))"), &format!("{cy}+ld(0)*sin(ld(2))+ld(1)*cos(ld(2))"))]
         }
         "bulge" => {
             let (cx, cy) = center();
-            let rr = format!("({}*min(W,H))", n(p.get("radius")));
-            let e = n(2f64.powf(p.get("amount")));
+            let rr = format!("({}*min(W,H))", v.x("radius"));
+            let e = v.f("amount", |a| 2f64.powf(a), "pow(2,@)");
             let pre = format!("st(0,X-{cx});st(1,Y-{cy});st(2,sqrt(ld(0)*ld(0)+ld(1)*ld(1)));st(3,if(lt(ld(2),{rr})*gt(ld(2),0),{rr}*pow(ld(2)/{rr},{e})/ld(2),1));");
             vec![remap(&pre, &format!("{cx}+ld(0)*ld(3)"), &format!("{cy}+ld(1)*ld(3)"))]
         }
         "lensDistortion" => {
-            let k = p.get("amount") * 0.5;
-            let pre = format!("st(0,X-W/2);st(1,Y-H/2);st(2,(1+{}*(ld(0)*ld(0)+ld(1)*ld(1))/(0.25*(W*W+H*H)))/{});", n(k), n(1.0 + k));
+            let (k, k1) = (v.f("amount", |a| a * 0.5, "@*0.5"), v.f("amount", |a| 1.0 + a * 0.5, "1+@*0.5"));
+            let pre = format!("st(0,X-W/2);st(1,Y-H/2);st(2,(1+{k}*(ld(0)*ld(0)+ld(1)*ld(1))/(0.25*(W*W+H*H)))/{k1});");
             vec![remap(&pre, "W/2+ld(0)*ld(2)", "H/2+ld(1)*ld(2)")]
         }
         "kaleidoscope" => {
@@ -352,13 +394,13 @@ pub fn filters(id: &str, params: &BTreeMap<String, f32>, k: usize, j: usize, rat
         }
         "scanlines" => {
             let sp = p.get("spacing");
-            let f = format!("(1-{}*lt(mod(Y,{}),{}))", n(p.get("darkness")), n(sp), n(sp / 2.0));
+            let f = format!("(1-{}*lt(mod(Y,{}),{}))", v.x("darkness"), n(sp), n(sp / 2.0));
             let ch = |c: &str| round(&format!("{c}(X,Y)*{f}"));
             vec![geq(&ch("r"), &ch("g"), &ch("b"), "alpha(X,Y)")]
         }
         "filmGrain" => {
             let s = n(p.get("size"));
-            let amt = n(p.get("amount") * 255.0);
+            let amt = v.f("amount", |a| a * 255.0, "@*255");
             let color = p.on("color");
             let ch = |f: &str, i: usize| {
                 let ci = if color { i } else { 0 };
@@ -385,7 +427,7 @@ pub fn filters(id: &str, params: &BTreeMap<String, f32>, k: usize, j: usize, rat
             let lum = |dx: i32, dy: i32| luma_at(&format!("X+{dx}"), &format!("Y+{dy}"));
             let gx = format!("({}+2*{}+{}-{}-2*{}-{})", lum(1, -1), lum(1, 0), lum(1, 1), lum(-1, -1), lum(-1, 0), lum(-1, 1));
             let gy = format!("({}+2*{}+{}-{}-2*{}-{})", lum(-1, 1), lum(0, 1), lum(1, 1), lum(-1, -1), lum(0, -1), lum(1, -1));
-            let mag = format!("st(0,{gx});st(1,{gy});st(2,clip(sqrt(ld(0)*ld(0)+ld(1)*ld(1))*{}/4,0,255));", n(p.get("amount")));
+            let mag = format!("st(0,{gx});st(1,{gy});st(2,clip(sqrt(ld(0)*ld(0)+ld(1)*ld(1))*{}/4,0,255));", v.x("amount"));
             let v = if p.on("invert") { format!("{mag}{}", round("255-ld(2)")) } else { format!("{mag}{}", round("ld(2)")) };
             vec![geq(&v, &v, &v, "alpha(X,Y)")]
         }
@@ -414,14 +456,20 @@ pub fn filters(id: &str, params: &BTreeMap<String, f32>, k: usize, j: usize, rat
         }
         "shapeMask" => {
             let (cx, cy) = center();
-            let (hw, hh) = (format!("({}*W/2)", n(p.get("width"))), format!("({}*H/2)", n(p.get("height"))));
+            let (hw, hh) = (format!("({}*W/2)", v.x("width")), format!("({}*H/2)", v.x("height")));
             let d = if p.get("shape") >= 0.5 {
                 format!("(1-sqrt(pow((X-{cx})/{hw},2)+pow((Y-{cy})/{hh},2)))*min({hw},{hh})")
             } else {
                 format!("min({hw}-abs(X-{cx}),{hh}-abs(Y-{cy}))")
             };
-            let fe = p.get("feather");
-            let m = if fe > 0.0 { format!("clip(({d})/{},0,1)", n(fe)) } else { format!("gt({d},0)") };
+            let fe = v.x("feather");
+            let m = if v.is("feather") {
+                format!("if(gt({fe},0),clip(({d})/{fe},0,1),gt({d},0))")
+            } else if p.get("feather") > 0.0 {
+                format!("clip(({d})/{fe},0,1)")
+            } else {
+                format!("gt({d},0)")
+            };
             let m = if p.on("invert") { format!("(1-{m})") } else { m };
             vec![geq("r(X,Y)", "g(X,Y)", "b(X,Y)", &round(&format!("alpha(X,Y)*{m}")))]
         }

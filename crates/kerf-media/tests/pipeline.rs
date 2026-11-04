@@ -486,7 +486,7 @@ fn effect_stack_renders() {
     })
     .unwrap();
     let v = out.created[0];
-    let fx = |kind| Effect { id: Uuid::new_v4(), enabled: true, name: String::new(), kind };
+    let fx = Effect::new;
     let effects = vec![
         fx(EffectKind::ChromaKey { color: [0.0, 1.0, 0.0], similarity: 0.12, blend: 0.05, spill: 0.5 }),
         fx(EffectKind::Lut { path: cube, intensity: 0.5 }),
@@ -553,7 +553,7 @@ fn catalog_effects_render() {
             mode: PlaceMode::Overwrite, source_in: Some(0), source_out: Some(2), match_sequence: false,
         })
         .unwrap();
-        let fx = Effect { id: Uuid::new_v4(), enabled: true, name: String::new(), kind: EffectKind::Fx { fx: d.id.to_string(), params: kerf_core::fx::defaults(d) } };
+        let fx = Effect::new(EffectKind::Fx { fx: d.id.to_string(), params: kerf_core::fx::defaults(d) });
         kerf_core::ops::apply(&mut p, &EditCommand::SetEffects { sequence: seq, clips: vec![out.created[0]], effects: vec![fx] }).unwrap();
     }
     let file = dir.path().join("catalog.mp4");
@@ -1580,4 +1580,127 @@ fn noise_reduction_renders_the_cached_sound() {
     let (back, jobs) = render(&p, "off.mov");
     assert!(jobs.is_empty());
     assert!((rms(&samples(&tools, &back, 0.2, 1.2)) - noise_dry).abs() < 1e-4);
+}
+
+/// RGB bytes of frame `n` of `file`.
+fn frame_rgb(tools: &Tools, file: &Path, n: u32) -> Vec<u8> {
+    let out = tools
+        .ffmpeg_cmd()
+        .args(["-i"])
+        .arg(file)
+        .args(["-vf", &format!("select=eq(n\\,{n})"), "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"])
+        .output()
+        .unwrap();
+    assert!(out.status.success() && !out.stdout.is_empty(), "frame {n} of {}", file.display());
+    out.stdout
+}
+
+/// Animated effect parameters: every frame of the animated export equals an
+/// export of the same effect with the values of that frame (the preview
+/// evaluates the keys the same way, `Clip::effect_at`, and runs the effect
+/// with those values). Covers the per-frame commands of the blur, the
+/// vignette's expression, catalogue effects through `geq` expressions and
+/// the freeform mask, standing and moving.
+#[test]
+fn animated_effects_match_their_values_per_frame() {
+    let Some(tools) = tools() else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("bars.mp4");
+    ffmpeg(&tools, &["-f", "lavfi", "-i", "testsrc2=s=160x90:r=25:d=2", "-c:v", "libx264", "-preset", "ultrafast", "-y", &src.to_string_lossy()]);
+    let asset = import(&tools, &src, &dir.path().join("cache"));
+    let id = asset.id;
+    let k = |at: i64, value: f32| Keyframe { at, value, ease: Ease::Linear };
+    let fx = |id: &str, params: &[(&str, f32)]| {
+        let d = kerf_core::fx::def(id).unwrap();
+        let mut p = kerf_core::fx::defaults(d);
+        for (key, v) in params {
+            p.insert(key.to_string(), *v);
+        }
+        EffectKind::Fx { fx: id.into(), params: p }
+    };
+    let pentagon = vec![[0.5, 0.1], [0.9, 0.4], [0.75, 0.9], [0.25, 0.9], [0.1, 0.4]];
+    type Keys<'a> = Vec<(&'a str, Vec<Keyframe>)>;
+    let cases: Vec<(&str, EffectKind, Keys)> = vec![
+        ("blur", EffectKind::Blur { radius: 0.0 }, vec![("radius", vec![k(0, 0.0), k(40, 6.0)])]),
+        ("vignette", EffectKind::Vignette { amount: 0.2 }, vec![("amount", vec![k(0, 0.1), k(49, 0.9)])]),
+        (
+            "shapeMask",
+            fx("shapeMask", &[("shape", 1.0)]),
+            vec![("centerX", vec![k(0, 0.3), k(49, 0.7)]), ("width", vec![k(10, 0.2), Keyframe { at: 40, value: 0.8, ease: Ease::EaseIn }]), ("feather", vec![k(0, 0.0), k(30, 12.0)])],
+        ),
+        ("twirl", fx("twirl", &[]), vec![("angle", vec![k(0, -120.0), k(49, 200.0)])]),
+        ("lumaKey", fx("lumaKey", &[("threshold", 0.3)]), vec![("softness", vec![k(0, 0.0), k(40, 0.4)]), ("threshold", vec![k(20, 0.2), k(49, 0.6)])]),
+        (
+            "polygon moving",
+            EffectKind::PolygonMask { points: pentagon.clone(), feather: 4.0, invert: false, x: 0.0, y: 0.0 },
+            vec![("x", vec![k(0, -0.2), k(49, 0.25)]), ("y", vec![k(0, 0.1), k(49, -0.1)])],
+        ),
+        ("polygon inverted", EffectKind::PolygonMask { points: pentagon, feather: 0.0, invert: true, x: 0.05, y: -0.03 }, vec![]),
+    ];
+    let mut p = Project::new("anim", 0);
+    p.media.push(asset);
+    let seq = p.active_sequence;
+    let settings = SequenceSettings { width: 160, height: 90, fps: Rational::new(25, 1), sample_rate: 48_000 };
+    kerf_core::ops::apply(&mut p, &EditCommand::UpdateSequenceSettings { sequence: seq, settings }).unwrap();
+    let mut clips = Vec::new();
+    for (i, (_, kind, keys)) in cases.iter().enumerate() {
+        let out = kerf_core::ops::apply(&mut p, &EditCommand::PlaceMedia {
+            sequence: seq, media: id, video_track: None, audio_track: None, at: 50 * i as i64,
+            mode: PlaceMode::Overwrite, source_in: Some(0), source_out: Some(50), match_sequence: false,
+        })
+        .unwrap();
+        let mut e = Effect::new(kind.clone());
+        e.keys = keys.iter().map(|(name, k)| (name.to_string(), k.clone())).collect();
+        kerf_core::ops::apply(&mut p, &EditCommand::SetEffects { sequence: seq, clips: vec![out.created[0]], effects: vec![e] }).unwrap();
+        clips.push(out.created[0]);
+    }
+    let export = |p: &Project, name: &str, in_out: bool| {
+        let file = dir.path().join(format!("{name}.mov"));
+        let s = ExportSettings {
+            output: file.clone(),
+            // Intra-only: equal pictures give equal frames, whatever comes before.
+            video_codec: VideoCodec::ProRes422Hq,
+            hardware: false,
+            width: 160,
+            height: 90,
+            fps: Rational::new(25, 1),
+            rate: RateControl::Quality { crf: 18 },
+            audio_codec: AudioCodec::Aac,
+            audio_bitrate_kbps: 128,
+            sample_rate: 48_000,
+            audio_channels: 2,
+            use_in_out: in_out,
+            subtitles: Default::default(),
+            title_files: Default::default(),
+            title_sequences: Default::default(),
+            loudness: None,
+            segmented: false, chapters: false, cache_dir: Some(dir.path().join("cache")),
+        };
+        let plan = render::plan(p, p.sequence(seq).unwrap(), &s, dir.path(), &[]).unwrap();
+        let mut log = String::new();
+        let res = render::render_logged(&tools, &plan, &AtomicBool::new(false), |_| {}, &mut log);
+        assert!(res.is_ok(), "{name}: {res:?}\n{log}");
+        file
+    };
+    let animated = export(&p, "animated", false);
+    for (i, (name, _, _)) in cases.iter().enumerate() {
+        for f in [0i64, 17, 33, 49] {
+            let mut q = p.clone();
+            let s = q.sequence(seq).unwrap();
+            let clip = s.tracks.iter().flat_map(|t| &t.clips).find(|c| c.id == clips[i]).unwrap().clone();
+            let e = &clip.effects[0];
+            let fixed = Effect { keys: Default::default(), ..Effect::new(clip.effect_at(e, f as f64)) };
+            kerf_core::ops::apply(&mut q, &EditCommand::SetEffects { sequence: seq, clips: vec![clip.id], effects: vec![fixed] }).unwrap();
+            let at = clip.start + f;
+            kerf_core::ops::apply(&mut q, &EditCommand::SetInOut { sequence: seq, in_point: Some(at), out_point: Some(at + 1) }).unwrap();
+            let still = export(&q, &format!("still-{i}-{f}"), true);
+            let (a, b) = (frame_rgb(&tools, &animated, at as u32), frame_rgb(&tools, &still, 0));
+            let worst = a.iter().zip(&b).map(|(x, y)| x.abs_diff(*y)).max().unwrap();
+            let differing = a.iter().zip(&b).filter(|(x, y)| x != y).count();
+            assert!(worst == 0, "{name}, frame {f}: {differing} values differ, by up to {worst}");
+        }
+    }
+    // The masks went into the cache and are reused.
+    let masks: Vec<_> = std::fs::read_dir(dir.path().join("cache/masks")).unwrap().collect();
+    assert!(!masks.is_empty());
 }

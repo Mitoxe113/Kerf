@@ -2,8 +2,8 @@
 // colour wheels and curves editors that the "Farbe" tab reuses. Edits preview
 // live through engine overrides and are committed as one setEffects step.
 
-import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Eye, FolderOpen, MoreHorizontal, Pipette, Plus, Power, RotateCcw, Trash2 } from "lucide-react";
-import { useRef, useState } from "react";
+import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Eye, FolderOpen, MoreHorizontal, Pipette, Plus, Power, RotateCcw, Shapes, Trash2 } from "lucide-react";
+import { useRef, useState, type ReactNode } from "react";
 import {
   CATEGORY_LABELS,
   EFFECT_ENTRIES,
@@ -11,6 +11,7 @@ import {
   copyEffects,
   effectLabel,
   entryEffect,
+  MASK_SHAPES,
   pasteEffects,
   pickLut,
   resetEffect,
@@ -23,6 +24,7 @@ import {
 import { prompt } from "../actions/project";
 import { curveIsIdentity, curveTable } from "../engine/effects";
 import { fxDef, fxKeys, type FxParamDef } from "../engine/fx";
+import { FxKeyNav, fxKeying, useFxFrame } from "./EffectKeys";
 import { engine } from "../engine/playback";
 import type { Clip, CurvePoint, Effect, EffectKind, Rgb, Sequence } from "../lib/types";
 import { cancelPick, useEditor } from "../state/editor";
@@ -108,14 +110,14 @@ export function EffectsSection({ seq, clips }: { seq: Sequence; clips: Clip[] })
       {compare && <p className="mb-1 rounded-xs bg-signal/15 px-1.5 py-1 text-[10.5px] text-signal">Vorher-Ansicht: der Monitor zeigt alle Clips ohne Effekte. Der Export ist davon nicht betroffen.</p>}
       {!effects.length && <p className="py-1 text-xs text-fg-4">Keine Effekte. Mit + hinzufügen oder aus dem Effekt-Browser auf einen Clip ziehen; sie wirken nach der Farbkorrektur in der Reihenfolge der Liste.</p>}
       {effects.map((e, i) => (
-        <EffectCard key={e.id} effect={e} stack={stack} first={i === 0} last={i === effects.length - 1} onMove={(d) => move(i, d)} onRemove={() => void commit(effects.filter((x) => x.id !== e.id))} />
+        <EffectCard key={e.id} effect={e} stack={stack} clip={clips.length === 1 ? clips[0] : null} first={i === 0} last={i === effects.length - 1} onMove={(d) => move(i, d)} onRemove={() => void commit(effects.filter((x) => x.id !== e.id))} />
       ))}
       {clips.length > 1 && <p className="pt-1 text-[10.5px] text-fg-4">Änderungen gelten für alle {clips.length} ausgewählten Clips (Liste des ersten Clips).</p>}
     </Section>
   );
 }
 
-function EffectCard({ effect: e, stack, first, last, onMove, onRemove }: { effect: Effect; stack: ReturnType<typeof useStack>; first: boolean; last: boolean; onMove: (d: -1 | 1) => void; onRemove: () => void }) {
+function EffectCard({ effect: e, stack, clip, first, last, onMove, onRemove }: { effect: Effect; stack: ReturnType<typeof useStack>; clip: Clip | null; first: boolean; last: boolean; onMove: (d: -1 | 1) => void; onRemove: () => void }) {
   const [open, setOpen] = useState(true);
   const label = effectLabel(e);
   const def = e.type === "fx" ? fxDef(e.fx) : undefined;
@@ -147,31 +149,37 @@ function EffectCard({ effect: e, stack, first, last, onMove, onRemove }: { effec
       </div>
       {open && (
         <div className="border-t border-line px-2 py-1.5">
-          <EffectParams effect={e} stack={stack} />
+          <EffectParams effect={e} stack={stack} clip={clip} />
         </div>
       )}
     </div>
   );
 }
 
-export function ParamRow({ label, value, min, max, step = 0.01, scale = 1, unit = "", precision = 2, onChange }: { label: string; value: number; min: number; max: number; step?: number; scale?: number; unit?: string; precision?: number; onChange: (v: number, live: boolean) => void }) {
+export function ParamRow({ label, value, min, max, step = 0.01, scale = 1, unit = "", precision = 2, extra, onChange }: { label: string; value: number; min: number; max: number; step?: number; scale?: number; unit?: string; precision?: number; extra?: ReactNode; onChange: (v: number, live: boolean) => void }) {
   // A released slider lands on a value the field can show.
   const snap = (v: number) => Math.round(v * scale * 10 ** precision) / (scale * 10 ** precision);
   return (
     <Field label={label}>
       <Slider label={label} value={value} min={min} max={max} onPreview={(v) => onChange(v, true)} onCommit={(v) => onChange(snap(v), false)} />
       <NumberField label={label} value={value * scale} min={min * scale} max={max * scale} step={step} precision={precision} unit={unit} width={62} onPreview={(v) => onChange(v / scale, true)} onCommit={(v) => onChange(v / scale, false)} />
+      {extra}
     </Field>
   );
 }
 
-function EffectParams({ effect: e, stack }: { effect: Effect; stack: ReturnType<typeof useStack> }) {
+function EffectParams({ effect: e, stack, clip }: { effect: Effect; stack: ReturnType<typeof useStack>; clip: Clip | null }) {
+  const frame = useFxFrame(clip, e);
+  const anim = fxKeying(stack, clip, e, frame);
+  const nav = (...params: string[]) => <FxKeyNav stack={stack} clip={clip} effect={e} params={params} frame={frame} />;
   const set = (p: Partial<EffectKind>, live: boolean) => stack.patch(e.id, p as Partial<Effect>, live);
   switch (e.type) {
     case "fx":
-      return <FxParamsEditor effect={e} stack={stack} />;
+      return <FxParamsEditor effect={e} stack={stack} anim={anim} nav={nav} />;
+    case "polygonMask":
+      return <PolygonParams effect={e} stack={stack} anim={anim} nav={nav} />;
     case "blur":
-      return <ParamRow label="Radius" value={e.radius} min={0} max={60} step={0.5} precision={1} unit=" px" onChange={(v, l) => set({ radius: v }, l)} />;
+      return <ParamRow label="Radius" value={anim.value("radius", e.radius)} min={0} max={60} step={0.5} precision={1} unit=" px" extra={nav("radius")} onChange={(v, l) => anim.change("radius", v, l, { radius: v })} />;
     case "sharpen":
       return (
         <>
@@ -180,7 +188,7 @@ function EffectParams({ effect: e, stack }: { effect: Effect; stack: ReturnType<
         </>
       );
     case "vignette":
-      return <ParamRow label="Stärke" value={e.amount} min={0} max={1} scale={100} step={1} precision={0} unit=" %" onChange={(v, l) => set({ amount: v }, l)} />;
+      return <ParamRow label="Stärke" value={anim.value("amount", e.amount)} min={0} max={1} scale={100} step={1} precision={0} unit=" %" extra={nav("amount")} onChange={(v, l) => anim.change("amount", v, l, { amount: v })} />;
     case "lut":
       return (
         <>
@@ -210,13 +218,21 @@ function EffectParams({ effect: e, stack }: { effect: Effect; stack: ReturnType<
   }
 }
 
+type Anim = ReturnType<typeof fxKeying>;
+type Nav = (...params: string[]) => ReactNode;
+
 /** Parameters of a catalogue effect, generated from its definition. */
-function FxParamsEditor({ effect: e, stack }: { effect: Effect & Kind<"fx">; stack: ReturnType<typeof useStack> }) {
+function FxParamsEditor({ effect: e, stack, anim, nav }: { effect: Effect & Kind<"fx">; stack: ReturnType<typeof useStack>; anim: Anim; nav: Nav }) {
   const def = fxDef(e.fx);
   const picking = useEditor((s) => s.picker !== null);
   if (!def) return <p className="text-xs text-danger">Unbekannter Effekt „{e.fx}“. Er wird beim Export ignoriert.</p>;
-  const get = (k: string, p: FxParamDef) => e.params[k] ?? p.default;
+  const animated = (k: string) => def.animated.includes(k);
+  // Animated parameters show their value at the playhead.
+  const get = (k: string, p: FxParamDef) => (animated(k) ? anim.value(k, e.params[k] ?? p.default) : (e.params[k] ?? p.default));
   const set = (values: Record<string, number>, live: boolean) => stack.patch(e.id, { params: { ...e.params, ...values } } as Partial<Effect>, live);
+  // One animated parameter: a key at the playhead when it has keys.
+  const change = (k: string, v: number, live: boolean) => (animated(k) ? anim.change(k, v, live, { params: { ...e.params, [k]: v } } as Partial<Effect>) : set({ [k]: v }, live));
+  const navOf = (...k: string[]) => (k.every(animated) ? nav(...k) : undefined);
   const pickColor = (p: FxParamDef) => {
     const [r, g, b] = fxKeys(p);
     stack.preview(stack.effects.map((x) => (x.id === e.id ? { ...x, enabled: false } : x)));
@@ -265,22 +281,50 @@ function FxParamsEditor({ effect: e, stack }: { effect: Effect & Kind<"fx">; sta
           case "point":
             return (
               <div key={p.id}>
-                <ParamRow label={`${p.label} X`} value={get(keys[0], p)} min={p.min} max={p.max} scale={100} step={1} precision={0} unit=" %" onChange={(v, l) => set({ [keys[0]]: v }, l)} />
-                <ParamRow label={`${p.label} Y`} value={get(keys[1], p)} min={p.min} max={p.max} scale={100} step={1} precision={0} unit=" %" onChange={(v, l) => set({ [keys[1]]: v }, l)} />
+                <ParamRow label={`${p.label} X`} value={get(keys[0], p)} min={p.min} max={p.max} scale={100} step={1} precision={0} unit=" %" extra={navOf(...keys)} onChange={(v, l) => change(keys[0], v, l)} />
+                <ParamRow label={`${p.label} Y`} value={get(keys[1], p)} min={p.min} max={p.max} scale={100} step={1} precision={0} unit=" %" onChange={(v, l) => change(keys[1], v, l)} />
               </div>
             );
           case "int":
             return <ParamRow key={p.id} label={p.label} value={get(p.id, p)} min={p.min} max={p.max} step={1} precision={0} unit={p.unit ?? ""} onChange={(v, l) => set({ [p.id]: Math.round(v) }, l)} />;
           case "angle":
-            return <ParamRow key={p.id} label={p.label} value={get(p.id, p)} min={p.min} max={p.max} step={1} precision={0} unit={p.unit ?? " °"} scale={p.scale ?? 1} onChange={(v, l) => set({ [p.id]: v }, l)} />;
+            return <ParamRow key={p.id} label={p.label} value={get(p.id, p)} min={p.min} max={p.max} step={1} precision={0} unit={p.unit ?? " °"} scale={p.scale ?? 1} extra={navOf(p.id)} onChange={(v, l) => change(p.id, v, l)} />;
           default: {
             const scale = p.scale ?? 1;
             const span = (p.max - p.min) * scale;
             const precision = span > 50 ? 0 : span > 5 ? 1 : 2;
-            return <ParamRow key={p.id} label={p.label} value={get(p.id, p)} min={p.min} max={p.max} scale={scale} step={10 ** -precision} precision={precision} unit={p.unit ?? ""} onChange={(v, l) => set({ [p.id]: v }, l)} />;
+            return <ParamRow key={p.id} label={p.label} value={get(p.id, p)} min={p.min} max={p.max} scale={scale} step={10 ** -precision} precision={precision} unit={p.unit ?? ""} extra={navOf(p.id)} onChange={(v, l) => change(p.id, v, l)} />;
           }
         }
       })}
+    </>
+  );
+}
+
+/** Freeform mask: shape (edited in the program monitor), soft edge, inversion and an animatable offset. */
+function PolygonParams({ effect: e, stack, anim, nav }: { effect: Effect & Kind<"polygonMask">; stack: ReturnType<typeof useStack>; anim: Anim; nav: Nav }) {
+  const editing = useEditor((s) => s.maskEdit === e.id);
+  const shapes: MenuItem[] = MASK_SHAPES.map((s) => ({ label: s.label, onSelect: () => stack.patch(e.id, { points: s.points() } as Partial<Effect>) }));
+  return (
+    <>
+      <Field label="Form">
+        <span className="min-w-0 flex-1 truncate text-xs text-fg-2">{e.points.length} Punkte</span>
+        <Button size="sm" variant={editing ? "primary" : undefined} onClick={() => useEditor.getState().set({ maskEdit: editing ? null : e.id })}>
+          {editing ? "Fertig" : "Im Monitor bearbeiten"}
+        </Button>
+        <IconButton icon={<Shapes size={12} />} size={22} label="Form ersetzen" onClick={(ev) => openContextMenu({ clientX: ev.clientX, clientY: ev.clientY }, shapes)} />
+      </Field>
+      {editing && (
+        <p className="mb-1 text-[10.5px] text-fg-4">
+          Punkte im Monitor ziehen (Clip ausgewählt, Playhead über dem Clip). Doppelklick auf eine Kante fügt einen Punkt ein, Rechtsklick auf einen Punkt entfernt ihn (3 bis 32 Punkte).
+        </p>
+      )}
+      <ParamRow label="Weiche Kante" value={e.feather} min={0} max={400} step={1} precision={0} unit=" px" onChange={(v, l) => stack.patch(e.id, { feather: v } as Partial<Effect>, l)} />
+      <Field label="Umkehren">
+        <Toggle checked={e.invert} onChange={(v) => stack.patch(e.id, { invert: v } as Partial<Effect>)} label="Maske umkehren" />
+      </Field>
+      <ParamRow label="Versatz X" value={anim.value("x", e.x)} min={-1} max={1} scale={100} step={0.1} precision={1} unit=" %" extra={nav("x", "y")} onChange={(v, l) => anim.change("x", v, l, { x: v } as Partial<Effect>)} />
+      <ParamRow label="Versatz Y" value={anim.value("y", e.y)} min={-1} max={1} scale={100} step={0.1} precision={1} unit=" %" onChange={(v, l) => anim.change("y", v, l, { y: v } as Partial<Effect>)} />
     </>
   );
 }

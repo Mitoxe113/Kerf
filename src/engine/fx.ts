@@ -32,6 +32,8 @@ export interface FxDef {
   description: string;
   params: FxParamDef[];
   heavy: boolean;
+  /** Parameter keys that can be animated with keyframes. */
+  animated: string[];
 }
 
 /** Generated from the Rust catalogue (crates/kerf-core/src/fx.rs). */
@@ -484,6 +486,21 @@ void main() {
   float m = clamp(sqrt(gx * gx + gy * gy) * u_amount / 4.0, 0.0, 255.0);
   float v = R(u_invert > 0.5 ? 255.0 - m : m);
   outColor = vec4(v, v, v, px(X).a) / 255.0;
+}`,
+  // Freeform mask: the image maskPixels rasterises (as kerf_media::mask),
+  // moved by whole pixels, and alpha·M/255 truncated like blend=all_mode=multiply.
+  polygonMask: `${HEAD}
+uniform sampler2D u_mask;
+uniform ivec2 u_shift;
+uniform int u_outside;
+void main() {
+  ivec2 p = ivec2(P());
+  vec4 c = at(p);
+  ivec2 q = p - u_shift;
+  ivec2 size = textureSize(u_mask, 0);
+  int v = any(lessThan(q, ivec2(0))) || any(greaterThanEqual(q, size)) ? u_outside : int(floor(texelFetch(u_mask, q, 0).r * 255.0 + 0.5));
+  int alpha = int(floor(c.a + 0.5));
+  outColor = vec4(c.rgb, float(alpha * v / 255)) / 255.0;
 }`,
   shapeMask: `${HEAD}
 uniform vec2 u_c, u_half;

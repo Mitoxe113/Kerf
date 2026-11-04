@@ -863,7 +863,7 @@ fn switch_angle(seq: &mut Sequence, project: &Project, clip: Uuid, angle: usize,
     c.source_in = new_in;
     c.name = to.name.clone();
     // Keys sit on source positions: they move with the picture.
-    for k in c.keys.values_mut().flatten() {
+    for k in c.keys.values_mut().chain(c.effects.iter_mut().flat_map(|e| e.keys.values_mut())).flatten() {
         k.at += shift;
     }
     Ok(true)
@@ -1368,7 +1368,7 @@ fn convert_clip(c: &mut Clip, from: Rational, to: Rational) {
     c.source_in = conv(c.source_in);
     c.fade_in = conv(c.fade_in);
     c.fade_out = conv(c.fade_out);
-    for keys in c.keys.values_mut() {
+    for keys in c.keys.values_mut().chain(c.effects.iter_mut().flat_map(|e| e.keys.values_mut())) {
         for k in keys.iter_mut() {
             k.at = conv(k.at);
         }
@@ -2072,7 +2072,9 @@ fn clean_effects(effects: &[Effect]) -> Result<Vec<Effect>> {
     let mut clean = Vec::with_capacity(effects.len());
     for e in effects {
         let kind = e.kind.sanitized().ok_or_else(|| EditError::Invalid("effect parameter".into()))?;
-        clean.push(Effect { id: e.id, enabled: e.enabled, name: e.name.chars().filter(|c| !c.is_control()).take(80).collect(), kind });
+        let mut x = Effect { id: e.id, enabled: e.enabled, name: e.name.chars().filter(|c| !c.is_control()).take(80).collect(), kind, keys: e.keys.clone() };
+        x.keys = x.clean_keys().ok_or_else(|| EditError::Invalid("effect keyframe".into()))?;
+        clean.push(x);
     }
     Ok(clean)
 }
@@ -3199,7 +3201,7 @@ mod tests {
         let mut fx = Fx::new(4.0, true);
         let ids = fx.place(0, None, None, PlaceMode::Overwrite);
         let (v, a) = (ids[0], ids[1]);
-        let effect = |kind| Effect { id: Uuid::new_v4(), enabled: true, name: String::new(), kind };
+        let effect = Effect::new;
         let stack = vec![
             effect(EffectKind::Blur { radius: 900.0 }),
             effect(EffectKind::Curves { master: vec![[0.7, 0.9], [0.2, 0.1], [0.2, 0.15], [1.0, 1.0]], red: vec![[0.0, 0.0], [1.0, 1.0]], green: vec![], blue: vec![] }),
@@ -3218,10 +3220,44 @@ mod tests {
     }
 
     #[test]
+    fn effect_keys_are_cleaned_and_evaluated_on_the_source() {
+        let mut fx = Fx::new(4.0, true);
+        let v = fx.place(0, None, None, PlaceMode::Overwrite)[0];
+        let src = fx.v1().clips[0].source_in;
+        let k = |at: i64, value: f32| Keyframe { at: src + at, value, ease: Ease::Linear };
+        let keyed = |kind: EffectKind, key: &str, keys: Vec<Keyframe>| Effect { keys: [(key.to_string(), keys)].into(), ..Effect::new(kind) };
+        // Duplicates: the last wins; values are clamped to the parameter's range; keys are sorted.
+        let blur = keyed(EffectKind::Blur { radius: 0.0 }, "radius", vec![k(10, 300.0), k(0, 2.0), k(10, 4.0), k(20, 900.0)]);
+        assert!(fx.run(EditCommand::SetEffects { sequence: fx.seq, clips: vec![v], effects: vec![blur] }).changed);
+        let c = fx.v1().clips[0].clone();
+        assert_eq!(c.effects[0].keys["radius"], vec![k(0, 2.0), k(10, 4.0), k(20, 250.0)]);
+        // An identity static value stays active while it has keys.
+        assert_eq!(c.active_effects().count(), 1);
+        assert_eq!(c.effect_at(&c.effects[0], 5.0), EffectKind::Blur { radius: 3.0 });
+        assert_eq!(c.effect_at(&c.effects[0], 40.0), EffectKind::Blur { radius: 250.0 });
+        let bad = |e: Effect| apply(&mut fx.p.clone(), &EditCommand::SetEffects { sequence: fx.seq, clips: vec![v], effects: vec![e] }).is_err();
+        // Not animatable, unknown key, non-finite value.
+        assert!(bad(keyed(EffectKind::Sharpen { amount: 1.0, radius: 1.0 }, "amount", vec![k(0, 1.0)])));
+        assert!(bad(keyed(EffectKind::Blur { radius: 1.0 }, "sigma", vec![k(0, 1.0)])));
+        assert!(bad(keyed(EffectKind::Vignette { amount: 0.2 }, "amount", vec![k(0, f32::NAN)])));
+        let twirl = EffectKind::Fx { fx: "twirl".into(), params: Default::default() };
+        assert!(!bad(keyed(twirl.clone(), "angle", vec![k(0, 30.0)])));
+        assert!(bad(keyed(EffectKind::Fx { fx: "posterize".into(), params: Default::default() }, "levels", vec![k(0, 3.0)])));
+        // Freeform masks: 3 to 32 points, clamped to the frame.
+        let mask = |n: usize| EffectKind::PolygonMask { points: (0..n).map(|i| [i as f32 * 0.1 - 0.2, 1.5]).collect(), feather: 900.0, invert: false, x: 3.0, y: 0.0 };
+        assert!(bad(Effect::new(mask(2))));
+        assert!(bad(Effect::new(mask(MAX_MASK_POINTS + 1))));
+        assert!(fx.run(EditCommand::SetEffects { sequence: fx.seq, clips: vec![v], effects: vec![keyed(mask(3), "y", vec![k(0, -2.0)])] }).changed);
+        let e = &fx.v1().clips[0].effects[0];
+        assert_eq!(e.kind, EffectKind::PolygonMask { points: vec![[0.0, 1.0], [0.0, 1.0], [0.0, 1.0]], feather: 400.0, invert: false, x: 1.0, y: 0.0 });
+        assert_eq!(e.keys["y"], vec![k(0, -1.0)]);
+    }
+
+    #[test]
     fn add_effects_appends_with_fresh_ids() {
         let mut fx = Fx::new(4.0, true);
         let v = fx.place(0, None, None, PlaceMode::Overwrite)[0];
-        let e = Effect { id: Uuid::new_v4(), enabled: true, name: "Warm".into(), kind: EffectKind::Vignette { amount: 0.3 } };
+        let e = Effect { name: "Warm".into(), ..Effect::new(EffectKind::Vignette { amount: 0.3 }) };
         assert!(fx.run(EditCommand::AddEffects { sequence: fx.seq, clips: vec![v], effects: vec![e.clone()] }).changed);
         assert!(fx.run(EditCommand::AddEffects { sequence: fx.seq, clips: vec![v], effects: vec![e.clone()] }).changed);
         let got = &fx.v1().clips[0].effects;

@@ -14,7 +14,7 @@
 //! anchor -> place anchor at frame centre + offset.
 
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsString;
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
@@ -26,7 +26,7 @@ use std::time::{Duration, Instant};
 
 use kerf_core::audio::{active as active_effects, AudioEffect, AudioEffectKind, EqShape, LIMITER_ATTACK_MS};
 use kerf_core::model::{
-    Clip, ColorTags, Cue, CurvePoint, Ease, EffectKind, Keyframe, MediaAsset, MediaKind, MediaStatus, Param, Project, Sequence, TrackKind, TransitionKind,
+    Clip, ColorTags, Cue, CurvePoint, Ease, Effect, EffectKind, Keyframe, MediaAsset, MediaKind, MediaStatus, Param, Project, Sequence, TrackKind, TransitionKind,
     TransitionSpan, VideoInfo,
 };
 use kerf_core::text::{write_subtitles, SubtitleFormat};
@@ -36,6 +36,7 @@ use uuid::Uuid;
 
 use crate::analysis::display_size;
 use crate::denoise::{self, DenoiseJob};
+use crate::mask::{self, MaskJob};
 use crate::{MediaError, Tools};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -225,6 +226,9 @@ pub struct RenderPlan {
     /// Denoised sound the export reads (see [`crate::denoise`]), rendered
     /// first where the cache does not hold it yet; kept in the cache.
     pub denoise: Vec<DenoiseJob>,
+    /// Images of freeform masks the graph reads (see [`crate::mask`]),
+    /// written first where the cache does not hold them; kept in the cache.
+    pub masks: Vec<MaskJob>,
     /// Nested sequences, rendered first (deepest first) to the files the
     /// main pass reads; removed afterwards.
     pub nested: Vec<RenderPlan>,
@@ -448,8 +452,12 @@ fn transition_chains(
 /// curves are approximated by linear pieces (one per frame, at most
 /// `BEZIER_STEPS`).
 fn param_expr(clip: &Clip, param: Param, head: Frame, var: &str, unit: f64) -> String {
-    let keys = clip.keys_of(param);
-    let (Some(first), Some(last)) = (keys.first(), keys.last()) else { return num(clip.base_value(param) as f64) };
+    keys_expr(clip, clip.keys_of(param), clip.base_value(param), head, var, unit)
+}
+
+/// [`param_expr`] for any `keys` of the clip (static value `base`).
+fn keys_expr(clip: &Clip, keys: &[Keyframe], base: f32, head: Frame, var: &str, unit: f64) -> String {
+    let (Some(first), Some(last)) = (keys.first(), keys.last()) else { return num(base as f64) };
     let pos = |k: &Keyframe| (clip.local_of(k.at) - head as f64) * unit;
     // Pieces between neighbouring keys as (from, to, expression), in timeline
     // order; a reversed clip meets its keys from the last to the first.
@@ -626,17 +634,79 @@ const GBLUR_STEPS: u32 = 4;
 /// The FFmpeg filters for one effect, as the export writes them (used by the
 /// preview/export parity check, `scripts/fx-parity.mjs`).
 pub fn effect_chain(e: &EffectKind, rate: f64, frame0: i64) -> String {
-    effect_filters(e, 0, 0, rate, frame0).join(",")
+    effect_chain_sized(e, rate, frame0, (0, 0), Path::new("")).0
+}
+
+/// [`effect_chain`] on a stream of `size` pixels, with the mask images it
+/// reads (kept under `mask_root`; the caller renders them).
+pub fn effect_chain_sized(e: &EffectKind, rate: f64, frame0: i64, size: (u32, u32), mask_root: &Path) -> (String, Vec<MaskJob>) {
+    let env = FxEnv { k: 0, j: 0, rate, frame0, anim: None, size, mask_root };
+    let mut masks = Vec::new();
+    (effect_filters(e, &env, &mut masks).join(","), masks)
+}
+
+/// What the filters of one effect need besides the effect.
+struct FxEnv<'a> {
+    /// Clip `k`, effect `j`: labels unique in the graph.
+    k: usize,
+    j: usize,
+    /// Frame rate of the stream; frame `frame0` of the clip comes first.
+    rate: f64,
+    frame0: i64,
+    /// The clip and the effect's keys when it is animated.
+    anim: Option<(&'a Clip, &'a BTreeMap<String, Vec<Keyframe>>)>,
+    /// Size of the stream (the clip fitted into the sequence).
+    size: (u32, u32),
+    mask_root: &'a Path,
+}
+
+impl FxEnv<'_> {
+    fn keys(&self, key: &str) -> Option<(&Clip, &[Keyframe])> {
+        let (clip, keys) = self.anim?;
+        keys.get(key).filter(|k| !k.is_empty()).map(|k| (clip, k.as_slice()))
+    }
+
+    /// Animated parameters as expressions of the time `t` (seconds from the
+    /// stream's start, the variable named `t`).
+    fn exprs(&self, t: &str) -> BTreeMap<String, String> {
+        let Some((clip, keys)) = self.anim else { return BTreeMap::new() };
+        let var = format!("floor({t}*{}+0.5)", num(self.rate));
+        keys.iter().filter(|(_, k)| !k.is_empty()).map(|(name, k)| (name.clone(), keys_expr(clip, k, 0.0, self.frame0, &var, 1.0))).collect()
+    }
 }
 
 /// FFmpeg filters for one effect on an RGBA stream. Branches (split/blend)
 /// use labels unique per clip `k` and effect `j`; a `;` inside a chain is
 /// valid filtergraph syntax.
-fn effect_filters(e: &EffectKind, k: usize, j: usize, rate: f64, frame0: i64) -> Vec<String> {
+fn effect_filters(e: &EffectKind, env: &FxEnv, masks: &mut Vec<MaskJob>) -> Vec<String> {
+    let (k, j) = (env.k, env.j);
     let l = |s: &str| format!("fx{k}e{j}{s}");
     let (a, b, c) = (l("a"), l("b"), l("c"));
     match e {
-        EffectKind::Blur { radius } => vec![format!("gblur=sigma={}:steps={GBLUR_STEPS}", num(*radius as f64))],
+        EffectKind::Blur { radius } => match env.keys("radius") {
+            // gblur has no expressions: the radius is sent on every frame where it changes.
+            Some((clip, keys)) => {
+                let name = format!("gblur@{}", l("g"));
+                let frame_s = 1.0 / env.rate;
+                let mut cmds = Vec::new();
+                let mut last = None;
+                for i in 0..BLUR_COMMAND_FRAMES {
+                    let local = (env.frame0 + i) as f64;
+                    if local >= clip.duration as f64 {
+                        break;
+                    }
+                    let v = clip.keys_value(keys, *radius, local);
+                    if last != Some(v) {
+                        // gblur fixes sigmaV to sigma when it starts, so both are sent.
+                        let s = num(v as f64);
+                        cmds.push(format!("{} {name} sigma {s},{name} sigmaV {s}", num(i as f64 * frame_s)));
+                        last = Some(v);
+                    }
+                }
+                vec![format!("sendcmd=c='{}'", cmds.join(";")), format!("{name}=sigma={}:steps={GBLUR_STEPS}", num(*radius as f64))]
+            }
+            None => vec![format!("gblur=sigma={}:steps={GBLUR_STEPS}", num(*radius as f64))],
+        },
         EffectKind::Sharpen { amount, radius } => {
             // `blend` stores expression results without clamping, so clip to 8 bits.
             let x = format!("clip(A+(A-B)*{},0,255)", num(*amount as f64));
@@ -645,11 +715,16 @@ fn effect_filters(e: &EffectKind, k: usize, j: usize, rate: f64, frame0: i64) ->
                 num(*radius as f64)
             )]
         }
-        EffectKind::Vignette { amount } => vec![format!(
-            // `vignette` drops alpha, so it shades a white copy that multiplies the clip.
-            "split[{a}][{b}];[{b}]drawbox=c=white:t=fill,format=rgb24,vignette=angle={}:dither=0,format=rgba[{c}];[{a}][{c}]blend=c0_mode=multiply:c1_mode=multiply:c2_mode=multiply:c3_mode=normal",
-            num(*amount as f64 * std::f64::consts::FRAC_PI_2)
-        )],
+        EffectKind::Vignette { amount } => {
+            let angle = match env.exprs("t").get("amount") {
+                Some(x) => format!("'({x})*{}':eval=frame", num(std::f64::consts::FRAC_PI_2)),
+                None => num(*amount as f64 * std::f64::consts::FRAC_PI_2),
+            };
+            vec![format!(
+                // `vignette` drops alpha, so it shades a white copy that multiplies the clip.
+                "split[{a}][{b}];[{b}]drawbox=c=white:t=fill,format=rgb24,vignette=angle={angle}:dither=0,format=rgba[{c}];[{a}][{c}]blend=c0_mode=multiply:c1_mode=multiply:c2_mode=multiply:c3_mode=normal"
+            )]
+        }
         EffectKind::Lut { path, intensity } => {
             let lut = format!("lut3d=file='{}':interp=trilinear", filter_path(path));
             if *intensity >= 1.0 {
@@ -695,8 +770,63 @@ fn effect_filters(e: &EffectKind, k: usize, j: usize, rate: f64, frame0: i64) ->
                 .collect();
             vec![format!("curves=interp=pchip:{}", parts.join(":"))]
         }
-        EffectKind::Fx { fx, params } => crate::fx::filters(fx, params, k, j, rate, frame0),
+        EffectKind::Fx { fx, params } => crate::fx::animated_filters(fx, params, &env.exprs("T"), k, j, env.rate, env.frame0),
+        EffectKind::PolygonMask { points, feather, invert, x, y } => polygon_mask(env, points, *feather, *invert, (*x, *y), masks),
     }
+}
+
+/// Frames of an animated blur that get their own radius (beyond, the last one stays).
+const BLUR_COMMAND_FRAMES: i64 = 200_000;
+
+/// Whole-pixel shift of a freeform mask moved by `v` of the frame size `size`
+/// (the preview rounds the same way).
+fn mask_shift(v: f32, size: u32) -> i64 {
+    (v as f64 * size as f64 + 0.5).floor() as i64
+}
+
+/// Filters of a freeform mask: the clip's alpha times the mask image. A
+/// moving mask stays put while the alpha moves the other way under it
+/// (`crop` follows the stream's own time), so the image is read once.
+fn polygon_mask(env: &FxEnv, points: &[[f32; 2]], feather: f32, invert: bool, (x, y): (f32, f32), masks: &mut Vec<MaskJob>) -> Vec<String> {
+    let (w, h) = env.size;
+    let l = |s: &str| format!("fx{}e{}{s}", env.k, env.j);
+    let (a, b, al, mk, al2) = (l("a"), l("b"), l("al"), l("mk"), l("al2"));
+    let moving = env.keys("x").is_some() || env.keys("y").is_some();
+    // The image is read as it is: grey from `pad` would be limited range (black 16).
+    let image = |job: &MaskJob| format!("movie=filename='{}',format=gray", filter_path(&job.out));
+    let multiply = "blend=all_mode=multiply";
+    if !moving {
+        let job = MaskJob::new(env.mask_root, (w, h), (w, h), (mask_shift(x, w), mask_shift(y, h)), points.to_vec(), feather, invert);
+        let img = image(&job);
+        masks.push(job);
+        return vec![format!("split[{a}][{b}];[{b}]alphaextract[{al}];{img}[{mk}];[{al}][{mk}]{multiply}[{al2}];[{a}][{al2}]alphamerge")];
+    }
+    // Margin for the largest shift of the animation.
+    let span = |key: &str, base: f32, size: u32| -> i64 {
+        let vals: Vec<f32> = env.keys(key).map_or(vec![base], |(_, k)| k.iter().map(|k| k.value).collect());
+        vals.iter().map(|v| mask_shift(*v, size).abs()).max().unwrap_or(0)
+    };
+    let (mx, my) = (span("x", x, w) + 1, span("y", y, h) + 1);
+    let job = MaskJob::new(env.mask_root, (w + 2 * mx as u32, h + 2 * my as u32), (w, h), (mx, my), points.to_vec(), feather, invert);
+    let img = image(&job);
+    masks.push(job);
+    let ex = env.exprs("t");
+    let d = |key: &str, base: f32, size: u32| match ex.get(key) {
+        Some(e) => format!("floor(({e})*{size}+0.5)"),
+        None => mask_shift(base, size).to_string(),
+    };
+    let (dx, dy) = (d("x", x, w), d("y", y, h));
+    // The alpha's margin never reaches the output, whatever `pad` fills it with.
+    vec![format!(
+        "split[{a}][{b}];[{b}]alphaextract,pad=w=iw+{px}:h=ih+{py}:x={px2}:y={py2},crop=w={cw}:h={ch}:x='{mx}+{dx}':y='{my}+{dy}'[{al}];\
+         {img}[{mk}];[{al}][{mk}]{multiply},crop=w={w}:h={h}:x='{mx}-{dx}':y='{my}-{dy}'[{al2}];[{a}][{al2}]alphamerge",
+        px = 4 * mx,
+        py = 4 * my,
+        px2 = 2 * mx,
+        py2 = 2 * my,
+        cw = w as i64 + 2 * mx,
+        ch = h as i64 + 2 * my,
+    )]
 }
 
 /// BT.601 limited-range Y'CbCr (0..255) of an RGB colour in 0..1, as the
@@ -1484,6 +1614,7 @@ fn segmented(
         sidecar: None,
         measure: full.measure.clone(),
         denoise: Vec::new(),
+        masks: Vec::new(),
         nested: Vec::new(),
         parts: Vec::new(),
         sound: None,
@@ -1570,6 +1701,9 @@ fn plan_one(
 
     let mut args: Vec<OsString> = ["-hide_banner", "-nostdin", "-loglevel", "warning", "-y"].iter().map(OsString::from).collect();
     let mut chains: Vec<String> = Vec::new();
+    // Freeform masks are cached next to the denoised sound.
+    let mask_root = denoise_root(s, work_dir);
+    let mut masks: Vec<MaskJob> = Vec::new();
     let mut inputs = 0usize;
     let mut files: Vec<(PathBuf, String)> = Vec::new();
 
@@ -1691,7 +1825,7 @@ fn plan_one(
             }
             // Colour first, then the effect stack, then opacity: with effects the
             // alpha multiplier is a second mixer so a key cannot discard it.
-            let effects: Vec<&EffectKind> = clip.active_effects().map(|e| &e.kind).collect();
+            let effects: Vec<&Effect> = clip.active_effects().collect();
             let dynamic = fading || clip.color_animated();
             let mixer = if dynamic { format!("colorchannelmixer@op{k}") } else { "colorchannelmixer".into() };
             let alpha_mixer = if effects.is_empty() { mixer.clone() } else { format!("colorchannelmixer@al{k}") };
@@ -1747,7 +1881,9 @@ fn plan_one(
                 f.push(format!("{name}={}", opts.join(":")));
             }
             for (j, e) in effects.iter().enumerate() {
-                f.extend(effect_filters(e, k, j, sf.as_f64(), seg.head));
+                let anim = (!e.keys.is_empty()).then_some((clip, &e.keys));
+                let env = FxEnv { k, j, rate: sf.as_f64(), frame0: seg.head, anim, size: (fw, fh), mask_root: &mask_root };
+                f.extend(effect_filters(&e.kind, &env, &mut masks));
             }
             if !effects.is_empty() {
                 if clip.opacity < 1.0 || dynamic {
@@ -2082,6 +2218,7 @@ fn plan_one(
         sidecar,
         measure,
         denoise: Vec::new(),
+        masks,
         nested: Vec::new(),
         parts: Vec::new(),
         sound: None,
@@ -2256,6 +2393,21 @@ fn render_denoise(tools: &Tools, job: &DenoiseJob, cancel: &AtomicBool, mut prog
     }
 }
 
+/// Mask images of `plan` and the plans it runs, each once.
+fn all_masks(plan: &RenderPlan) -> Vec<&MaskJob> {
+    let mut out: Vec<&MaskJob> = Vec::new();
+    let mut stack = vec![plan];
+    while let Some(p) = stack.pop() {
+        for m in &p.masks {
+            if !out.iter().any(|x| x.out == m.out) {
+                out.push(m);
+            }
+        }
+        stack.extend(p.nested.iter().chain(&p.parts).chain(p.sound.as_deref()));
+    }
+    out
+}
+
 /// [`render`], recording the command line and FFmpeg's warnings and errors in `log`.
 pub fn render_logged(
     tools: &Tools,
@@ -2265,6 +2417,9 @@ pub fn render_logged(
     log: &mut String,
 ) -> Result<(), MediaError> {
     let mut result = Ok(());
+    for job in all_masks(plan) {
+        mask::render(job)?;
+    }
     let jobs = plan.denoise.len();
     for (i, job) in plan.denoise.iter().enumerate() {
         log.push_str(&format!("# Rauschunterdrückung {} von {jobs}: {}\n", i + 1, job.src.display()));

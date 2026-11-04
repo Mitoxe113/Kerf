@@ -12,8 +12,9 @@
 // Passes run at the clip's fitted size (sequence pixels at scale 1, times the
 // canvas scale) in RGBA8 framebuffers with straight alpha, as FFmpeg does.
 
-import type { CurvePoint, Effect, EffectKind } from "../lib/types";
-import { FX_SHADERS, fxIsIdentity, fxMatrix, fxReader, glowFn, toneFns, toneTable, toneTexture } from "./fx";
+import { keysValue } from "../lib/keys";
+import type { Clip, CurvePoint, Effect, EffectKind } from "../lib/types";
+import { FX_SHADERS, fxDef, fxIsIdentity, fxKeys, fxMatrix, fxReader, glowFn, toneFns, toneTable, toneTexture } from "./fx";
 
 export const isIdentityEffect = (e: EffectKind): boolean => {
   switch (e.type) {
@@ -33,11 +34,141 @@ export const isIdentityEffect = (e: EffectKind): boolean => {
       return [e.master, e.red, e.green, e.blue].every(curveIsIdentity);
     case "fx":
       return fxIsIdentity(e.fx, e.params);
+    case "polygonMask":
+      return false;
   }
 };
 
 export const curveIsIdentity = (c: CurvePoint[]) => c.length < 2 || c.every(([x, y]) => Math.abs(x - y) < 1e-6);
-export const activeEffects = (effects: Effect[] | undefined, bypass = false) => (bypass ? [] : (effects ?? []).filter((e) => e.enabled && !isIdentityEffect(e)));
+/** Enabled effects that change the picture; animated ones always count (kerf_core Clip::active_effects). */
+export const activeEffects = (effects: Effect[] | undefined, bypass = false) =>
+  bypass ? [] : (effects ?? []).filter((e) => e.enabled && (effectHasKeys(e) || !isIdentityEffect(e)));
+
+// --- animated parameters (kerf_core Effect::keys) -------------------------------------
+
+/** Most points of a freeform mask (kerf_core MAX_MASK_POINTS). */
+export const MAX_MASK_POINTS = 32;
+
+export const effectHasKeys = (e: Effect) => Object.values(e.keys ?? {}).some((k) => k && k.length > 0);
+
+/** Range of parameter `key` when it can be animated (kerf_core EffectKind::animatable). */
+export function effectAnimatable(e: EffectKind, key: string): [number, number] | null {
+  switch (e.type) {
+    case "blur":
+      return key === "radius" ? [0, 250] : null;
+    case "vignette":
+      return key === "amount" ? [0, 1] : null;
+    case "polygonMask":
+      return key === "x" || key === "y" ? [-1, 1] : null;
+    case "fx": {
+      const d = fxDef(e.fx);
+      if (!d?.animated.includes(key)) return null;
+      const p = d.params.find((x) => fxKeys(x).includes(key));
+      return p ? [p.min, p.max] : null;
+    }
+    default:
+      return null;
+  }
+}
+
+/** Static value of animatable parameter `key`. */
+export function effectValue(e: EffectKind, key: string): number {
+  switch (e.type) {
+    case "blur":
+      return e.radius;
+    case "vignette":
+      return e.amount;
+    case "polygonMask":
+      return key === "x" ? e.x : key === "y" ? e.y : 0;
+    case "fx":
+      return fxReader(e.fx, e.params).get(key);
+    default:
+      return 0;
+  }
+}
+
+/** `e` with animatable parameter `key` set to `v` (kerf_core EffectKind::set_value). */
+export function withEffectValue(e: Effect, key: string, v: number): Effect {
+  switch (e.type) {
+    case "blur":
+      return key === "radius" ? { ...e, radius: v } : e;
+    case "vignette":
+      return key === "amount" ? { ...e, amount: v } : e;
+    case "polygonMask":
+      return key === "x" ? { ...e, x: v } : key === "y" ? { ...e, y: v } : e;
+    case "fx":
+      return { ...e, params: { ...e.params, [key]: v } };
+    default:
+      return e;
+  }
+}
+
+/** Effect `e` of clip `c` with its animated parameters at clip-local frame `local` (Clip::effect_at). */
+export function effectAt(c: Clip, e: Effect, local: number): Effect {
+  let out = e;
+  for (const [key, keys] of Object.entries(e.keys ?? {})) if (keys && keys.length) out = withEffectValue(out, key, keysValue(c, keys, 0, local));
+  return out;
+}
+
+/** Whole-pixel shift of a mask moved by `v` of a `size`-pixel frame (kerf_media::render::mask_shift). */
+export const maskShift = (v: number, size: number) => Math.floor(Math.fround(v) * size + 0.5);
+
+// Freeform mask raster, the same arithmetic as kerf_media::mask (f32 inputs
+// widened to f64, integer crossing test on a 1/256 px grid), so preview and
+// export produce the same image.
+const GRID = 256;
+
+/** Outline in 1/256 px of a w×h frame (kerf_media::mask::outline without a move). */
+export function maskOutline(points: [number, number][], w: number, h: number): [number, number][] {
+  return points.slice(0, MAX_MASK_POINTS).map(([x, y]) => [Math.floor(Math.fround(x) * w * GRID + 0.5), Math.floor(Math.fround(y) * h * GRID + 0.5)]);
+}
+
+/** Mask value 0..1 at pixel (x, y) of an outline in 1/256 px (kerf_media::mask::coverage). */
+export function maskCoverage(pts: [number, number][], feather: number, x: number, y: number): number {
+  const [gx, gy] = [x * GRID, y * GRID];
+  const n = pts.length;
+  let inside = false;
+  for (let i = 0; i < n; i++) {
+    const [ax, ay] = pts[i];
+    const [bx, by] = pts[(i + 1) % n];
+    if (ay > gy !== by > gy) {
+      const l = (gx - ax) * (by - ay);
+      const r = (gy - ay) * (bx - ax);
+      if ((by > ay && l < r) || (by < ay && l > r)) inside = !inside;
+    }
+  }
+  if (!inside) return 0;
+  if (feather <= 0) return 1;
+  let d2 = Infinity;
+  for (let i = 0; i < n; i++) {
+    const [ax, ay] = [pts[i][0] / GRID, pts[i][1] / GRID];
+    const [bx, by] = [pts[(i + 1) % n][0] / GRID, pts[(i + 1) % n][1] / GRID];
+    const [dx, dy] = [bx - ax, by - ay];
+    const len2 = dx * dx + dy * dy;
+    const t = len2 > 0 ? Math.min(1, Math.max(0, ((x - ax) * dx + (y - ay) * dy) / len2)) : 0;
+    const [ex, ey] = [x - ax - t * dx, y - ay - t * dy];
+    d2 = Math.min(d2, ex * ex + ey * ey);
+  }
+  return Math.min(1, Math.max(0, Math.sqrt(d2) / feather));
+}
+
+/** The unmoved 8-bit mask of a w×h frame, rows from the top (kerf_media::mask::pixels). */
+export function maskPixels(points: [number, number][], feather: number, invert: boolean, w: number, h: number): Uint8Array {
+  const out = new Uint8Array(w * h).fill(invert ? 255 : 0);
+  const pts = maskOutline(points, w, h);
+  if (pts.length < 3) return out;
+  const xs = pts.map((p) => p[0]);
+  const ys = pts.map((p) => p[1]);
+  const lo = (v: number) => Math.max(0, Math.floor(v / GRID));
+  const hi = (v: number, n: number) => Math.min(n, Math.max(0, Math.floor((v + GRID - 1) / GRID)));
+  const f = Math.fround(feather);
+  for (let y = lo(Math.min(...ys)); y < hi(Math.max(...ys), h); y++)
+    for (let x = lo(Math.min(...xs)); x < hi(Math.max(...xs), w); x++) {
+      const v = Math.floor(maskCoverage(pts, f, x, y) * 255 + 0.5);
+      out[y * w + x] = invert ? 255 - v : v;
+    }
+  return out;
+}
 
 // --- curves (same algorithm as FFmpeg's vf_curves interp=pchip) ----------------------
 
@@ -272,6 +403,7 @@ export class EffectPipeline {
   private luts = new Map<string, { tex: WebGLTexture; cube: Cube } | "loading" | "failed">();
   private curves = new Map<string, WebGLTexture>();
   private tables = new Map<string, WebGLTexture>();
+  private masks = new Map<string, WebGLTexture>();
 
   constructor(
     private gl: WebGL2RenderingContext,
@@ -399,6 +531,34 @@ export class EffectPipeline {
         this.curves.clear();
       }
       this.curves.set(key, t);
+    }
+    return t;
+  }
+
+  /** Unmoved mask image of a freeform mask (R8), cached by shape and size. */
+  private maskTex(points: [number, number][], feather: number, invert: boolean, w: number, h: number): WebGLTexture {
+    const key = `${w}x${h}|${feather}|${invert}|${points.join(";")}`;
+    let t = this.masks.get(key);
+    if (t) {
+      // Most recently used last.
+      this.masks.delete(key);
+      this.masks.set(key, t);
+      return t;
+    }
+    const gl = this.gl;
+    t = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, w, h, 0, gl.RED, gl.UNSIGNED_BYTE, maskPixels(points, feather, invert, w, h));
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    this.masks.set(key, t);
+    // A dragged point makes a new shape per move: keep only the latest few.
+    while (this.masks.size > 8) {
+      const [old, tex] = this.masks.entries().next().value!;
+      gl.deleteTexture(tex);
+      this.masks.delete(old);
     }
     return t;
   }
@@ -812,6 +972,20 @@ export class EffectPipeline {
           cur = out;
           break;
         }
+        case "polygonMask": {
+          if (e.points.length < 3) break;
+          const mask = this.maskTex(e.points, e.feather * scale, e.invert, cur.w, cur.h);
+          const out = next();
+          this.pass("polygonMask", cur.tex, out, (pr) => {
+            gl.activeTexture(gl.TEXTURE1);
+            gl.bindTexture(gl.TEXTURE_2D, mask);
+            gl.uniform1i(pr.loc("u_mask"), 1);
+            gl.uniform2i(pr.loc("u_shift"), maskShift(e.x, cur.w), maskShift(e.y, cur.h));
+            gl.uniform1i(pr.loc("u_outside"), e.invert ? 255 : 0);
+          });
+          swap(out);
+          break;
+        }
         case "curves": {
           const t = this.curveTex(e);
           const out = next();
@@ -842,6 +1016,8 @@ export class EffectPipeline {
     this.curves.clear();
     for (const t of this.tables.values()) gl.deleteTexture(t);
     this.tables.clear();
+    for (const t of this.masks.values()) gl.deleteTexture(t);
+    this.masks.clear();
     for (const p of this.programs.values()) gl.deleteProgram(p.p);
     this.programs.clear();
   }

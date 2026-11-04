@@ -264,7 +264,7 @@ mod tests {
         let seq = p.active_sequence;
         let mut v = Track::new(TrackKind::Video, "V1");
         let mut c1 = Clip::new(ma.id, "a", 0, 10, 0);
-        c1.effects.push(Effect { id: Uuid::new_v4(), enabled: true, name: String::new(), kind: EffectKind::Lut { path: lut.clone(), intensity: 1.0 } });
+        c1.effects.push(Effect::new(EffectKind::Lut { path: lut.clone(), intensity: 1.0 }));
         v.clips = vec![c1, Clip::new(mb.id, "b", 10, 10, 0), Clip::new(mg.id, "g", 20, 10, 0)];
         p.sequence_mut(seq).unwrap().tracks = vec![v];
         p.media = vec![ma.clone(), mb.clone(), mg, mu];

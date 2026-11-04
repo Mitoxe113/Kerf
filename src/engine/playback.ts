@@ -22,7 +22,7 @@ import type { Clip, ClipPatch, Denoise, MediaAsset, Sequence, Subtitles, TitleSp
 import { AudioMixer, effectsMessage } from "./audio";
 import { transitionInto, type TransitionSpan } from "../timeline/geometry";
 import { Compositor, type DrawItem, type Layer, type LayerSource, wipeOf } from "./compositor";
-import { activeEffects } from "./effects";
+import { activeEffects, effectAt } from "./effects";
 import { dbToGain, IDENTITY_COLOR, IDENTITY_TRANSFORM, place, quadMatrix } from "./math";
 import { cueAt, cueCanvas, setFontListener, titleCanvas } from "./text";
 
@@ -913,7 +913,8 @@ export class PlaybackEngine {
     const opacity = a.opacity * fadeGain(c, frame);
     if (t.scale <= 0 || opacity <= 0) return null;
     const p = place(t, sw, sh, W, H);
-    const effects = activeEffects(c.effects, c.fxBypass || this.compareBypass);
+    // Animated parameters at this frame (kerf_core Clip::effect_at).
+    const effects = activeEffects(c.effects, c.fxBypass || this.compareBypass).map((e) => effectAt(c, e, frame - c.start));
     // Effects run at the fitted size (scale 1) in canvas pixels.
     const fxScale = s.px;
     return {

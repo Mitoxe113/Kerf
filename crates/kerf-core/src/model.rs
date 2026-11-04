@@ -886,7 +886,8 @@ impl Clip {
 
     /// Enabled effects, in processing order.
     pub fn active_effects(&self) -> impl Iterator<Item = &Effect> {
-        self.effects.iter().filter(|e| !self.fx_bypass && e.enabled && !e.kind.is_identity())
+        // An animated effect may leave the picture alone only at some frames.
+        self.effects.iter().filter(|e| !self.fx_bypass && e.enabled && (!e.keys.is_empty() || !e.kind.is_identity()))
     }
 
     pub fn end(&self) -> Frame {
@@ -1049,9 +1050,14 @@ impl Clip {
     /// keys the curve runs over timeline time (equal to source time at a
     /// constant speed), so a speed ramp does not bend the other curves.
     pub fn param_at(&self, param: Param, local: f64) -> f32 {
-        let keys = self.keys_of(param);
+        self.keys_value(self.keys_of(param), self.base_value(param), local)
+    }
+
+    /// Value of a property with `keys` (static value `base`) at clip-local
+    /// timeline frame `local`; see [`Clip::param_at`].
+    pub fn keys_value(&self, keys: &[Keyframe], base: f32, local: f64) -> f32 {
         if keys.is_empty() {
-            return self.base_value(param);
+            return base;
         }
         if !self.is_warped() {
             return eval_keys(keys, self.source_at(local));
@@ -1070,6 +1076,17 @@ impl Clip {
             }
         }
         keys[keys.len() - 1].value
+    }
+
+    /// Effect `e` with its animated parameters at clip-local frame `local`.
+    pub fn effect_at(&self, e: &Effect, local: f64) -> EffectKind {
+        let mut kind = e.kind.clone();
+        for (key, keys) in &e.keys {
+            if !keys.is_empty() {
+                kind.set_value(key, self.keys_value(keys, 0.0, local));
+            }
+        }
+        kind
     }
 
     /// Static (non-animated) value of `param`.
@@ -1225,7 +1242,46 @@ pub struct Effect {
     pub name: String,
     #[serde(flatten)]
     pub kind: EffectKind,
+    /// Animated parameters by key ([`EffectKind::animatable`]); like the
+    /// clip's keys they sit on source positions.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub keys: BTreeMap<String, Vec<Keyframe>>,
 }
+
+impl Effect {
+    pub fn new(kind: EffectKind) -> Self {
+        Self { id: Uuid::new_v4(), enabled: true, name: String::new(), kind, keys: BTreeMap::new() }
+    }
+
+    /// The keys with their values clamped to the parameter's range, sorted
+    /// and without duplicates (the last wins); `None` for a key the effect
+    /// cannot animate or a non-finite value. Empty lists are dropped.
+    pub fn clean_keys(&self) -> Option<BTreeMap<String, Vec<Keyframe>>> {
+        let mut out = BTreeMap::new();
+        for (param, keys) in &self.keys {
+            let (lo, hi) = self.kind.animatable(param)?;
+            let mut clean: Vec<Keyframe> = Vec::with_capacity(keys.len());
+            for k in keys {
+                if !k.value.is_finite() {
+                    return None;
+                }
+                let k = Keyframe { value: k.value.clamp(lo, hi), ease: k.ease.sanitized(), ..*k };
+                match clean.iter_mut().find(|x| x.at == k.at) {
+                    Some(x) => *x = k,
+                    None => clean.push(k),
+                }
+            }
+            clean.sort_by_key(|k| k.at);
+            if !clean.is_empty() {
+                out.insert(param.clone(), clean);
+            }
+        }
+        Some(out)
+    }
+}
+
+/// Most points of a freeform mask.
+pub const MAX_MASK_POINTS: usize = 32;
 
 /// A point of a tone curve, input and output in 0..1.
 pub type CurvePoint = [f32; 2];
@@ -1255,9 +1311,53 @@ pub enum EffectKind {
         #[serde(default)]
         params: BTreeMap<String, f32>,
     },
+    /// Freeform mask: the clip stays visible inside the polygon `points`
+    /// (0..1 of the clip's frame, moved by `x`, `y`), with a soft edge of
+    /// `feather` pixels running inwards from the outline; `invert` keeps the
+    /// outside instead.
+    PolygonMask {
+        points: Vec<[f32; 2]>,
+        feather: f32,
+        invert: bool,
+        #[serde(default)]
+        x: f32,
+        #[serde(default)]
+        y: f32,
+    },
 }
 
 impl EffectKind {
+    /// Range of parameter `key` when it can be animated with keyframes.
+    pub fn animatable(&self, key: &str) -> Option<(f32, f32)> {
+        match self {
+            EffectKind::Blur { .. } if key == "radius" => Some((0.0, 250.0)),
+            EffectKind::Vignette { .. } if key == "amount" => Some((0.0, 1.0)),
+            EffectKind::PolygonMask { .. } if key == "x" || key == "y" => Some((-1.0, 1.0)),
+            EffectKind::Fx { fx, .. } => {
+                let def = crate::fx::def(fx)?;
+                if !def.animated.contains(&key) {
+                    return None;
+                }
+                def.params.iter().find(|p| crate::fx::keys(p).iter().any(|k| k == key)).map(|p| (p.min, p.max))
+            }
+            _ => None,
+        }
+    }
+
+    /// Sets animatable parameter `key` (no effect for other keys).
+    pub fn set_value(&mut self, key: &str, v: f32) {
+        match self {
+            EffectKind::Blur { radius } if key == "radius" => *radius = v,
+            EffectKind::Vignette { amount } if key == "amount" => *amount = v,
+            EffectKind::PolygonMask { x, .. } if key == "x" => *x = v,
+            EffectKind::PolygonMask { y, .. } if key == "y" => *y = v,
+            EffectKind::Fx { params, .. } => {
+                params.insert(key.to_string(), v);
+            }
+            _ => {}
+        }
+    }
+
     /// True when the effect leaves every pixel unchanged.
     pub fn is_identity(&self) -> bool {
         match self {
@@ -1269,6 +1369,7 @@ impl EffectKind {
             EffectKind::ColorWheels { lift, gamma, gain } => lift.iter().all(|v| *v == 0.0) && gamma.iter().chain(gain).all(|v| *v == 1.0),
             EffectKind::Curves { master, red, green, blue } => [master, red, green, blue].iter().all(|c| curve_is_identity(c)),
             EffectKind::Fx { fx, params } => crate::fx::is_identity(fx, params),
+            EffectKind::PolygonMask { .. } => false,
         }
     }
 
@@ -1305,6 +1406,13 @@ impl EffectKind {
             EffectKind::Fx { fx, params } => {
                 let def = crate::fx::def(fx)?;
                 EffectKind::Fx { fx: fx.clone(), params: crate::fx::sanitize(def, params)? }
+            }
+            EffectKind::PolygonMask { points, feather, invert, x, y } => {
+                if points.len() < 3 || points.len() > MAX_MASK_POINTS {
+                    return None;
+                }
+                let points = points.iter().map(|p| Some([ok(p[0])?.clamp(0.0, 1.0), ok(p[1])?.clamp(0.0, 1.0)])).collect::<Option<Vec<_>>>()?;
+                EffectKind::PolygonMask { points, feather: ok(*feather)?.clamp(0.0, 400.0), invert: *invert, x: ok(*x)?.clamp(-1.0, 1.0), y: ok(*y)?.clamp(-1.0, 1.0) }
             }
         })
     }
