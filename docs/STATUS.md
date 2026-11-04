@@ -95,7 +95,7 @@ Dieser Abschnitt hat einen anderen Prüfstand als „Fertig und verifiziert“: 
 - **Linux:** Ohne laufenden Secret Service (GNOME Keyring, KWallet) lässt sich ein Schlüssel nur für die Sitzung merken.
 - **Downloads** werden nicht fortgesetzt und überleben keinen Neustart. Sammlungen gibt es im Backend, aber noch ohne Oberfläche. Stockmedien lassen sich nicht direkt in die Timeline ziehen (Umweg über die Projektmedien oder „Am Playhead einfügen“).
 - **Schriften:** Schriftsammlungen (`.ttc`/`.otc`) sind nicht importierbar; Systemschriften werden über ihren Namen von der WebView aufgelöst; Online-Schriften (z. B. Google Fonts) fehlen; variable Achsen außer der Stärke sind nicht einstellbar.
-- **Effekte:** Effektparameter sind nicht keyframebar; Punkt-Parameter haben keine Auswahl im Monitor; Mischmodi wirken nicht innerhalb von Übergängen; Schiebe-Übergänge (Push/Slide) fehlen; optischer Fluss ist nicht umgesetzt.
+- **Effekte:** Effektparameter sind nicht keyframebar; Punkt-Parameter haben keine Auswahl im Monitor; Mischmodi wirken nicht innerhalb von Übergängen; optischer Fluss ist nicht umgesetzt.
 - **Plugin-Grundlage** ist nicht umgesetzt.
 
 ## Fertig und verifiziert
@@ -144,6 +144,7 @@ Dieser Abschnitt hat einen anderen Prüfstand als „Fertig und verifiziert“: 
 **Übergänge**
 - Blende, Abblende über Farbe, Wischen und Audio-Kreuzblende; Lage Mitte/ab/bis Schnitt, höchstens die halbe Länge jedes Clips. Standard-Übergang mit `Strg+Umschalt+D`, verknüpftes Audio bekommt eine Kreuzblende.
 - Beide Clips laufen mit echten Handles in den Übergang (sonst stehendes erstes/letztes Bild). Parität Vorschau ↔ Export im Mittel 1,4–2,6 Tonwerte auf 9 Fällen.
+- **Schieben (Push) und Hereingleiten (Slide)** in vier Richtungen: Der eingehende Clip folgt der Kante des gleichgerichteten Wischens (floor(Größe · Fortschritt) Pixel), beim Schieben bewegt sich der ausgehende Clip mit. Bewegt werden nur die beiden Clips, Spuren darunter bleiben stehen. Verschiebung in ganzen Pixeln; Vorschau gegen Definition bei 10, 25, 50 und 80 % ohne Abweichung (`scripts/transition-parity.mjs`), Export mit echtem FFmpeg in Pipeline-Test geprüft.
 
 **Audio**
 - **Clip- und Spureffekte:** parametrischer EQ (Hoch-/Tiefpass, Shelves, Glocke), Kompressor, Noise-Gate, Limiter. Die Vorschau rechnet mit Ports derselben FFmpeg-Filter im AudioWorklet (Abweichung < 1e-5 gegen FFmpegs Ausgabe).
@@ -198,7 +199,7 @@ Dieser Abschnitt hat einen anderen Prüfstand als „Fertig und verifiziert“: 
 | `kerf-core` Fuzz | 1 | Zufällige Befehlsfolgen über `History` (300 Seeds, `KERF_FUZZ_SEEDS` für mehr; 40 000 bestanden): nach jedem Schritt sortierte Clips, jedes gezeigte Bild im Medium, gültige Geschwindigkeiten, Blenden, Keyframes, Übergänge, Marker und Untertitel, exaktes Undo/Redo, unverändertes Projekt nach Fehlern, verlustfreies JSON |
 | `kerf-media` Unit | 32 | Probe-Parsing, FFmpeg-Versionserkennung, Filtergraph, CBR/Mono/Letterbox, EBU-R128-Parser, Teilgrenzen und Plan des segmentierten Exports, Titel-Folgen, Kapitel, Szenen/Stille/Beats/Momente an synthetischen Signalen |
 | `kerf-media` Erkennung | 1 | Echtes FFmpeg: Schnitte bei 2 s und 4 s, Bereichsanalyse, Stille 1,5–3 s, Abbruch |
-| `kerf-media` Pipeline | 16 | Echtes FFmpeg: Schnitt → Render → Pixelprüfung, Abbruch, Keyframes, animierte Farbe, Effekt-Stapel, Lautheit, Untertitel, Übergänge inkl. Masken, Mischmodi, animierte Titel, Audio-Effekte und Loudnorm, Rückwärts und Rampen, verschachtelte Sequenzen, Multicam-Synchronisation, segmentiert = ein Stück (inkl. Kapitel) |
+| `kerf-media` Pipeline | 17 | Echtes FFmpeg: Schnitt → Render → Pixelprüfung, Abbruch, Keyframes, animierte Farbe, Effekt-Stapel, Lautheit, Untertitel, Übergänge inkl. Masken, Schieben und Hereingleiten, Mischmodi, animierte Titel, Audio-Effekte und Loudnorm, Rückwärts und Rampen, verschachtelte Sequenzen, Multicam-Synchronisation, segmentiert = ein Stück (inkl. Kapitel) |
 | `kerf-library` | 13 | Migrationen, Presets (Prüfung, Export/Import), Favoriten, Recents, Titelvorlagen, Assets und Sammlungen, Schriften (Import, Ablehnung, Entfernen) |
 | `kerf-assets` | 10 | Anbieter-Parser, Lizenzzuordnung, URL-Regeln, Inhaltsprüfung, Berichte; Mock-Server: Suche, Schlüssel, Download, abgelehnte Inhalte und Weiterleitungen, Abbruch, 429 |
 | App-Crate | 7 | Versionen, Projektdatei-Argument, Endung beim Speichern, Untertitel-Kodierung, Datumsformat, Relink-Suche, Wiederherstellung nach Absturz |

@@ -20,7 +20,7 @@ import { fileUrl, previewSource } from "../lib/media";
 import type { Clip, ClipPatch, MediaAsset, Sequence, Subtitles, TitleSpec, Track, TrackKind, Uuid } from "../lib/types";
 import { AudioMixer, effectsMessage } from "./audio";
 import { transitionInto, type TransitionSpan } from "../timeline/geometry";
-import { Compositor, type DrawItem, type Layer, type LayerSource } from "./compositor";
+import { Compositor, type DrawItem, type Layer, type LayerSource, wipeOf } from "./compositor";
 import { activeEffects } from "./effects";
 import { dbToGain, IDENTITY_COLOR, IDENTITY_TRANSFORM, place, quadMatrix } from "./math";
 import { cueAt, cueCanvas, setFontListener, titleCanvas } from "./text";
@@ -905,7 +905,8 @@ export class PlaybackEngine {
       const tr = transitionAt(track, s.frame);
       if (tr) {
         const [a, b] = [this.layerOf(this.effectiveClip(tr.a), s), this.layerOf(this.effectiveClip(tr.b), s)];
-        const vertical = tr.span.kind === "wipeUp" || tr.span.kind === "wipeDown";
+        const wipe = wipeOf(tr.span.kind);
+        const vertical = wipe === "wipeUp" || wipe === "wipeDown";
         const size = vertical ? H : W;
         if (a || b) out.push({ key: `tr:${s.path}${tr.b.id}`, kind: tr.span.kind, p: tr.p, edge: Math.floor(size * tr.p + 1e-4) / size, a, b });
         continue;

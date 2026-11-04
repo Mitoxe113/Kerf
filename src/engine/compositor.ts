@@ -149,6 +149,49 @@ export const BLEND_MODES: BlendMode[] = ["normal", "multiply", "screen", "overla
 const FULL_QUAD = new Float32Array([2, 0, 0, 0, 2, 0, -1, -1, 1]);
 /** Mask transitions in the order of the shader's u_mask (1-based). */
 export const MASK_TRANSITIONS: TransitionKind[] = ["irisRound", "irisBox", "clock", "barnDoorH", "barnDoorV", "wipeDiagonal", "blinds"];
+
+type Wipe = "wipeLeft" | "wipeRight" | "wipeUp" | "wipeDown";
+/** Push and slide (TransitionKind::motion in kerf-core): the wipe whose edge
+ * they follow and whether the outgoing clip moves along. */
+export const MOTION: Partial<Record<TransitionKind, [Wipe, boolean]>> = {
+  pushLeft: ["wipeLeft", true],
+  pushRight: ["wipeRight", true],
+  pushUp: ["wipeUp", true],
+  pushDown: ["wipeDown", true],
+  slideLeft: ["wipeLeft", false],
+  slideRight: ["wipeRight", false],
+  slideUp: ["wipeUp", false],
+  slideDown: ["wipeDown", false],
+};
+
+/** The wipe a transition's edge follows (itself for wipes), for the edge's axis. */
+export const wipeOf = (kind: TransitionKind): TransitionKind => MOTION[kind]?.[0] ?? kind;
+
+/**
+ * Pixel offsets (x right, y down) of the incoming and outgoing clip of a push
+ * or slide with its edge `ex`, `ey` pixels in, as render.rs moves them; the
+ * outgoing offset is null for a slide.
+ */
+export function motionOffsets(kind: TransitionKind, ex: number, ey: number, width: number, height: number): { b: [number, number]; a: [number, number] | null } | null {
+  const m = MOTION[kind];
+  if (!m) return null;
+  const [inc, out]: [[number, number], [number, number]] = {
+    wipeLeft: [[width - ex, 0], [-ex, 0]],
+    wipeRight: [[ex - width, 0], [ex, 0]],
+    wipeUp: [[0, height - ey], [0, -ey]],
+    wipeDown: [[0, ey - height], [0, ey]],
+  }[m[0]] as [[number, number], [number, number]];
+  return { b: inc, a: m[1] ? out : null };
+}
+
+/** `l` moved by `dx`, `dy` pixels of a `width` x `height` target (y down, as in the sequence). */
+function shifted(l: Layer, dx: number, dy: number, width: number, height: number): Layer {
+  if (!dx && !dy) return l;
+  const m = Float32Array.from(l.matrix);
+  m[6] += (2 * dx) / width;
+  m[7] -= (2 * dy) / height;
+  return { ...l, matrix: m };
+}
 const NO_CROP: [number, number, number, number] = [0, 0, 0, 0];
 
 export const SCOPE_W = 256;
@@ -318,10 +361,14 @@ export class Compositor {
       // The incoming clip goes over a copy of the stack so far, the outgoing one over the stack.
       const cb = this.fx.acquire(width, height);
       this.copy(acc!.fbo, cb.fbo, width, height);
+      // Push and slide move the clips by whole pixels with the wipe's edge.
+      const move = motionOffsets(it.kind, Math.round(it.edge * width), Math.round(it.edge * height), width, height);
+      const a = it.a && move?.a ? shifted(it.a, move.a[0], move.a[1], width, height) : it.a;
+      const b = it.b && move ? shifted(it.b, move.b[0], move.b[1], width, height) : it.b;
       this.bindMain(into, width, height);
-      if (it.a) this.drawLayer(it.a, into, width, height, upload);
+      if (a) this.drawLayer(a, into, width, height, upload);
       this.bindMain(cb.fbo, width, height);
-      if (it.b) this.drawLayer(it.b, cb.fbo, width, height, upload);
+      if (b) this.drawLayer(b, cb.fbo, width, height, upload);
       this.mix(it, cb.tex, into, width, height);
       this.fx.release(cb);
     }
@@ -397,7 +444,7 @@ export class Compositor {
       gl.bindTexture(gl.TEXTURE_2D, tex);
       this.quad(FULL_QUAD, NO_CROP, IDENTITY_COLOR, opacity, true);
     };
-    switch (t.kind) {
+    switch (wipeOf(t.kind)) {
       case "dipBlack":
       case "dipWhite": {
         const colour = this.solid(t.kind === "dipBlack" ? "black" : "white");
@@ -422,7 +469,7 @@ export class Compositor {
           wipeLeft: [width - ex, 0, ex, height],
           wipeDown: top,
           wipeUp: bottom,
-        }[t.kind];
+        }[wipeOf(t.kind) as Wipe];
         gl.enable(gl.SCISSOR_TEST);
         gl.scissor(box[0], box[1], box[2], box[3]);
         layer(cb, 1);

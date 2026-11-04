@@ -1400,3 +1400,76 @@ fn animated_title_frames_render() {
     let secs: f64 = probe_entries(&tools, &file, &["-show_entries", "format=duration"]).parse().unwrap_or(0.0);
     assert!((secs - 2.0).abs() < 0.05, "length {secs}");
 }
+
+#[test]
+fn push_and_slide_move_the_clips() {
+    let Some(tools) = tools() else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    let make = |name: &str, colour: &str| {
+        let src = d.join(name);
+        ffmpeg(&tools, &["-f", "lavfi", "-i", &format!("color=c={colour}:s=320x180:r=25:d=4"), "-c:v", "libx264", "-preset", "ultrafast", "-y", &src.to_string_lossy()]);
+        import(&tools, &src, &d.join("cache"))
+    };
+    let (bg, a, b) = (make("grey.mp4", "0x808080"), make("white.mp4", "white"), make("dark.mp4", "0x404040"));
+    let (bg_id, a_id, b_id) = (bg.id, a.id, b.id);
+    let mut p = Project::new("m", 0);
+    p.media.extend([bg, a, b]);
+    let seq = p.active_sequence;
+    let settings = SequenceSettings { width: 320, height: 180, fps: Rational::new(25, 1), sample_rate: 48_000 };
+    let run = |p: &mut Project, cmd: EditCommand| kerf_core::ops::apply(p, &cmd).unwrap();
+    run(&mut p, EditCommand::UpdateSequenceSettings { sequence: seq, settings });
+    let v2 = p.sequence(seq).unwrap().tracks[1].id;
+    let place = |media, video_track, at| EditCommand::PlaceMedia {
+        sequence: seq, media, video_track, audio_track: None, at,
+        mode: PlaceMode::Overwrite, source_in: Some(25), source_out: Some(75), match_sequence: false,
+    };
+    // Grey 0..100 on V1; on V2 white 0..50 and dark grey 50..100, both at half
+    // size in the middle (x 80..240, y 45..135), so the grey shows around them.
+    run(&mut p, place(bg_id, None, 0));
+    run(&mut p, place(bg_id, None, 50));
+    let first = run(&mut p, place(a_id, Some(v2), 0)).created[0];
+    let second = run(&mut p, place(b_id, Some(v2), 50)).created[0];
+    run(&mut p, EditCommand::UpdateClips {
+        sequence: seq, clips: vec![first, second],
+        patch: ClipPatch { transform: Some(Transform { scale: 0.5, ..Default::default() }), ..Default::default() },
+    });
+    let render = |p: &mut Project, kind: TransitionKind| {
+        let items = vec![TransitionEdit { clip: second, transition: Some(Transition { kind, duration: 20, align: TransitionAlign::Center }) }];
+        run(p, EditCommand::SetTransitions { sequence: seq, items });
+        let file = d.join(format!("{kind:?}.mp4"));
+        let export = ExportSettings {
+            output: file.clone(), video_codec: VideoCodec::H264, hardware: false, width: 320, height: 180,
+            fps: Rational::new(25, 1), rate: RateControl::Quality { crf: 10 }, audio_codec: AudioCodec::Aac,
+            audio_bitrate_kbps: 192, sample_rate: 48_000, audio_channels: 2, use_in_out: false,
+            subtitles: Default::default(), title_files: Default::default(), title_sequences: Default::default(), loudness: None, segmented: false, chapters: false,
+        };
+        let plan = render::plan(p, p.sequence(seq).unwrap(), &export, d, &[]).unwrap();
+        let mut log = String::new();
+        let res = render::render_logged(&tools, &plan, &AtomicBool::new(false), |_| {}, &mut log);
+        assert!(res.is_ok(), "{kind:?}: {res:?}\n{log}");
+        file
+    };
+    let (white, dark, grey) = (255.0, 64.0, 128.0);
+    // Frame 50 (2 s) is half way through 40..60: the edge is at 160 px (90 px vertically).
+    let columns = |f: &Path| [4, 84, 164, 244].map(|x| region_luma(&tools, f, 2.0, (x, 50, 72, 80)));
+    let rows = |f: &Path| [4, 49, 94, 139].map(|y| region_luma(&tools, f, 2.0, (84, y, 152, 36)));
+    let check = |kind: TransitionKind, got: [f64; 4], want: [f64; 4]| {
+        eprintln!("{kind:?}: {got:.1?}");
+        for (g, w) in got.iter().zip(want) {
+            assert!((g - w).abs() < 8.0, "{kind:?}: {got:.1?}, want {want:?}");
+        }
+    };
+    // Push left: the white clip moved 160 px left (0..80), the dark one came in 160 px from the right (240..320).
+    check(TransitionKind::PushLeft, columns(&render(&mut p, TransitionKind::PushLeft)), [white, grey, grey, dark]);
+    // Slide left: the white clip stays (80..160 of it still shown), the dark one as in the push.
+    check(TransitionKind::SlideLeft, columns(&render(&mut p, TransitionKind::SlideLeft)), [grey, white, grey, dark]);
+    check(TransitionKind::PushRight, columns(&render(&mut p, TransitionKind::PushRight)), [dark, grey, grey, white]);
+    check(TransitionKind::SlideRight, columns(&render(&mut p, TransitionKind::SlideRight)), [dark, grey, white, grey]);
+    check(TransitionKind::PushUp, rows(&render(&mut p, TransitionKind::PushUp)), [white, grey, grey, dark]);
+    check(TransitionKind::SlideDown, rows(&render(&mut p, TransitionKind::SlideDown)), [dark, grey, white, grey]);
+    // Before and after the transition both clips sit in the middle.
+    let f = render(&mut p, TransitionKind::PushLeft);
+    assert!((region_luma(&tools, &f, 1.5, (84, 50, 152, 80)) - white).abs() < 8.0, "white clip in place before");
+    assert!((region_luma(&tools, &f, 2.5, (84, 50, 152, 80)) - dark).abs() < 8.0, "dark clip in place after");
+}

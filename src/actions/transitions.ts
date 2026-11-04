@@ -23,6 +23,14 @@ export const TRANSITIONS: { value: TransitionKind; label: string; short: string 
   { value: "barnDoorV", label: "Tür vertikal öffnen", short: "Tür ↕" },
   { value: "wipeDiagonal", label: "Wischen diagonal", short: "Wisch ↘" },
   { value: "blinds", label: "Jalousie", short: "Jalousie" },
+  { value: "pushLeft", label: "Schieben nach links", short: "Schieben ←" },
+  { value: "pushRight", label: "Schieben nach rechts", short: "Schieben →" },
+  { value: "pushUp", label: "Schieben nach oben", short: "Schieben ↑" },
+  { value: "pushDown", label: "Schieben nach unten", short: "Schieben ↓" },
+  { value: "slideLeft", label: "Hereingleiten nach links", short: "Gleiten ←" },
+  { value: "slideRight", label: "Hereingleiten nach rechts", short: "Gleiten →" },
+  { value: "slideUp", label: "Hereingleiten nach oben", short: "Gleiten ↑" },
+  { value: "slideDown", label: "Hereingleiten nach unten", short: "Gleiten ↓" },
   { value: "crossfade", label: "Kreuzblende", short: "Kreuzblende" },
 ];
 

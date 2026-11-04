@@ -555,11 +555,41 @@ pub enum TransitionKind {
     WipeDiagonal,
     /// Ten horizontal bands, each filling from its top edge.
     Blinds,
+    // Push and slide follow the wipe of the same direction (see
+    // `TransitionKind::motion`): the incoming clip moves in behind the edge;
+    // a push moves the outgoing clip out with it. Tracks below stay put.
+    PushLeft,
+    PushRight,
+    PushUp,
+    PushDown,
+    SlideLeft,
+    SlideRight,
+    SlideUp,
+    SlideDown,
 }
 
 impl TransitionKind {
     pub fn is_audio(self) -> bool {
         self == TransitionKind::Crossfade
+    }
+
+    /// For push and slide: the wipe whose edge they follow (the incoming clip
+    /// is shown up to it, moved so that its far edge sits on it) and whether
+    /// the outgoing clip moves along (push). The edge is at floor(size * p)
+    /// pixels, as for the wipe. Mirrored by `MOTION` in src/engine/compositor.ts.
+    pub fn motion(self) -> Option<(TransitionKind, bool)> {
+        use TransitionKind as K;
+        Some(match self {
+            K::PushLeft => (K::WipeLeft, true),
+            K::PushRight => (K::WipeRight, true),
+            K::PushUp => (K::WipeUp, true),
+            K::PushDown => (K::WipeDown, true),
+            K::SlideLeft => (K::WipeLeft, false),
+            K::SlideRight => (K::WipeRight, false),
+            K::SlideUp => (K::WipeUp, false),
+            K::SlideDown => (K::WipeDown, false),
+            _ => return None,
+        })
     }
 
     /// For mask transitions: the condition (FFmpeg expression over pixel

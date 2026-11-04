@@ -273,7 +273,7 @@ fn random_command(r: &mut Rng, p: &Project, clipboard: &[PasteItem]) -> EditComm
             EditCommand::SetKeyframes { sequence, clip: clip.unwrap_or_default(), param, keys }
         }
         18 => {
-            let kind = [TransitionKind::Dissolve, TransitionKind::Crossfade, TransitionKind::WipeLeft, TransitionKind::IrisRound][r.below(4)];
+            let kind = [TransitionKind::Dissolve, TransitionKind::Crossfade, TransitionKind::WipeLeft, TransitionKind::IrisRound, TransitionKind::PushUp][r.below(5)];
             let align = [TransitionAlign::Center, TransitionAlign::Start, TransitionAlign::End][r.below(3)];
             let items = some_clips(r).into_iter().map(|clip| TransitionEdit { clip, transition: r.chance(80).then(|| Transition { kind, duration: r.range(-2, 60), align }) }).collect();
             EditCommand::SetTransitions { sequence, items }

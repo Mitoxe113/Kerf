@@ -288,7 +288,15 @@ export type TransitionKind =
   | "barnDoorH"
   | "barnDoorV"
   | "wipeDiagonal"
-  | "blinds";
+  | "blinds"
+  | "pushLeft"
+  | "pushRight"
+  | "pushUp"
+  | "pushDown"
+  | "slideLeft"
+  | "slideRight"
+  | "slideUp"
+  | "slideDown";
 export type TransitionAlign = "center" | "start" | "end";
 export interface Transition {
   kind: TransitionKind;

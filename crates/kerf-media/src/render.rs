@@ -305,6 +305,39 @@ struct Layer {
     y: String,
 }
 
+/// Start and length in seconds of `span` in the output, which begins at frame `t0`.
+fn span_window(span: TransitionSpan, t0: Frame, sf: Rational) -> (f64, f64) {
+    let ws = sf.frames_to_seconds(span.t0 - t0);
+    (ws, sf.frames_to_seconds(span.t1 - t0) - ws)
+}
+
+/// Overlay offsets in pixels (x, y expressions over the output time `t`) of
+/// a push or slide in the output window `ws`..`ws + d`: for the incoming clip,
+/// and for the outgoing one (`None` for a slide). The edge is
+/// floor(size * p), as the wipe draws it, so both sides move by whole pixels.
+fn motion_offsets(kind: TransitionKind, ws: f64, d: f64, (w, h): (u32, u32)) -> Option<([String; 2], Option<[String; 2]>)> {
+    let (wipe, push) = kind.motion()?;
+    let edge = |size: u32| format!("floor({size}*max(t-{},0)/{}+0.0001)", num(ws), num(d));
+    let zero = || "0".to_string();
+    let (incoming, outgoing) = match wipe {
+        TransitionKind::WipeLeft => ([format!("{w}-{}", edge(w)), zero()], [format!("-{}", edge(w)), zero()]),
+        TransitionKind::WipeRight => ([format!("{}-{w}", edge(w)), zero()], [edge(w), zero()]),
+        TransitionKind::WipeUp => ([zero(), format!("{h}-{}", edge(h))], [zero(), format!("-{}", edge(h))]),
+        _ => ([zero(), format!("{}-{h}", edge(h))], [zero(), edge(h)]),
+    };
+    Some((incoming, push.then_some(outgoing)))
+}
+
+/// Overlay position `base` moved by `offset`. The overlay truncates its
+/// position, so the base is truncated first and the move stays whole pixels.
+fn moved(base: &str, offset: &str) -> String {
+    if offset == "0" {
+        base.to_string()
+    } else {
+        format!("trunc({base})+({offset})")
+    }
+}
+
 /// Mixes the composite with the outgoing clip (`ca`) into the composite of
 /// `below` with the incoming clip (`clip`, absent when it is not shown)
 /// inside `span`; returns the mixed stream's label. With p = (frame - t0) /
@@ -325,17 +358,19 @@ fn transition_chains(
     (w, h): (u32, u32),
 ) -> String {
     let frame_s = 1.0 / of.as_f64();
-    let ws = sf.frames_to_seconds(span.t0 - t0);
-    let we = sf.frames_to_seconds(span.t1 - t0);
-    let d = we - ws;
+    let (ws, d) = span_window(span, t0, sf);
+    let we = ws + d;
     let window = |from: f64| format!("between(t,{},{})", num(from), num(we - 0.5 * frame_s));
     let cb = match clip {
         Some(l) => {
+            // Push and slide: the incoming clip moves in behind the wipe's edge.
+            let (x, y) = match motion_offsets(span.kind, ws, d, (w, h)) {
+                Some(([dx, dy], _)) => (moved(&l.x, &dx), moved(&l.y, &dy)),
+                None => (l.x.clone(), l.y.clone()),
+            };
             chains.push(format!(
-                "[{below}][{}]overlay=x={}:y={}:eof_action=pass:format=rgb:enable='{}'[cb{n}]",
+                "[{below}][{}]overlay=x='{x}':y='{y}':eof_action=pass:format=rgb:enable='{}'[cb{n}]",
                 l.label,
-                l.x,
-                l.y,
                 window(ws - 0.5 * frame_s)
             ));
             format!("cb{n}")
@@ -374,8 +409,10 @@ fn transition_chains(
         TransitionKind::Dissolve | TransitionKind::Crossfade => {
             format!("{},format=rgb24,fade=t=in:st=0:d={},extractplanes=r", src("white"), num(d))
         }
-        wipe => {
+        kind => {
             // A white block slides over black; its edge is the wipe's edge.
+            // Push and slide show the incoming side up to the same edge.
+            let wipe = kind.motion().map_or(kind, |(wipe, _)| wipe);
             let edge = |size: &str| format!("floor({size}*t/{}+0.0001)", num(d));
             let (x, y) = match wipe {
                 TransitionKind::WipeRight => (format!("-W+{}", edge("W")), "0".to_string()),
@@ -1737,8 +1774,17 @@ fn plan_one(
                     num(sf.frames_to_seconds(from - t0) - 0.5 * frame_s),
                     num(sf.frames_to_seconds(p.end - t0) - 0.5 * frame_s)
                 );
+                // A push into the next clip moves this one out with the edge.
+                let push = outgoing.and_then(|s| {
+                    let (ws, d) = span_window(s, t0, sf);
+                    motion_offsets(s.kind, ws, d, (seq.settings.width, seq.settings.height))?.1
+                });
+                let (px, py) = match push {
+                    Some([dx, dy]) => (moved(&p.x, &dx), moved(&p.y, &dy)),
+                    None => (p.x.clone(), p.y.clone()),
+                };
                 if clip.blend_mode.is_normal() {
-                    chains.push(format!("[{last}][{label}]overlay=x={}:y={}:eof_action=pass:format=rgb:enable='{enable}'[{out}]", p.x, p.y));
+                    chains.push(format!("[{last}][{label}]overlay=x='{px}':y='{py}':eof_action=pass:format=rgb:enable='{enable}'[{out}]"));
                 } else {
                     // The clip on a transparent full frame (colour premultiplied
                     // by the overlay), blended with the composite, then laid
@@ -1746,7 +1792,7 @@ fn plan_one(
                     let k = p.k;
                     let (fw, fh) = (seq.settings.width, seq.settings.height);
                     chains.push(format!("color=c=black@0:s={fw}x{fh}:r={},format=rgba[bcv{k}]", rate_str(of)));
-                    chains.push(format!("[bcv{k}][{label}]overlay=x={}:y={}:eof_action=pass:format=rgb,format=rgba,split[bla{k}][blc{k}]", p.x, p.y));
+                    chains.push(format!("[bcv{k}][{label}]overlay=x='{px}':y='{py}':eof_action=pass:format=rgb,format=rgba,split[bla{k}][blc{k}]"));
                     chains.push(format!("[{last}]split[bbase{k}][btop{k}]"));
                     chains.push(format!("[btop{k}]format=gbrp[bA{k}]"));
                     chains.push(format!("[blc{k}]format=gbrp[bB{k}]"));

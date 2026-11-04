@@ -39,10 +39,10 @@ Zuverlässigkeit (Deltas, geteilte Undo-Schnappschüsse, Autosave, Versionen, Wi
 ## Kreativ-Ökosystem ◐
 
 - ✅ Effekt-Katalog (38 Effekte), Effekt-Browser, Presets, Favoriten, Kopieren/Einfügen, Bypass, Vorher/Nachher
-- ✅ Mischmodi je Clip, Masken-Übergänge, Übergangs-Presets
+- ✅ Mischmodi je Clip, Masken-Übergänge, Schiebe- und Gleit-Übergänge, Übergangs-Presets
 - ✅ Schriften (System, importiert, mitgeliefert) mit Lizenzangaben aus der Datei, erweiterter Textstil, Textanimation, Titelvorlagen
 - ◐ Stockmedien: Pexels, GIPHY, Freesound, Openverse mit geprüften Downloads, Bibliothek und Lizenzbericht; **noch nicht live mit echten Schlüsseln geprüft**
-- ☐ Pixabay, Freesound-Originale (OAuth2), Online-Schriften, Plugin-Grundlage, keyframebare Effektparameter, Push/Slide-Übergänge
+- ☐ Pixabay, Freesound-Originale (OAuth2), Online-Schriften, Plugin-Grundlage, keyframebare Effektparameter
 
 ## Werkzeuge und Projektverwaltung ◐
 

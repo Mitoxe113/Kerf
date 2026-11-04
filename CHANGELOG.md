@@ -7,6 +7,7 @@ Format nach [Keep a Changelog](https://keepachangelog.com/de/1.1.0/), Versionen 
 ### Hinzugefügt
 - Lautstärke-Gummiband auf Audioclips in der Timeline: Linie und Keyframes ziehen, Strg+Klick setzt oder entfernt Keyframes.
 - Keyframes einzeln kopieren und einfügen (Inspector und Timeline).
+- Übergänge Schieben (Push) und Hereingleiten (Slide) in vier Richtungen; Spuren darunter bleiben stehen.
 
 ### Behoben
 - Schnitt: Teilen und Slip runden die Quellposition nicht mehr auf; ein Teil konnte sonst ein Bild über das Clipende oder das Medium hinausreichen.
