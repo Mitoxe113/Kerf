@@ -149,6 +149,7 @@ Dieser Abschnitt hat einen anderen Prüfstand als „Fertig und verifiziert“: 
 **Audio**
 - **Clip- und Spureffekte:** parametrischer EQ (Hoch-/Tiefpass, Shelves, Glocke), Kompressor, Noise-Gate, Limiter. Die Vorschau rechnet mit Ports derselben FFmpeg-Filter im AudioWorklet (Abweichung < 1e-5 gegen FFmpegs Ausgabe).
 - **Kanalzuordnung** pro Clip (Stereo, Mono, nur links/rechts, getauscht), Mono-Spuren, Panorama in Vorschau und Export gleich. Spuren mit Effekten oder Mono werden einzeln gemischt (Summe → Effekte → Regler).
+- **Rauschunterdrückung** je Audioclip (FFmpeg `afftdn`, Inspector): Stärke, Rauschpegel, Nachführen und ein Rauschprofil (15 Bänder), das aus dem Bereich zwischen In- und Out-Punkt gelernt wird. Der entrauschte Ton wird einmal je Medium und Einstellung als WAV (32 Bit Gleitkomma) in den Medien-Cache gerechnet; Vorschau und Export lesen dieselbe Datei, der Export rechnet fehlende Dateien vorab (Fortschritt „Rauschunterdrückung“). Bis die Datei fertig ist, spielt die Vorschau den Originalton und sagt das an. Pipeline-Test `noise_reduction_renders_the_cached_sound` mit FFmpeg 6.1: Export gleich Cache-Datei (Abweichung höchstens 1,5/32768), Rauschen von −44,4 auf −52,8 dBFS bei unverändertem Ton (−21,1 dBFS), mit gelerntem Profil 5,4 dB weniger Rauschen als mit dem Standardprofil (−47,4 dBFS), zweiter Export ohne neue Berechnung. Chromium spielt die Cache-Datei ab; in WebView2 unter Windows noch nicht von Hand geprüft.
 - **Lautheit:** Normalisieren nach Peak/True Peak/LUFS mit **optionalem Limiter** an der Obergrenze; **Loudness-Normalisierung beim Export** in zwei Durchgängen (`loudnorm`, linear); **LUFS-Anzeige** (momentan, kurzzeit, integriert) am Master.
 - Mixer, Spur-Fader, Mute/Solo, Pegel- und RMS-Anzeige mit Clip-LED, Übersteuerungsanzeige in der Wellenform.
 
@@ -194,18 +195,18 @@ Dieser Abschnitt hat einen anderen Prüfstand als „Fertig und verifiziert“: 
 
 | Bereich | Anzahl | Was |
 | --- | --- | --- |
-| `kerf-core` Unit | 83 | Zeit/Timecode, alle Edit-Befehle (inkl. `addEffects`, `addMarkers`, `batch`), Ducking-Kurve, Archiv, Zeitabbildung (Rampen, Rückwärts), Übergänge und Masken, verschachtelte Sequenzen, Multicam, Untertitel, Textstil und Animation, Keyframes inkl. Bezier, Undo, Projektdatei inkl. unbekannter Felder und unterbrochenem Speichern |
+| `kerf-core` Unit | 84 | Zeit/Timecode, alle Edit-Befehle (inkl. `addEffects`, `addMarkers`, `batch`), Ducking-Kurve, Archiv, Zeitabbildung (Rampen, Rückwärts), Übergänge und Masken, verschachtelte Sequenzen, Multicam, Untertitel, Textstil und Animation, Keyframes inkl. Bezier, Undo, Projektdatei inkl. unbekannter Felder und unterbrochenem Speichern |
 | `kerf-core` Parität | 1 | Farbmatrix gegen gemeinsame Fixture |
 | `kerf-core` Fuzz | 1 | Zufällige Befehlsfolgen über `History` (300 Seeds, `KERF_FUZZ_SEEDS` für mehr; 40 000 bestanden): nach jedem Schritt sortierte Clips, jedes gezeigte Bild im Medium, gültige Geschwindigkeiten, Blenden, Keyframes, Übergänge, Marker und Untertitel, exaktes Undo/Redo, unverändertes Projekt nach Fehlern, verlustfreies JSON |
-| `kerf-media` Unit | 32 | Probe-Parsing, FFmpeg-Versionserkennung, Filtergraph, CBR/Mono/Letterbox, EBU-R128-Parser, Teilgrenzen und Plan des segmentierten Exports, Titel-Folgen, Kapitel, Szenen/Stille/Beats/Momente an synthetischen Signalen |
+| `kerf-media` Unit | 34 | Probe-Parsing, FFmpeg-Versionserkennung, Filtergraph, Rauschunterdrückung (Filter, Cache-Name, Profil aus dem Protokoll), CBR/Mono/Letterbox, EBU-R128-Parser, Teilgrenzen und Plan des segmentierten Exports, Titel-Folgen, Kapitel, Szenen/Stille/Beats/Momente an synthetischen Signalen |
 | `kerf-media` Erkennung | 1 | Echtes FFmpeg: Schnitte bei 2 s und 4 s, Bereichsanalyse, Stille 1,5–3 s, Abbruch |
-| `kerf-media` Pipeline | 17 | Echtes FFmpeg: Schnitt → Render → Pixelprüfung, Abbruch, Keyframes, animierte Farbe, Effekt-Stapel, Lautheit, Untertitel, Übergänge inkl. Masken, Schieben und Hereingleiten, Mischmodi, animierte Titel, Audio-Effekte und Loudnorm, Rückwärts und Rampen, verschachtelte Sequenzen, Multicam-Synchronisation, segmentiert = ein Stück (inkl. Kapitel) |
+| `kerf-media` Pipeline | 18 | Echtes FFmpeg: Schnitt → Render → Pixelprüfung, Abbruch, Keyframes, animierte Farbe, Effekt-Stapel, Lautheit, Untertitel, Übergänge inkl. Masken, Schieben und Hereingleiten, Mischmodi, animierte Titel, Audio-Effekte und Loudnorm, Rauschunterdrückung mit gelerntem Profil, Rückwärts und Rampen, verschachtelte Sequenzen, Multicam-Synchronisation, segmentiert = ein Stück (inkl. Kapitel) |
 | `kerf-library` | 13 | Migrationen, Presets (Prüfung, Export/Import), Favoriten, Recents, Titelvorlagen, Assets und Sammlungen, Schriften (Import, Ablehnung, Entfernen) |
 | `kerf-assets` | 10 | Anbieter-Parser, Lizenzzuordnung, URL-Regeln, Inhaltsprüfung, Berichte; Mock-Server: Suche, Schlüssel, Download, abgelehnte Inhalte und Weiterleitungen, Abbruch, 429 |
 | App-Crate | 7 | Versionen, Projektdatei-Argument, Endung beim Speichern, Untertitel-Kodierung, Datumsformat, Relink-Suche, Wiederherstellung nach Absturz |
-| Frontend (Vitest) | 113 | Timecode, Timeline-Constraints, Lautstärke-Gummiband, Keyframes/Easing/Bezier, Zeitabbildung, Effekte und Kurven, Audio-DSP gegen FFmpeg-Fixtures, Textsatz und Textanimation, Deltas, Docking, unscharfe Suche, Tastaturprofile, Assistenten-Befehle (Bereiche entfernen, Marker, Szenen), Projektprüfung, Beenden mit laufenden Aufträgen, unbekannte Projektfelder, Codec-Prüfung der Vorschau |
+| Frontend (Vitest) | 116 | Timecode, Timeline-Constraints, Lautstärke-Gummiband, Lernbereich des Rauschprofils, Keyframes/Easing/Bezier, Zeitabbildung, Effekte und Kurven, Audio-DSP gegen FFmpeg-Fixtures, Textsatz und Textanimation, Deltas, Docking, unscharfe Suche, Tastaturprofile, Assistenten-Befehle (Bereiche entfernen, Marker, Szenen), Projektprüfung, Beenden mit laufenden Aufträgen, unbekannte Projektfelder, Codec-Prüfung der Vorschau |
 
-In dieser Arbeitsumgebung lief die Pipeline mit FFmpeg 6.1 über einen Adapter für `-/filter_complex`: 15 von 16 bestanden, `reverse_and_speed_ramps_render` scheitert nur dort (Rampen-Frame 116 statt 115). Mit aktuellem FFmpeg in der CI bestehen alle 16. Zusätzlich gibt es einen Zeitmesstest für große Projekte (`cargo test -p kerf-core --release --test large_project -- --ignored --nocapture`).
+In dieser Arbeitsumgebung lief die Pipeline mit FFmpeg 6.1 über einen Adapter für `-/filter_complex`: 17 von 18 bestanden, `reverse_and_speed_ramps_render` scheitert nur dort (Rampen-Frame 116 statt 115). Mit aktuellem FFmpeg in der CI unter Windows bestand dieser Test in jedem Lauf, zuletzt für Commit `9867ea9` mit damals 17 Pipeline-Tests. Zusätzlich gibt es einen Zeitmesstest für große Projekte (`cargo test -p kerf-core --release --test large_project -- --ignored --nocapture`).
 
 Alle Tests laufen in der CI unter Windows.
 
@@ -229,7 +230,7 @@ Alle Tests laufen in der CI unter Windows.
 
 ## Noch nicht umgesetzt
 
-- Masken (Formen) und Rauschunterdrückung
+- Masken (Formen) auf Clips
 - Smart Bins, Metadaten-Editor, überwachte Ordner, wählbarer Cache-Ordner und automatisches Aufräumen
 - Transkription, automatische Untertitel, Übersetzung, Smart Reframe, Tracking, KI-Masken (kein lokales Modell eingebunden)
 - Einstellungsebenen, Compound Clips (verschachtelte Sequenzen gibt es), Spurgruppen

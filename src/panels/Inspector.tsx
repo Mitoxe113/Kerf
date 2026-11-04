@@ -14,6 +14,7 @@ import { useEditor } from "../state/editor";
 import { edit, sourceAsset, useActiveSequence, useProject } from "../state/project";
 import { Button, cx, Field, IconButton, NumberField, openContextMenu, PanelHeader, Section, Segmented, Select, Slider, Toggle } from "../ui/primitives";
 import { AddAudioEffect, AudioEffectsEditor } from "./AudioEffects";
+import { DenoiseSection } from "./Denoise";
 import { EffectsSection, GradeSections } from "./Effects";
 import { TitleSection } from "./Text";
 
@@ -118,6 +119,7 @@ export function Inspector() {
         {active === "color" && <GradeSections seq={seq} clips={video} />}
         {active === "effects" && <EffectsSection seq={seq} clips={video} />}
         {active === "audio" && <AudioSection seq={seq} clips={audio} preview={preview} commit={commit} />}
+        {active === "audio" && <DenoiseSection seq={seq} clips={audio} commit={commit} />}
         {active === "audio" && <AudioFxSection seq={seq} clips={audio} />}
         {active === "audio" && audio.length === 1 && <TransitionSection seq={seq} clip={audio[0]} />}
         <TimingSection seq={seq} clips={clips} commit={commit} />

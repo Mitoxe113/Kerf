@@ -36,7 +36,7 @@ pub fn cache_dir(cache_root: &Path, source: &Path) -> PathBuf {
     cache_root.join(format!("{:016x}", fnv1a(key.as_bytes())))
 }
 
-fn fnv1a(bytes: &[u8]) -> u64 {
+pub(crate) fn fnv1a(bytes: &[u8]) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for b in bytes {
         h ^= u64::from(*b);
@@ -241,7 +241,13 @@ const MAX_REVERSED_S: f64 = 30.0 * 60.0;
 /// The sound of `src` backwards (AAC), so the preview can play reversed clips
 /// forwards: source time s is at `duration - s`. Cached in `dir`.
 pub fn reversed_audio(tools: &Tools, src: &Path, info: &MediaInfo, dir: &Path) -> Result<PathBuf, MediaError> {
-    let out = dir.join("reversed.m4a");
+    reversed_audio_named(tools, src, info, dir, "reversed.m4a")
+}
+
+/// [`reversed_audio`] of `src` (e.g. denoised sound of the media `info`
+/// describes) into `dir/name`.
+pub fn reversed_audio_named(tools: &Tools, src: &Path, info: &MediaInfo, dir: &Path, name: &str) -> Result<PathBuf, MediaError> {
+    let out = dir.join(name);
     if out.is_file() {
         return Ok(out);
     }
@@ -252,7 +258,7 @@ pub fn reversed_audio(tools: &Tools, src: &Path, info: &MediaInfo, dir: &Path) -
         return Err(MediaError::Unsupported("too long to reverse for the preview".into()));
     }
     fs::create_dir_all(dir)?;
-    let partial = dir.join("partial_reversed.m4a");
+    let partial = dir.join(format!("partial_{name}"));
     let mut cmd = tools.ffmpeg_cmd();
     cmd.arg("-i").arg(path_arg(src));
     cmd.args(["-map", "0:a:0", "-af", "areverse", "-c:a", "aac", "-b:a", "192k", "-f", "ipod", "-y"]);

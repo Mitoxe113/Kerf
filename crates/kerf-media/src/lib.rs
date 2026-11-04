@@ -7,9 +7,11 @@
 //! * [`tools`]    – locating and invoking ffmpeg/ffprobe
 //! * [`probe`]    – stream analysis into [`kerf_core::model::MediaInfo`]
 //! * [`analysis`] – posters, filmstrips, waveform peaks, proxies (cached)
+//! * [`denoise`]  – noise reduction rendered into the cache
 //! * [`render`]   – the export renderer (timeline -> ffmpeg filter graph)
 
 pub mod analysis;
+pub mod denoise;
 pub mod detect;
 pub mod error;
 #[cfg(test)]

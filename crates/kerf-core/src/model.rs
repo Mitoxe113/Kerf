@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-pub use crate::audio::{AudioEffect, AudioEffectKind, ChannelMap, EqBand, EqShape};
+pub use crate::audio::{AudioEffect, AudioEffectKind, ChannelMap, Denoise, EqBand, EqShape};
 pub use crate::text::{Cue, Subtitles, TextAlign, TextStyle, TitleSpec};
 use crate::time::{Frame, Rational};
 use crate::timemap::{Warp, MAX_SPEED, MIN_SPEED};
@@ -802,6 +802,9 @@ pub struct Clip {
     /// How the clip mixes with what is below it (video tracks).
     #[serde(default, skip_serializing_if = "BlendMode::is_normal")]
     pub blend_mode: BlendMode,
+    /// Noise reduction of the source sound (audio clips).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub denoise: Option<Denoise>,
 }
 
 /// Blend modes with 8-bit formulas as FFmpeg's `blend` filter computes them,
@@ -877,6 +880,7 @@ impl Clip {
             multicam: None,
             fx_bypass: false,
             blend_mode: BlendMode::Normal,
+            denoise: None,
         }
     }
 

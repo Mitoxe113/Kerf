@@ -53,7 +53,7 @@ npm test
 npm run typecheck
 ```
 
-Die Rust-Tests enthalten 17 echte Läufe mit FFmpeg (`crates/kerf-media/tests/pipeline.rs`): Testmedien erzeugen → analysieren → schneiden → rendern → Pixel, Ton und Dauer des Ergebnisses prüfen, für Keyframes, Effekte, Übergänge, Untertitel, Audio-Effekte, Rampen, verschachtelte Sequenzen, Multicam und den segmentierten Export. Ohne FFmpeg werden sie übersprungen; mit `KERF_REQUIRE_FFMPEG=1` (so in der CI) schlagen sie stattdessen fehl.
+Die Rust-Tests enthalten 18 echte Läufe mit FFmpeg (`crates/kerf-media/tests/pipeline.rs`): Testmedien erzeugen → analysieren → schneiden → rendern → Pixel, Ton und Dauer des Ergebnisses prüfen, für Keyframes, Effekte, Übergänge, Untertitel, Audio-Effekte, Rauschunterdrückung, Rampen, verschachtelte Sequenzen, Multicam und den segmentierten Export. Ohne FFmpeg werden sie übersprungen; mit `KERF_REQUIRE_FFMPEG=1` (so in der CI) schlagen sie stattdessen fehl.
 
 Die [CI](.github/workflows/ci.yml) führt bei jedem Push alles unter Windows aus und baut den unsignierten Installer als Artefakt.
 
@@ -109,6 +109,8 @@ Alle Tastaturbefehle sind unter *Bearbeiten → Tastaturbefehle …* (`Strg+Alt+
 **Quellmonitor:** Doppelklick auf ein Medium öffnet es im Tab *Quelle*. Dort In/Out setzen und mit `,` / `.` an den Playhead der Timeline einfügen oder überschreiben (Dreipunktschnitt; ist in der Timeline In/Out gesetzt, gilt deren In-Point).
 
 **Keyframes:** Im Inspector neben einer animierbaren Eigenschaft (Bewegung, Deckkraft, Lautstärke, Geschwindigkeit, Farbkorrektur) auf die Raute klicken. Steht der Playhead auf einem Keyframe, wählt ein Rechtsklick auf die Raute die Interpolation (linear, Ease-In/-Out, Halten oder eine eigene Kurve im Kurveneditor). Die Pfeile daneben springen zum vorherigen und nächsten Keyframe. Über das Rechtsklick-Menü der Raute lässt sich ein Keyframe kopieren und am Playhead einfügen, auch in einem anderen Clip.
+
+**Rauschunterdrückung:** Im Inspector eines Audioclips den Schalter bei *Rauschunterdrückung* einschalten und Stärke und Rauschpegel einstellen. Für ein genaueres Ergebnis In- und Out-Punkt auf eine Stelle des Clips setzen, an der nur Rauschen zu hören ist, und *Aus In/Out lernen* wählen. Der entrauschte Ton wird einmal berechnet und im Cache abgelegt; Vorschau und Export verwenden dieselbe Datei.
 
 **Lautstärke in der Timeline:** Auf Audioclips liegt die Lautstärke als Linie über der Wellenform. Ziehen ändert sie (Umschalt: fein), Strg+Klick setzt oder entfernt einen Keyframe, die Punkte lassen sich einzeln ziehen. Der Rechtsklick auf die Linie oder einen Punkt kopiert, fügt ein oder löscht.
 

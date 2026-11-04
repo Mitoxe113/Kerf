@@ -251,6 +251,21 @@ export interface Clip {
   /** Skips the whole effect stack without changing it. */
   fxBypass?: boolean;
   blendMode?: BlendMode;
+  /** Audio clips: noise reduction of the source sound. */
+  denoise?: Denoise | null;
+}
+
+/** Noise reduction with FFmpeg afftdn (kerf-core Denoise), rendered into the cache. */
+export interface Denoise {
+  enabled: boolean;
+  /** How far the noise is lowered, dB (0.01..97). */
+  reductionDb: number;
+  /** Level of the noise, dB (-80..-20). */
+  floorDb: number;
+  /** Follow a changing noise level. */
+  track: boolean;
+  /** Learned noise shape: 15 band levels in dB; absent = white noise. */
+  profile?: number[];
 }
 
 export type EqShape = "highPass" | "lowShelf" | "peak" | "highShelf" | "lowPass";
@@ -475,7 +490,7 @@ export type Edge = "start" | "end";
 export type PlaceMode = "overwrite" | "insert";
 
 export type ClipPatch = Partial<
-  Pick<Clip, "name" | "enabled" | "transform" | "opacity" | "volumeDb" | "pan" | "speed" | "fadeIn" | "fadeOut" | "color" | "label" | "channels" | "reverse" | "fxBypass" | "blendMode">
+  Pick<Clip, "name" | "enabled" | "transform" | "opacity" | "volumeDb" | "pan" | "speed" | "fadeIn" | "fadeOut" | "color" | "label" | "channels" | "reverse" | "fxBypass" | "blendMode" | "denoise">
 >;
 export type TrackPatch = Partial<Pick<Track, "name" | "muted" | "solo" | "locked" | "hidden" | "volumeDb" | "color" | "height" | "effects" | "mono">>;
 export type MediaPatch = Partial<Pick<MediaAsset, "favorite" | "label" | "tags" | "note">>;
@@ -615,6 +630,8 @@ export interface RenderProgress {
   measuring: boolean;
   /** Nested sequences are rendered before the export itself. */
   nested: boolean;
+  /** Denoised sound is rendered into the cache before the export itself. */
+  denoising?: boolean;
   /** Parts of a segmented export encoding at the same time (0 = in one piece). */
   parallel: number;
   /** The parts of a segmented export are being joined. */

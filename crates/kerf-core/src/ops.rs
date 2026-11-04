@@ -84,6 +84,8 @@ pub struct ClipPatch {
     /// Skips the effect stack without changing it.
     pub fx_bypass: Option<bool>,
     pub blend_mode: Option<BlendMode>,
+    /// Noise reduction (audio clips); `enabled: false` turns it off and keeps the settings.
+    pub denoise: Option<Denoise>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -2449,6 +2451,14 @@ fn update_clips(seq: &mut Sequence, media: &[MediaAsset], ids: &[Uuid], p: &Clip
         if let Some(m) = p.blend_mode {
             c.blend_mode = m;
         }
+        if let Some(d) = &p.denoise {
+            if seq.tracks[ti].kind != TrackKind::Audio {
+                return Err(EditError::Invalid("noise reduction needs an audio clip".into()));
+            }
+            let d = d.sanitized().ok_or_else(|| EditError::Invalid("noise reduction".into()))?;
+            seq.tracks[ti].clips[ci].denoise = Some(d);
+        }
+        let c = &mut seq.tracks[ti].clips[ci];
         if let Some(v) = p.fade_in {
             c.fade_in = v;
         }
@@ -3053,6 +3063,30 @@ mod tests {
         let c = fx.v1().clips[0].clone();
         assert_eq!((c.duration, c.shown_frame(0), c.shown_frame(79)), (80, 247, 3));
         assert!(c.shows_only_media(250) && fx.a1().clips[0].shows_only_media(250));
+    }
+
+    #[test]
+    fn noise_reduction_is_for_audio_clips_and_sanitized() {
+        let mut fx = Fx::new(10.0, true);
+        let ids = fx.place(0, Some(0), Some(100), PlaceMode::Overwrite);
+        let (v, a) = (ids[0], ids[1]);
+        let d = Denoise { reduction_db: 200.0, floor_db: -10.0, profile: vec![30.0; 15], ..Default::default() };
+        let patch = |d: Denoise| ClipPatch { denoise: Some(d), ..Default::default() };
+        let before = fx.p.clone();
+        assert!(apply(&mut fx.p, &EditCommand::UpdateClips { sequence: fx.seq, clips: vec![v], patch: patch(d.clone()) }).is_err(), "not on a video clip");
+        assert_eq!(fx.p, before);
+        let bad = Denoise { profile: vec![1.0; 3], ..d.clone() };
+        assert!(apply(&mut fx.p, &EditCommand::UpdateClips { sequence: fx.seq, clips: vec![a], patch: patch(bad) }).is_err(), "profile of the wrong length");
+        fx.run(EditCommand::UpdateClips { sequence: fx.seq, clips: vec![a], patch: patch(d) });
+        let got = fx.a1().clips[0].denoise.clone().unwrap();
+        assert_eq!((got.reduction_db, got.floor_db, got.profile[0]), (97.0, -20.0, 24.0), "clamped to afftdn's ranges");
+        // Turning it off keeps the settings; the JSON round trip keeps them too.
+        fx.run(EditCommand::UpdateClips { sequence: fx.seq, clips: vec![a], patch: patch(Denoise { enabled: false, ..got.clone() }) });
+        let off = fx.a1().clips[0].clone();
+        assert_eq!(off.denoise, Some(Denoise { enabled: false, ..got }));
+        let json = serde_json::to_string(&off).unwrap();
+        assert_eq!(serde_json::from_str::<Clip>(&json).unwrap(), off);
+        assert!(!serde_json::to_string(&fx.v1().clips[0]).unwrap().contains("denoise"), "absent where unused");
     }
 
     #[test]

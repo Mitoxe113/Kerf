@@ -7,9 +7,10 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 
 use kerf_core::error::EditError;
-use kerf_core::model::{Derived, MediaAsset, MediaKind, MediaStatus, Project, TrackKind};
+use kerf_core::model::{Denoise, Derived, MediaAsset, MediaKind, MediaStatus, Project, TrackKind};
 use kerf_core::history::{HistoryList, Side};
 use kerf_core::ops::{EditCommand, EditOutcome};
+use kerf_media::denoise::{self, DenoiseJob};
 use kerf_media::{analysis, probe};
 use kerf_media::render::{self, ExportSettings};
 use serde::Serialize;
@@ -406,7 +407,9 @@ pub fn media_proxy(state: State<'_, AppState>, ids: Vec<Uuid>) {
 }
 
 #[tauri::command(async)]
-pub fn export_start(app: AppHandle, state: State<'_, AppState>, sequence: Uuid, settings: ExportSettings) -> CmdResult<ExportJob> {
+pub fn export_start(app: AppHandle, state: State<'_, AppState>, sequence: Uuid, mut settings: ExportSettings) -> CmdResult<ExportJob> {
+    // Denoised sound is shared with the preview through the media cache.
+    settings.cache_dir = Some(state.paths.cache.clone());
     if let Some(dir) = settings.output.parent() {
         if !dir.is_dir() {
             return Err(CommandError::new("exportFailed", "output folder does not exist"));
@@ -850,10 +853,45 @@ pub fn sync_angles(state: State<'_, AppState>, media: Vec<Uuid>) -> CmdResult<Ve
     analysis::sync_offsets(&tools, &paths).map_err(|e| CommandError::new("syncFailed", e))
 }
 
-/// Path of the media's sound played backwards (made on first use), for
-/// reversed clips in the preview.
+/// File and probe data of a media asset with sound.
+fn sound_of(state: &AppState, media: Uuid) -> CmdResult<(PathBuf, kerf_core::model::MediaInfo)> {
+    let s = lock(&state.session);
+    let a = s.project.media(media).ok_or(EditError::MediaNotFound)?;
+    if a.status == MediaStatus::Missing {
+        return Err(CommandError::new("mediaOffline", "media offline"));
+    }
+    let info = a.info.clone().ok_or(EditError::MediaNotReady)?;
+    if info.audio.is_none() || a.title.is_some() {
+        return Err(CommandError::new("noAudio", "the media has no sound"));
+    }
+    Ok((a.path.clone(), info))
+}
+
+/// The media's sound with noise reduction `denoise` (rendered into the cache
+/// on first use); the preview plays it for denoised clips and the export
+/// reads the same file.
 #[tauri::command(async)]
-pub fn reversed_audio(state: State<'_, AppState>, media: Uuid) -> CmdResult<PathBuf> {
+pub fn denoised_audio(state: State<'_, AppState>, media: Uuid, denoise: Denoise) -> CmdResult<PathBuf> {
+    let tools = state.media.tools.clone().ok_or_else(|| CommandError::new("ffmpegMissing", "FFmpeg not found"))?;
+    let (path, info) = sound_of(&state, media)?;
+    let d = denoise.sanitized().ok_or_else(|| CommandError::new("denoiseFailed", "invalid noise reduction"))?;
+    let job = DenoiseJob::new(&state.paths.cache, &path, &d, info.duration);
+    denoise::render(&tools, &job).map_err(|e| CommandError::new("denoiseFailed", e))
+}
+
+/// Learns the shape of the noise from seconds `from..to` of the media's sound
+/// (a part with noise only), for `Denoise::profile`.
+#[tauri::command(async)]
+pub fn denoise_profile(state: State<'_, AppState>, media: Uuid, from: f64, to: f64) -> CmdResult<Vec<f32>> {
+    let tools = state.media.tools.clone().ok_or_else(|| CommandError::new("ffmpegMissing", "FFmpeg not found"))?;
+    let (path, _) = sound_of(&state, media)?;
+    denoise::learn_profile(&tools, &path, from, to).map_err(|e| CommandError::new("profileFailed", e))
+}
+
+/// Path of the media's sound played backwards (made on first use), for
+/// reversed clips in the preview; with `denoise` the denoised sound backwards.
+#[tauri::command(async)]
+pub fn reversed_audio(state: State<'_, AppState>, media: Uuid, denoise: Option<Denoise>) -> CmdResult<PathBuf> {
     let tools = state.media.tools.clone().ok_or_else(|| CommandError::new("ffmpegMissing", "FFmpeg not found"))?;
     let (path, info) = {
         let s = lock(&state.session);
@@ -861,7 +899,15 @@ pub fn reversed_audio(state: State<'_, AppState>, media: Uuid) -> CmdResult<Path
         (a.path.clone(), a.info.clone().ok_or(EditError::MediaNotReady)?)
     };
     let dir = analysis::cache_dir(&state.paths.cache, &path);
-    analysis::reversed_audio(&tools, &path, &info, &dir).map_err(|e| CommandError::new("reverseFailed", e))
+    match denoise.and_then(|d| d.sanitized()).filter(|d| d.enabled) {
+        None => analysis::reversed_audio(&tools, &path, &info, &dir).map_err(|e| CommandError::new("reverseFailed", e)),
+        Some(d) => {
+            let job = DenoiseJob::new(&state.paths.cache, &path, &d, info.duration);
+            let clean = denoise::render(&tools, &job).map_err(|e| CommandError::new("denoiseFailed", e))?;
+            let name = format!("reversed_{}.m4a", clean.file_stem().unwrap_or_default().to_string_lossy());
+            analysis::reversed_audio_named(&tools, &clean, &info, &dir, &name).map_err(|e| CommandError::new("reverseFailed", e))
+        }
+    }
 }
 
 #[cfg(test)]

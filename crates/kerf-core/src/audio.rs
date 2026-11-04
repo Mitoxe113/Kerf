@@ -104,6 +104,59 @@ impl AudioEffectKind {
     }
 }
 
+/// Noise reduction of a clip's source sound with FFmpeg `afftdn`, before
+/// everything else (speed, channels, effects, volume). It is rendered once
+/// per media and setting into the cache; preview and export both play that
+/// file, so they sound the same.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Denoise {
+    /// Off keeps the settings.
+    #[serde(default = "yes")]
+    pub enabled: bool,
+    /// How far the noise is lowered, dB (`nr`).
+    pub reduction_db: f32,
+    /// Level of the noise, dB (`nf`).
+    pub floor_db: f32,
+    /// Follow a changing noise level (`tn`).
+    #[serde(default)]
+    pub track: bool,
+    /// Shape of the noise learned from a part with noise only: one level per
+    /// band in dB, as `afftdn` reports it after sampling (`bn` with
+    /// `nt=custom`). Empty: white noise.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub profile: Vec<f32>,
+}
+
+/// Bands of a learned noise profile (`afftdn`).
+pub const DENOISE_BANDS: usize = 15;
+
+impl Default for Denoise {
+    /// FFmpeg's defaults.
+    fn default() -> Self {
+        Self { enabled: true, reduction_db: 12.0, floor_db: -50.0, track: false, profile: Vec::new() }
+    }
+}
+
+impl Denoise {
+    /// Clamped to the ranges `afftdn` accepts (it clips band levels to
+    /// ±24 dB itself); None for a value that is not a number or a profile of
+    /// the wrong length.
+    pub fn sanitized(&self) -> Option<Self> {
+        let ok = |v: f32, lo: f32, hi: f32| v.is_finite().then(|| v.clamp(lo, hi));
+        if !self.profile.is_empty() && self.profile.len() != DENOISE_BANDS {
+            return None;
+        }
+        Some(Self {
+            enabled: self.enabled,
+            reduction_db: ok(self.reduction_db, 0.01, 97.0)?,
+            floor_db: ok(self.floor_db, -80.0, -20.0)?,
+            track: self.track,
+            profile: self.profile.iter().map(|v| ok(*v, -24.0, 24.0)).collect::<Option<_>>()?,
+        })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AudioEffect {

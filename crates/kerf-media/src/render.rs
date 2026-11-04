@@ -35,6 +35,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::analysis::display_size;
+use crate::denoise::{self, DenoiseJob};
 use crate::{MediaError, Tools};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -102,6 +103,10 @@ pub struct ExportSettings {
     /// Write the sequence's chapter markers into the file (MP4/MOV chapter track).
     #[serde(default)]
     pub chapters: bool,
+    /// Where denoised sound is cached (the app's media cache); set by the
+    /// app, not the UI. Without it the export's work folder is used.
+    #[serde(skip)]
+    pub cache_dir: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -217,6 +222,9 @@ pub struct RenderPlan {
     pub sidecar: Option<(PathBuf, String)>,
     /// Loudness measurement run before the export (two-pass normalisation).
     pub measure: Option<MeasurePass>,
+    /// Denoised sound the export reads (see [`crate::denoise`]), rendered
+    /// first where the cache does not hold it yet; kept in the cache.
+    pub denoise: Vec<DenoiseJob>,
     /// Nested sequences, rendered first (deepest first) to the files the
     /// main pass reads; removed afterwards.
     pub nested: Vec<RenderPlan>,
@@ -249,6 +257,8 @@ pub struct RenderProgress {
     pub measuring: bool,
     /// Nested sequences are being rendered (before the export itself).
     pub nested: bool,
+    /// Denoised sound is being rendered into the cache (before the export itself).
+    pub denoising: bool,
     /// Parts of a segmented export encoding at the same time (0 = in one piece).
     pub parallel: u32,
     /// The parts of a segmented export are being joined.
@@ -903,6 +913,37 @@ struct AudioMix {
 /// effects, volume, pan, fades. A track with effects or set to mono is mixed
 /// on its own first, its effects and volume applied to the sum. `master`
 /// goes after the master sum (loudness normalisation).
+/// Root of the denoised-sound cache for an export.
+fn denoise_root(s: &ExportSettings, work_dir: &Path) -> PathBuf {
+    s.cache_dir.clone().unwrap_or_else(|| work_dir.join("denoise-cache"))
+}
+
+/// The file a clip's sound is read from: the media, or its denoised sound.
+fn sound_source(s: &ExportSettings, clip: &Clip, media: &Path) -> PathBuf {
+    match (&clip.denoise, &s.cache_dir) {
+        (Some(d), Some(root)) if d.enabled => denoise::cache_path(root, media, d),
+        _ => media.to_path_buf(),
+    }
+}
+
+/// Cache files the export of `seqs` needs that do not exist yet, once each.
+fn denoise_jobs(project: &Project, seqs: &[&Sequence], root: &Path) -> Vec<DenoiseJob> {
+    let mut jobs: Vec<DenoiseJob> = Vec::new();
+    for seq in seqs {
+        for clip in seq.tracks.iter().filter(|t| t.kind == TrackKind::Audio).flat_map(|t| &t.clips) {
+            let (Some(d), Some(asset)) = (clip.denoise.as_ref().filter(|d| d.enabled), project.media(clip.media_id)) else { continue };
+            if !asset.has_audio() {
+                continue;
+            }
+            let job = DenoiseJob::new(root, &asset.path, d, asset.info.as_ref().map_or(0.0, |i| i.duration));
+            if !job.out.is_file() && !jobs.iter().any(|j| j.out == job.out) {
+                jobs.push(job);
+            }
+        }
+    }
+    jobs
+}
+
 fn audio_mix(project: &Project, seq: &Sequence, s: &ExportSettings, (t0, t1): (Frame, Frame), first: usize, master: Option<String>) -> Result<AudioMix, MediaError> {
     let sf = seq.settings.fps;
     let frame_s = 1.0 / s.fps.as_f64();
@@ -941,6 +982,8 @@ fn audio_mix(project: &Project, seq: &Sequence, s: &ExportSettings, (t0, t1): (F
                 return Err(MediaError::Unsupported(format!("media offline: {}", asset.name)));
             }
             let Some(audio) = asset.info.as_ref().and_then(|i| i.audio.as_ref()).filter(|_| asset.has_audio()) else { continue };
+            // Denoised clips read the cached denoised sound, which has the media's timing.
+            let src = sound_source(s, clip, &asset.path);
             let src_start = sf.frames_to_seconds(clip.source_in) + sf.frames_to_seconds(seg.head) * clip.speed;
             let seg_len = sf.frames_to_seconds(seg.len);
             let lead = sf.frames_to_seconds((t0 - seg.start).max(0));
@@ -949,13 +992,13 @@ fn audio_mix(project: &Project, seq: &Sequence, s: &ExportSettings, (t0, t1): (F
             if clip.is_warped() {
                 let Some(w) = warped_audio(clip, &seg, sf, asset.info.as_ref().map_or(0.0, |i| i.duration), sr, audio.channels == 1, k) else { continue };
                 args.extend(w.args);
-                args.push(asset.path.clone().into_os_string());
+                args.push(src.clone().into_os_string());
                 f.extend(w.filters);
             } else {
                 args.extend(["-ss".into(), num(src_start.max(0.0)).into()]);
                 args.extend(["-t".into(), num(seg_len * clip.speed + 0.1).into()]);
                 args.push("-i".into());
-                args.push(asset.path.clone().into_os_string());
+                args.push(src.clone().into_os_string());
                 f.extend(atempo_chain(clip.speed));
                 if audio.channels == 1 {
                     f.push("pan=stereo|c0=c0|c1=c0".into());
@@ -1155,7 +1198,11 @@ pub fn plan_with(
     hw_encoders: &[String],
     workers: Option<usize>,
 ) -> Result<RenderPlan, MediaError> {
+    // Denoised sound comes from the cache, filled before the export runs.
+    let s = &ExportSettings { cache_dir: Some(denoise_root(s, work_dir)), ..s.clone() };
     let order = nested_order(project, seq);
+    let seqs: Vec<&Sequence> = std::iter::once(seq).chain(order.iter().filter_map(|id| project.sequence(*id))).collect();
+    let denoise = denoise_jobs(project, &seqs, s.cache_dir.as_deref().expect("set above"));
     let mut p = Cow::Borrowed(project);
     let mut nested = Vec::new();
     for id in order {
@@ -1187,6 +1234,7 @@ pub fn plan_with(
         main = segmented(&p, seq, s, work_dir, hw_encoders, main, &ranges, workers)?;
     }
     main.nested = nested;
+    main.denoise = denoise;
     Ok(main)
 }
 
@@ -1435,6 +1483,7 @@ fn segmented(
         files: Vec::new(),
         sidecar: None,
         measure: full.measure.clone(),
+        denoise: Vec::new(),
         nested: Vec::new(),
         parts: Vec::new(),
         sound: None,
@@ -2032,6 +2081,7 @@ fn plan_one(
         files,
         sidecar,
         measure,
+        denoise: Vec::new(),
         nested: Vec::new(),
         parts: Vec::new(),
         sound: None,
@@ -2163,6 +2213,49 @@ fn run_ffmpeg(tools: &Tools, args: &[OsString], cancel: &AtomicBool, mut on: imp
     Ok((if cancel.load(Ordering::Relaxed) { None } else { Some(status.success()) }, err))
 }
 
+/// Renders the cache file of a [`DenoiseJob`] unless it exists, cancellable.
+fn render_denoise(tools: &Tools, job: &DenoiseJob, cancel: &AtomicBool, mut progress: impl FnMut(f64), log: &mut String) -> Result<(), MediaError> {
+    if job.out.is_file() {
+        return Ok(());
+    }
+    if let Some(dir) = job.out.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    let partial = job.partial();
+    let mut args: Vec<OsString> = ["-hide_banner", "-nostdin", "-loglevel", "error", "-progress", "pipe:1", "-nostats"].map(OsString::from).to_vec();
+    args.extend(job.args(&partial));
+    log.push_str(&format!("ffmpeg {}\n\n", quoted(&args)));
+    let run = run_ffmpeg(tools, &args, cancel, |key, value| {
+        if key == "out_time_us" {
+            if let Ok(us) = value.parse::<f64>() {
+                progress((us / 1e6 / job.duration.max(1e-3)).clamp(0.0, 1.0));
+            }
+        }
+    });
+    let (done, err) = match run {
+        Ok(r) => r,
+        Err(e) => {
+            let _ = fs::remove_file(&partial);
+            return Err(e);
+        }
+    };
+    match done {
+        Some(true) => {
+            fs::rename(&partial, &job.out)?;
+            Ok(())
+        }
+        other => {
+            let _ = fs::remove_file(&partial);
+            append_log(log, &err);
+            if other.is_none() {
+                Err(MediaError::Cancelled)
+            } else {
+                Err(MediaError::failed("noise reduction", &err))
+            }
+        }
+    }
+}
+
 /// [`render`], recording the command line and FFmpeg's warnings and errors in `log`.
 pub fn render_logged(
     tools: &Tools,
@@ -2172,6 +2265,13 @@ pub fn render_logged(
     log: &mut String,
 ) -> Result<(), MediaError> {
     let mut result = Ok(());
+    let jobs = plan.denoise.len();
+    for (i, job) in plan.denoise.iter().enumerate() {
+        log.push_str(&format!("# Rauschunterdrückung {} von {jobs}: {}\n", i + 1, job.src.display()));
+        render_denoise(tools, job, cancel, |fraction| {
+            progress(&RenderProgress { fraction: (i as f64 + fraction) / jobs as f64, denoising: true, ..Default::default() });
+        }, log)?;
+    }
     let n = plan.nested.len();
     for (i, sub) in plan.nested.iter().enumerate() {
         log.push_str(&format!("# Verschachtelte Sequenz {} von {n}\n", i + 1));
@@ -2536,7 +2636,7 @@ mod tests {
             title_sequences: Default::default(),
             loudness: None,
             segmented: false,
-            chapters: false,
+            chapters: false, cache_dir: None,
         }
     }
 

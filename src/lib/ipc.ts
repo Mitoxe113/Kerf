@@ -5,6 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AnalysisProgress,
+  Denoise,
   ArchiveOptions,
   ArchivePlan,
   ArchiveProgress,
@@ -89,7 +90,9 @@ export const api = {
   edit: (command: EditCommand) => serial(() => invoke<Delta>("edit", { command })),
   /** Read-only; waits for queued edits so the clips exist in the engine. */
   measureClips: (sequence: Uuid, clips: Uuid[]) => new Promise<void>((r) => whenIdle(r)).then(() => invoke<ClipLoudness[]>("measure_clips", { sequence, clips })),
-  reversedAudio: (media: Uuid) => invoke<string>("reversed_audio", { media }),
+  reversedAudio: (media: Uuid, denoise?: Denoise | null) => invoke<string>("reversed_audio", { media, denoise: denoise ?? null }),
+  denoisedAudio: (media: Uuid, denoise: Denoise) => invoke<string>("denoised_audio", { media, denoise }),
+  denoiseProfile: (media: Uuid, from: number, to: number) => invoke<number[]>("denoise_profile", { media, from, to }),
   analyze: (job: Uuid, target: AnalysisTarget, request: AnalysisRequest) => invoke<AnalysisResult>("analyze", { job, target, request }),
   analyzeCancel: (job: Uuid) => invoke<void>("analyze_cancel", { job }),
   duckPlan: (job: Uuid, sequence: Uuid, triggers: Uuid[], targets: Uuid[], speech: SilenceOptions, duck: DuckOptions) =>

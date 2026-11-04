@@ -75,6 +75,8 @@ const ERRORS: Record<string, string> = {
   sequenceInUse: "Die Sequenz ist noch in einer anderen Sequenz verschachtelt.",
   noFootage: "Diese Kamera hat an dieser Stelle kein Bild.",
   syncFailed: "Die Kameras konnten nicht synchronisiert werden.",
+  denoiseFailed: "Die Rauschunterdrückung konnte nicht berechnet werden.",
+  profileFailed: "Aus diesem Bereich ließ sich kein Rauschprofil lernen. Wähle mindestens eine Viertelsekunde, in der nur Rauschen zu hören ist.",
   clipNotFound: "Der Clip existiert nicht mehr.",
   openFailed: "Das Projekt konnte nicht geöffnet werden.",
   saveFailed: "Das Projekt konnte nicht gespeichert werden.",

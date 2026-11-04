@@ -199,6 +199,8 @@ pub fn run() {
             commands::freeze_frame,
             commands::measure_clips,
             commands::reversed_audio,
+            commands::denoised_audio,
+            commands::denoise_profile,
             commands::sync_angles,
             commands::take_launch_file,
             library::preset_list,

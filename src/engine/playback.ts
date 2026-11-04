@@ -16,14 +16,16 @@
 import { fpsOf } from "../lib/time";
 import { api } from "../lib/ipc";
 import { animate, isWarped, sourceAt, speedAt } from "../lib/keys";
+import { denoiseKey } from "../lib/denoise";
 import { fileUrl, previewSource } from "../lib/media";
-import type { Clip, ClipPatch, MediaAsset, Sequence, Subtitles, TitleSpec, Track, TrackKind, Uuid } from "../lib/types";
+import type { Clip, ClipPatch, Denoise, MediaAsset, Sequence, Subtitles, TitleSpec, Track, TrackKind, Uuid } from "../lib/types";
 import { AudioMixer, effectsMessage } from "./audio";
 import { transitionInto, type TransitionSpan } from "../timeline/geometry";
 import { Compositor, type DrawItem, type Layer, type LayerSource, wipeOf } from "./compositor";
 import { activeEffects } from "./effects";
 import { dbToGain, IDENTITY_COLOR, IDENTITY_TRANSFORM, place, quadMatrix } from "./math";
 import { cueAt, cueCanvas, setFontListener, titleCanvas } from "./text";
+
 
 const PREROLL_S = 1.2;
 const RELEASE_S = 6;
@@ -502,19 +504,51 @@ export class PlaybackEngine {
     return n;
   }
 
-  /** URL of the media's reversed sound, requested on first use (null until ready). */
-  private reversedUrl(media: Uuid): string | null {
-    const known = this.reversedSound.get(media);
+  /** URL of the media's reversed sound (denoised with `d`), requested on first use (null until ready). */
+  private reversedUrl(media: Uuid, d: Denoise | null): string | null {
+    const key = d ? `${media}|${denoiseKey(d)}` : media;
+    const known = this.reversedSound.get(key);
     if (known !== undefined) return known || null;
-    this.reversedSound.set(media, null);
+    this.reversedSound.set(key, null);
     api
-      .reversedAudio(media)
-      .then((path) => this.reversedSound.set(media, fileUrl(path)))
+      .reversedAudio(media, d)
+      .then((path) => this.reversedSound.set(key, fileUrl(path)))
       .catch((e) => {
         console.warn("reversed audio", e);
-        this.reversedSound.set(media, "");
+        this.reversedSound.set(key, "");
       })
       .finally(() => this.requestRender());
+    return null;
+  }
+
+  /** Denoised sound by media and setting: URL, null while it is rendered, "" when it failed. */
+  private denoisedSound = new Map<string, string | null>();
+  /** Called when a denoised sound becomes ready or fails (the Inspector shows the state). */
+  onDenoiseState: (() => void) | null = null;
+
+  /** State of the denoised sound of `media` with `d` (requests it on first use). */
+  denoiseState(media: Uuid, d: Denoise): "ready" | "pending" | "failed" {
+    const url = this.denoisedUrl(media, d);
+    return url ? "ready" : this.denoisedSound.get(`${media}|${denoiseKey(d)}`) === "" ? "failed" : "pending";
+  }
+
+  /** URL of the media's sound denoised with `d`, requested on first use (null until ready). */
+  private denoisedUrl(media: Uuid, d: Denoise): string | null {
+    const key = `${media}|${denoiseKey(d)}`;
+    const known = this.denoisedSound.get(key);
+    if (known !== undefined) return known || null;
+    this.denoisedSound.set(key, null);
+    api
+      .denoisedAudio(media, d)
+      .then((path) => this.denoisedSound.set(key, fileUrl(path)))
+      .catch((e) => {
+        console.warn("denoised audio", e);
+        this.denoisedSound.set(key, "");
+      })
+      .finally(() => {
+        this.requestRender();
+        this.onDenoiseState?.();
+      });
     return null;
   }
 
@@ -524,7 +558,9 @@ export class PlaybackEngine {
     if (!asset || asset.status.state !== "ready" || asset.title) return null;
     // A reversed audio clip plays the reversed sound forwards; silent until it exists.
     const reversed = kind === "audio" && !!clip.reverse;
-    const src = reversed ? this.reversedUrl(asset.id) : previewSource(asset, this.opts.useProxies);
+    // A denoised clip plays the denoised sound, and the original until that is rendered.
+    const dn = kind === "audio" && clip.denoise?.enabled ? clip.denoise : null;
+    const src = reversed ? this.reversedUrl(asset.id, dn) : ((dn && this.denoisedUrl(asset.id, dn)) ?? previewSource(asset, this.opts.useProxies));
     if (!src) {
       if (!reversed) this.pendingMedia.add(asset.id);
       return null;

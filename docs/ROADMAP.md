@@ -28,6 +28,7 @@ Zuverlässigkeit (Deltas, geteilte Undo-Schnappschüsse, Autosave, Versionen, Wi
 - Clip- und Spureffekte: EQ, Kompressor, Noise-Gate, Limiter (FFmpeg im Export, Ports derselben Filter in der Vorschau)
 - Loudness-Normalisierung beim Export (zweistufiges `loudnorm`), LUFS-Anzeige am Master, Limiter beim Normalisieren
 - Mono-Spuren und Kanalzuordnung
+- Rauschunterdrückung (`afftdn`) mit gelerntem Rauschprofil, Vorschau und Export aus derselben Cache-Datei
 
 ## Phase 10 · Skalierung und Arbeitsumgebung ✅
 
@@ -59,7 +60,7 @@ Zuverlässigkeit (Deltas, geteilte Undo-Schnappschüsse, Autosave, Versionen, Wi
 3. **Code-Signierung:** Ein Authenticode-Zertifikat für Windows besorgen und als Secret hinterlegen; der Release-Workflow ist dafür vorbereitet. Bis dahin warnt SmartScreen beim Installer.
 4. **macOS und Linux (derzeit nicht geplant):** Vor einer Rückkehr müsste unter Linux die Wiedergabe über das `asset:`-Protokoll in WebKitGTK gelöst werden (siehe STATUS, *Release 0.1.0*); unter macOS Dateizuordnung über `RunEvent::Opened`, Dialoge und Wiedergabe in WKWebView prüfen.
 5. **Assistenten in der App durchspielen:** Szenen, Stille, Beats, Ducking, Archiv, Relink und Cache mit echten Projekten in der Tauri-App bedienen; Kapitel in einem Abspieler prüfen.
-6. **Effekte:** Masken (Rechteck, Ellipse, Freiform, animierbar), Rauschunterdrückung (`afftdn` im Export, Gegenstück in der Vorschau).
+6. **Effekte:** Masken (Rechteck, Ellipse, Freiform, animierbar).
 
 ## Später
 

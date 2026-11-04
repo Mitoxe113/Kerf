@@ -217,7 +217,7 @@ fn edit_and_render_real_media() {
         title_files: Default::default(),
         title_sequences: Default::default(),
         loudness: None,
-        segmented: false, chapters: false,
+        segmented: false, chapters: false, cache_dir: None,
     };
     assert_no_unknown_fields(&p);
     let plan = render::plan(&p, sequence, &settings, d, &[]).unwrap();
@@ -296,7 +296,7 @@ fn cancelled_render_leaves_no_file() {
         title_files: Default::default(),
         title_sequences: Default::default(),
         loudness: None,
-        segmented: false, chapters: false,
+        segmented: false, chapters: false, cache_dir: None,
     };
     assert_no_unknown_fields(&p);
     let plan = render::plan(&p, p.sequence(seq).unwrap(), &settings, dir.path(), &[]).unwrap();
@@ -389,7 +389,7 @@ fn keyframed_position_opacity_and_volume_render() {
         title_files: Default::default(),
         title_sequences: Default::default(),
         loudness: None,
-        segmented: false, chapters: false,
+        segmented: false, chapters: false, cache_dir: None,
     };
     assert_no_unknown_fields(&p);
     let plan = render::plan(&p, p.sequence(seq).unwrap(), &export, dir.path(), &[]).unwrap();
@@ -451,7 +451,7 @@ fn animated_colour_renders() {
         title_files: Default::default(),
         title_sequences: Default::default(),
         loudness: None,
-        segmented: false, chapters: false,
+        segmented: false, chapters: false, cache_dir: None,
     };
     assert_no_unknown_fields(&p);
     let plan = render::plan(&p, p.sequence(seq).unwrap(), &export, dir.path(), &[]).unwrap();
@@ -516,7 +516,7 @@ fn effect_stack_renders() {
         title_files: Default::default(),
         title_sequences: Default::default(),
         loudness: None,
-        segmented: false, chapters: false,
+        segmented: false, chapters: false, cache_dir: None,
     };
     assert_no_unknown_fields(&p);
     let plan = render::plan(&p, p.sequence(seq).unwrap(), &export, dir.path(), &[]).unwrap();
@@ -574,7 +574,7 @@ fn catalog_effects_render() {
         title_files: Default::default(),
         title_sequences: Default::default(),
         loudness: None,
-        segmented: false, chapters: false,
+        segmented: false, chapters: false, cache_dir: None,
     };
     assert_no_unknown_fields(&p);
     let plan = render::plan(&p, p.sequence(seq).unwrap(), &export, dir.path(), &[]).unwrap();
@@ -656,7 +656,7 @@ fn subtitles_burn_embed_and_sidecar() {
         title_files: Default::default(),
         title_sequences: Default::default(),
         loudness: None,
-        segmented: false, chapters: false,
+        segmented: false, chapters: false, cache_dir: None,
     };
     assert_no_unknown_fields(&p);
     let plan = render::plan(&p, p.sequence(seq).unwrap(), &export, dir.path(), &[]).unwrap();
@@ -737,7 +737,7 @@ fn transitions_render() {
             title_files: Default::default(),
             title_sequences: Default::default(),
             loudness: None,
-            segmented: false, chapters: false,
+            segmented: false, chapters: false, cache_dir: None,
         };
         let plan = render::plan(p, p.sequence(seq).unwrap(), &export, dir.path(), &[]).unwrap();
         let mut log = String::new();
@@ -862,7 +862,7 @@ fn audio_effects_and_loudness_render() {
             title_files: Default::default(),
             title_sequences: Default::default(),
             loudness,
-            segmented: false, chapters: false,
+            segmented: false, chapters: false, cache_dir: None,
         };
         let plan = render::plan(p, p.sequence(seq).unwrap(), &export, dir.path(), &[]).unwrap();
         let mut log = String::new();
@@ -985,7 +985,7 @@ fn reverse_and_speed_ramps_render() {
             title_files: Default::default(),
             title_sequences: Default::default(),
             loudness: None,
-            segmented: false, chapters: false,
+            segmented: false, chapters: false, cache_dir: None,
         };
         let plan = render::plan(p, p.sequence(seq).unwrap(), &export, dir.path(), &[]).unwrap();
         let mut log = String::new();
@@ -1119,7 +1119,7 @@ fn nested_sequences_render() {
         title_files: Default::default(),
         title_sequences: Default::default(),
         loudness: None,
-        segmented: false, chapters: false,
+        segmented: false, chapters: false, cache_dir: None,
     };
     assert_no_unknown_fields(&p);
     let plan = render::plan(&p, p.sequence(outer).unwrap(), &export, d, &[]).unwrap();
@@ -1244,7 +1244,7 @@ fn segmented_export_matches_one_piece() {
             title_sequences: Default::default(),
             loudness: Some(LoudnessTarget { integrated: -20.0, true_peak: -1.0 }),
             segmented,
-            chapters: true,
+            chapters: true, cache_dir: None,
         };
         assert_no_unknown_fields(&p);
         let plan = render::plan_with(&p, p.sequence(seq).unwrap(), &export, dir.path(), &[], Some(2)).unwrap();
@@ -1332,7 +1332,7 @@ fn blend_modes_render() {
             output: file.clone(), video_codec: VideoCodec::H264, hardware: false, width: 320, height: 180,
             fps: Rational::new(25, 1), rate: RateControl::Quality { crf: 10 }, audio_codec: AudioCodec::Aac,
             audio_bitrate_kbps: 192, sample_rate: 48_000, audio_channels: 2, use_in_out: false,
-            subtitles: Default::default(), title_files: Default::default(), title_sequences: Default::default(), loudness: None, segmented: false, chapters: false,
+            subtitles: Default::default(), title_files: Default::default(), title_sequences: Default::default(), loudness: None, segmented: false, chapters: false, cache_dir: None,
         };
         let plan = render::plan(p, p.sequence(seq).unwrap(), &export, d, &[]).unwrap();
         let mut log = String::new();
@@ -1387,7 +1387,7 @@ fn animated_title_frames_render() {
         fps: Rational::new(25, 1), rate: RateControl::Quality { crf: 10 }, audio_codec: AudioCodec::Aac,
         audio_bitrate_kbps: 192, sample_rate: 48_000, audio_channels: 2, use_in_out: false,
         subtitles: Default::default(), title_files: Default::default(),
-        title_sequences: [(clip, frames)].into_iter().collect(), loudness: None, segmented: false, chapters: false,
+        title_sequences: [(clip, frames)].into_iter().collect(), loudness: None, segmented: false, chapters: false, cache_dir: None,
     };
     assert_no_unknown_fields(&p);
     let plan = render::plan(&p, p.sequence(seq).unwrap(), &export, d, &[]).unwrap();
@@ -1442,7 +1442,7 @@ fn push_and_slide_move_the_clips() {
             output: file.clone(), video_codec: VideoCodec::H264, hardware: false, width: 320, height: 180,
             fps: Rational::new(25, 1), rate: RateControl::Quality { crf: 10 }, audio_codec: AudioCodec::Aac,
             audio_bitrate_kbps: 192, sample_rate: 48_000, audio_channels: 2, use_in_out: false,
-            subtitles: Default::default(), title_files: Default::default(), title_sequences: Default::default(), loudness: None, segmented: false, chapters: false,
+            subtitles: Default::default(), title_files: Default::default(), title_sequences: Default::default(), loudness: None, segmented: false, chapters: false, cache_dir: None,
         };
         let plan = render::plan(p, p.sequence(seq).unwrap(), &export, d, &[]).unwrap();
         let mut log = String::new();
@@ -1472,4 +1472,112 @@ fn push_and_slide_move_the_clips() {
     let f = render(&mut p, TransitionKind::PushLeft);
     assert!((region_luma(&tools, &f, 1.5, (84, 50, 152, 80)) - white).abs() < 8.0, "white clip in place before");
     assert!((region_luma(&tools, &f, 2.5, (84, 50, 152, 80)) - dark).abs() < 8.0, "dark clip in place after");
+}
+
+/// Samples (interleaved stereo f32) of `file`'s sound from `t` for `len` seconds, as the export reads it.
+fn samples(tools: &Tools, file: &Path, t: f64, len: f64) -> Vec<f32> {
+    let out = tools
+        .ffmpeg_cmd()
+        .args(["-ss", &format!("{t}"), "-t", &format!("{len}"), "-i"])
+        .arg(file)
+        .args(["-map", "0:a:0", "-af", "aformat=sample_fmts=flt:channel_layouts=stereo", "-f", "f32le", "pipe:1"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    out.stdout.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect()
+}
+
+fn rms(s: &[f32]) -> f64 {
+    (s.iter().map(|v| (*v as f64).powi(2)).sum::<f64>() / s.len().max(1) as f64).sqrt()
+}
+
+#[test]
+fn noise_reduction_renders_the_cached_sound() {
+    let Some(tools) = tools() else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    // Pink noise throughout, a 440 Hz tone from 2 s: 0..2 s is noise only.
+    let src = d.join("noisy.wav");
+    ffmpeg(&tools, &[
+        "-f", "lavfi", "-i", "anoisesrc=d=6:a=0.03:r=48000:color=pink:seed=7",
+        "-f", "lavfi", "-i", "sine=440:d=6:sample_rate=48000,volume=enable='lt(t,2)':volume=0",
+        "-filter_complex", "[0][1]amix=normalize=0,pan=stereo|c0=c0|c1=c0", "-c:a", "pcm_f32le", "-y", &src.to_string_lossy(),
+    ]);
+    let asset = import(&tools, &src, &d.join("cache"));
+    let (id, path) = (asset.id, asset.path.clone());
+    let mut p = Project::new("n", 0);
+    p.media.push(asset);
+    let seq = p.active_sequence;
+    let settings = SequenceSettings { width: 320, height: 180, fps: Rational::new(25, 1), sample_rate: 48_000 };
+    let run = |p: &mut Project, cmd: EditCommand| kerf_core::ops::apply(p, &cmd).unwrap();
+    run(&mut p, EditCommand::UpdateSequenceSettings { sequence: seq, settings });
+    // From 0.4 s into the media (source frame 10), 4 s long.
+    let clip = run(&mut p, EditCommand::PlaceMedia {
+        sequence: seq, media: id, video_track: None, audio_track: None, at: 0,
+        mode: PlaceMode::Overwrite, source_in: Some(10), source_out: Some(110), match_sequence: false,
+    }).created[0];
+    let cache = d.join("app-cache");
+    let render = |p: &Project, name: &str| {
+        let file = d.join(name);
+        let export = ExportSettings {
+            output: file.clone(), video_codec: VideoCodec::H264, hardware: false, width: 320, height: 180,
+            fps: Rational::new(25, 1), rate: RateControl::Quality { crf: 30 }, audio_codec: AudioCodec::Pcm,
+            audio_bitrate_kbps: 192, sample_rate: 48_000, audio_channels: 2, use_in_out: false,
+            subtitles: Default::default(), title_files: Default::default(), title_sequences: Default::default(), loudness: None,
+            segmented: false, chapters: false, cache_dir: Some(cache.clone()),
+        };
+        let plan = render::plan(p, p.sequence(seq).unwrap(), &export, d, &[]).unwrap();
+        let jobs = plan.denoise.clone();
+        let mut log = String::new();
+        let mut denoising = false;
+        let res = render::render_logged(&tools, &plan, &AtomicBool::new(false), |s| denoising |= s.denoising, &mut log);
+        assert!(res.is_ok(), "{name}: {res:?}\n{log}");
+        assert_eq!(denoising, !jobs.is_empty());
+        (file, jobs)
+    };
+    let (dry, jobs) = render(&p, "dry.mov");
+    assert!(jobs.is_empty());
+
+    // Learned from the noise-only part of the media.
+    let profile = kerf_media::denoise::learn_profile(&tools, &path, 0.2, 1.8).unwrap();
+    assert_eq!(profile.len(), 15);
+    let dn = Denoise { reduction_db: 20.0, floor_db: -40.0, profile, ..Default::default() };
+    run(&mut p, EditCommand::UpdateClips { sequence: seq, clips: vec![clip], patch: ClipPatch { denoise: Some(dn.clone()), ..Default::default() } });
+    let (wet, jobs) = render(&p, "wet.mov");
+    assert_eq!(jobs.len(), 1, "one cache file to render");
+    let cached = kerf_media::denoise::cache_path(&cache, &path, &dn);
+    assert!(cached.is_file() && jobs[0].out == cached);
+    // A second export finds it in the cache.
+    let (_, again) = render(&p, "wet2.mov");
+    assert!(again.is_empty());
+
+    // The export reads exactly the cached sound (which the preview plays): timeline
+    // time t is media time 0.4 + t. PCM output: within 16-bit rounding.
+    let (got, want) = (samples(&tools, &wet, 2.0, 1.0), samples(&tools, &cached, 2.4, 1.0));
+    assert_eq!(got.len(), want.len());
+    let worst = got.iter().zip(&want).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
+    assert!(worst <= 1.5 / 32768.0, "export differs from the cached sound by {worst}");
+
+    // Noise only (timeline 0.2..1.4 s): clearly lower; the tone (2.5..3.5 s) keeps its level.
+    let db = |v: f64| 20.0 * v.log10();
+    let (noise_dry, noise_wet) = (rms(&samples(&tools, &dry, 0.2, 1.2)), rms(&samples(&tools, &wet, 0.2, 1.2)));
+    let (tone_dry, tone_wet) = (rms(&samples(&tools, &dry, 2.5, 1.0)), rms(&samples(&tools, &wet, 2.5, 1.0)));
+    eprintln!("noise {:.1} -> {:.1} dB, tone {:.1} -> {:.1} dB", db(noise_dry), db(noise_wet), db(tone_dry), db(tone_wet));
+    assert!(db(noise_dry) - db(noise_wet) > 6.0, "noise lowered");
+    assert!((db(tone_dry) - db(tone_wet)).abs() < 1.0, "tone kept");
+
+    // The learned profile lowers this (pink) noise further than the default (white) one.
+    let white = Denoise { profile: Vec::new(), ..dn.clone() };
+    run(&mut p, EditCommand::UpdateClips { sequence: seq, clips: vec![clip], patch: ClipPatch { denoise: Some(white), ..Default::default() } });
+    let (plain, _) = render(&p, "white.mov");
+    let noise_white = rms(&samples(&tools, &plain, 0.2, 1.2));
+    eprintln!("white profile: noise {:.1} dB", db(noise_white));
+    assert!(db(noise_white) - db(noise_wet) > 2.0, "learned profile does better");
+
+    // Turned off, the export reads the media again.
+    let off = Denoise { enabled: false, ..dn };
+    run(&mut p, EditCommand::UpdateClips { sequence: seq, clips: vec![clip], patch: ClipPatch { denoise: Some(off), ..Default::default() } });
+    let (back, jobs) = render(&p, "off.mov");
+    assert!(jobs.is_empty());
+    assert!((rms(&samples(&tools, &back, 0.2, 1.2)) - noise_dry).abs() < 1e-4);
 }
