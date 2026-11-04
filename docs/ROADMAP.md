@@ -58,7 +58,8 @@ Zuverlässigkeit (Deltas, geteilte Undo-Schnappschüsse, Autosave, Versionen, Wi
 - ✅ Farbmatrix je Video wählbar; Vorschau-Regel je Codec in Chromium gemessen
 - ✅ Compound Clips: Auswahl verschachteln und Verschachtelung wieder auflösen; der Export ist vor und nach dem Auflösen gemessen gleich
 - ✅ Einstellungsebenen: Farbe, Effekte, Deckkraft und Mischmodus wirken auf die Spuren darunter; Vorschau und Export liegen gemessen höchstens 2 Stufen auseinander (auch verschachtelt), segmentiert gleich einem Stück
-- ☐ Plugins und Makros
+- ✅ Makros: Befehle aufzeichnen oder zusammenstellen, über Befehlspalette, Menü oder Tastenkürzel ausführen
+- ☐ Plugins und Skripte
 
 ## Als Nächstes
 

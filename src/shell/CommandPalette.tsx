@@ -5,7 +5,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { revealFrame, selectClips } from "../actions/editing";
 import { formatCombo, keysFor } from "../actions/keymap";
-import { ACTIONS, runAction } from "../actions/registry";
+import { useMacros } from "../actions/macros";
+import { ACTIONS, runAction, runMacro } from "../actions/registry";
 import { engine } from "../engine/playback";
 import { fuzzyScore } from "../lib/fuzzy";
 import { api } from "../lib/ipc";
@@ -94,6 +95,12 @@ function search(raw: string): Item[] {
     ACTIONS.flatMap((a) => {
       const s = fuzzyScore(q, `${a.label} ${a.group}`);
       return s === null ? [] : (commandItem(a.id, s) ?? []);
+    }),
+  );
+  add(
+    useMacros.getState().macros.flatMap((m): Item[] => {
+      const s = fuzzyScore(q, `Makro ${m.name}`);
+      return s === null || !m.steps.length ? [] : [{ key: `macro:${m.id}`, group: "Makros", label: m.name.trim() || "Makro", detail: `${m.steps.length} ${m.steps.length === 1 ? "Schritt" : "Schritte"}`, score: s, run: () => void runMacro(m) }];
     }),
   );
   if (commandsOnly || !p) return out;

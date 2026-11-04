@@ -128,6 +128,7 @@ export type Dialog =
   | { kind: "newSequence" }
   | { kind: "sequenceSettings"; sequence: Uuid }
   | { kind: "shortcuts" }
+  | { kind: "macros" }
   | { kind: "about" }
   | { kind: "update" }
   | { kind: "recovery" }

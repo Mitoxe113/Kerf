@@ -177,14 +177,34 @@ export function reportError(e: unknown, fallback = "Die Aktion ist fehlgeschlage
   }
 }
 
+let editsInFlight = 0;
+let editFailures = 0;
+let onSettled: (() => void)[] = [];
+
+/** Edits rejected so far (macros compare it before and after a step). */
+export const editFailureCount = () => editFailures;
+
+/** Resolves once no edit is on its way (macros wait for this between steps). */
+export function editsSettled(): Promise<void> {
+  return editsInFlight === 0 ? Promise.resolve() : new Promise((r) => onSettled.push(r));
+}
+
 /** Sends an edit to the engine and applies the result. Returns null on failure. */
 export async function edit(cmd: EditCommand, opts: { silent?: boolean } = {}): Promise<Delta | null> {
+  editsInFlight++;
   try {
     const d = await api.edit(cmd);
     useProject.getState().applyDelta(d);
     return d;
   } catch (e) {
+    editFailures++;
     if (!opts.silent) reportError(e);
     return null;
+  } finally {
+    if (--editsInFlight === 0) {
+      const waiting = onSettled;
+      onSettled = [];
+      for (const r of waiting) r();
+    }
   }
 }

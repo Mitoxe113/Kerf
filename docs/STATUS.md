@@ -174,6 +174,7 @@ Dieser Abschnitt hat einen anderen Prüfstand als „Fertig und verifiziert“: 
 **Arbeitsumgebung**
 - **Andockbare Panels:** Panels per Tab oder Titelzeile ziehen, in die Mitte oder Tableiste eines Bereichs (als Tab) oder an einen Rand (neuer Bereich daneben). Die Zielzone wird angezeigt, `Esc` bricht ab; leere Bereiche geben ihren Platz an den Nachbarn ab. Layouts bleiben gespeichert.
 - Suche und Befehle (`Strg+P`), Einstellungen (`Strg+,`), Tastaturprofile mit Import/Export, eigenes dunkles Design, alle Menüpunkte an echte Aktionen gebunden.
+- **Makros:** Befehle aus der Aktions-Registry aufzeichnen oder zusammenstellen, umbenennen, ordnen; ausführen über Befehlspalette, Dialog oder *Makro 1 ausführen* bis *Makro 9 ausführen*. Jeder Schritt wartet, bis die Änderungen des vorigen beim Backend angekommen sind, ist ein eigener Rückgängig-Schritt, und das Makro hält beim ersten Befehl an, der nicht möglich ist. In Headless-Chromium mit simuliertem Backend durchgespielt (Aufzeichnen, Speichern, Ausführen aus der Befehlspalette: Marker und Schnitt kamen in dieser Reihenfolge an), nicht in der Tauri-App.
 
 **Verteilung und Updates**
 - **Windows-Installer (NSIS)** auf diesem System installiert, aktualisiert und deinstalliert: Installation pro Benutzer ohne Adminrechte, Startmenü-Eintrag, Dateizuordnung. Die Deinstallation entfernt Programm, Startmenü-Eintrag, Uninstall-Eintrag und Dateityp und stellt eine vorher vorhandene Zuordnung von `.kerf` wieder her; Benutzerdaten (Wiederherstellung, Versionen) bleiben erhalten.
@@ -210,7 +211,7 @@ Dieser Abschnitt hat einen anderen Prüfstand als „Fertig und verifiziert“: 
 | `kerf-library` | 13 | Migrationen, Presets (Prüfung, Export/Import), Favoriten, Recents, Titelvorlagen, Assets und Sammlungen, Schriften (Import, Ablehnung, Entfernen) |
 | `kerf-assets` | 10 | Anbieter-Parser, Lizenzzuordnung, URL-Regeln, Inhaltsprüfung, Berichte; Mock-Server: Suche, Schlüssel, Download, abgelehnte Inhalte und Weiterleitungen, Abbruch, 429 |
 | App-Crate | 8 | Auflisten überwachter Ordner, Versionen, Projektdatei-Argument, Endung beim Speichern, Untertitel-Kodierung, Datumsformat, Relink-Suche, Wiederherstellung nach Absturz |
-| Frontend (Vitest) | 137 | Timecode, Importentscheidung der überwachten Ordner, Farbmatrix der Vorschau und ihre Korrektur, Regeln der intelligenten Ablagen, Dateinamen des Stapel-Exports, Timeline-Constraints, Lautstärke-Gummiband, Lernbereich des Rauschprofils, Keyframes/Easing/Bezier, Zeitabbildung, Effekte und Kurven, Effekt-Keyframes, Rasterung der Freiform-Maske mit den Werten der Rust-Tests, Audio-DSP gegen FFmpeg-Fixtures, Textsatz und Textanimation, Deltas, Docking, unscharfe Suche, Tastaturprofile, Assistenten-Befehle (Bereiche entfernen, Marker, Szenen), Projektprüfung (auch HDR-Erkennung), Beenden mit laufenden Aufträgen, unbekannte Projektfelder, Codec-Prüfung der Vorschau |
+| Frontend (Vitest) | 140 | Timecode, Importentscheidung der überwachten Ordner, Farbmatrix der Vorschau und ihre Korrektur, Regeln der intelligenten Ablagen, Dateinamen des Stapel-Exports, Timeline-Constraints, Lautstärke-Gummiband, Lernbereich des Rauschprofils, Keyframes/Easing/Bezier, Zeitabbildung, Effekte und Kurven, Effekt-Keyframes, Rasterung der Freiform-Maske mit den Werten der Rust-Tests, Audio-DSP gegen FFmpeg-Fixtures, Textsatz und Textanimation, Deltas, Docking, unscharfe Suche, Tastaturprofile, Assistenten-Befehle (Bereiche entfernen, Marker, Szenen), Projektprüfung (auch HDR-Erkennung), Beenden mit laufenden Aufträgen, unbekannte Projektfelder, Codec-Prüfung der Vorschau, Makros (Laden, Aufzeichnen, Ausführen mit Anhalten) |
 
 In dieser Arbeitsumgebung lief die Pipeline mit FFmpeg 6.1 über einen Adapter für `-/filter_complex`: 20 von 21 bestanden, `reverse_and_speed_ramps_render` scheitert nur dort (Rampen-Frame 116 statt 115). Mit aktuellem FFmpeg in der CI unter Windows bestand dieser Test in jedem Lauf, zuletzt für Commit `9867ea9` mit damals 17 Pipeline-Tests. Zusätzlich gibt es einen Zeitmesstest für große Projekte (`cargo test -p kerf-core --release --test large_project -- --ignored --nocapture`).
 
@@ -241,7 +242,7 @@ Alle Tests laufen in der CI unter Windows.
 - Transkription, automatische Untertitel, Übersetzung, Smart Reframe, Tracking, KI-Masken (kein lokales Modell eingebunden)
 - Spurgruppen
 - AV1 und DNxHR als Export-Codecs
-- Plugins, Makros, Skripte; universelle Suche über die Befehlspalette hinaus, visuelle Zwischenablage, Referenzmonitor, Brand Kits, Versionsvergleich
+- Plugins, Skripte; universelle Suche über die Befehlspalette hinaus, visuelle Zwischenablage, Referenzmonitor, Brand Kits, Versionsvergleich
 - HDR-Bearbeitung und Tonemapping (HDR-Material wird nur erkannt und gemeldet); Primärfarben und Übertragungsfunktion im Export wie in der Vorschau
 - Native GPU-Pipeline (wgpu) für den Export
 - Code-Signatur-Zertifikate (der Release-Workflow ist vorbereitet), Absturzberichte (bewusst ausgelassen)

@@ -1,4 +1,6 @@
 import { CheckCircle2, Cpu, Info, Loader2, XCircle } from "lucide-react";
+import { useMacros } from "../actions/macros";
+import { toggleMacroRecording } from "../actions/registry";
 import { formatRate } from "../lib/time";
 import { missingPreviewCodecs, previewCodecRemedy, previewCodecs } from "../lib/preview";
 import { useEditor } from "../state/editor";
@@ -18,6 +20,7 @@ export function StatusBar() {
   const running = exports.find((j) => j.status === "running");
   const queued = exports.filter((j) => j.status === "queued").length;
   const missing = missingPreviewCodecs(previewCodecs());
+  const recording = useMacros((s) => s.recording);
   return (
     <footer className="flex h-6 shrink-0 items-center gap-4 border-t border-line bg-ground px-3 text-[10.5px] text-fg-3">
       <span
@@ -56,6 +59,11 @@ export function StatusBar() {
         <span className="flex items-center gap-1.5 text-signal">
           <Loader2 size={11} className="animate-spin" /> Export {Math.round(running.progress.fraction * 100)} %{queued > 0 && ` · ${queued} in Warteschlange`}
         </span>
+      )}
+      {recording && (
+        <button className="flex items-center gap-1.5 text-danger hover:underline" title="Aufzeichnung beenden und Makro speichern" onClick={() => void toggleMacroRecording()}>
+          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-danger" /> Makro-Aufzeichnung · {recording.length} {recording.length === 1 ? "Schritt" : "Schritte"}
+        </button>
       )}
       <span className="ml-auto flex items-center gap-3">
         {useProxies && <span className="text-warn">Proxy-Vorschau</span>}

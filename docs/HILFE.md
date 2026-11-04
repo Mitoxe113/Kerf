@@ -86,9 +86,19 @@ Ein Konto, eine Anmeldung oder eine Internetverbindung braucht Kerf dafür nicht
 - Panel *Stockmedien*: Pexels, GIPHY, Freesound (je eigener, kostenloser API-Schlüssel) und Openverse (ohne Schlüssel).
 - Schlüssel liegen im Schlüsselspeicher des Systems oder nur für die Sitzung. Downloads werden geprüft, mit Lizenz gespeichert; der Lizenzbericht listet die Nachweise eines Projekts.
 
+## Makros
+
+Ein Makro ist eine benannte Folge von Befehlen aus den Menüs und Tastaturbefehlen.
+
+- **Aufzeichnen:** *Bearbeiten › Makro aufzeichnen*, dann die Befehle ausführen (Tastenkürzel, Menü oder Befehlspalette). Die Statusleiste zeigt *Makro-Aufzeichnung* mit der Zahl der Schritte; ein Klick darauf oder erneut *Makro aufzeichnen* beendet die Aufzeichnung und fragt nach dem Namen. Aufgezeichnet werden Befehle, nicht Mausbewegungen: Ziehen in der Timeline oder Werte im Inspector gehören nicht dazu.
+- **Bearbeiten:** *Bearbeiten › Makros …* listet alle Makros. Dort lassen sich Makros anlegen, umbenennen, ordnen und löschen und Schritte hinzufügen, verschieben und entfernen.
+- **Ausführen:** in der Befehlspalette (`Strg+P`) nach dem Namen suchen, im Dialog *Ausführen* wählen oder für die ersten neun Makros *Makro 1 ausführen* bis *Makro 9 ausführen* verwenden; diesen Befehlen lässt sich unter *Bearbeiten › Tastaturbefehle …* ein Kürzel geben.
+- Jeder Schritt wirkt auf die Auswahl und den Playhead zum Zeitpunkt des Schritts und ist ein eigener Rückgängig-Schritt. Ist ein Befehl gerade nicht möglich (im Menü ausgegraut, z. B. *Einfügen (Insert)* ohne gewählte Medien) oder lehnt der Kern die Änderung ab, hält das Makro dort an und meldet den Schritt. Befehle, die ohne passende Auswahl einfach nichts tun, laufen ohne Meldung durch.
+- Makros werden pro Benutzer gespeichert, nicht im Projekt (bis zu 50 Makros mit je 100 Schritten).
+
 ## Erweiterungen
 
-Kerf hat kein Plugin-, Makro- oder Skriptsystem.
+Kerf hat kein Plugin- oder Skriptsystem.
 
 ## Einstellungen
 

@@ -3,7 +3,7 @@ import { Minus, Redo2, Save, Square, Undo2, Upload, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { formatCombo, keysFor } from "../actions/keymap";
-import { ACTION_BY_ID } from "../actions/registry";
+import { ACTION_BY_ID, runAction } from "../actions/registry";
 import { editLabel } from "../lib/i18n";
 import { LABEL_NAMES, LABELS } from "../lib/labels";
 import { currentLayout, layoutPanels, PANEL_LABELS, useEditor, WORKSPACES } from "../state/editor";
@@ -23,7 +23,7 @@ export function Logo({ size = 18 }: { size?: number }) {
 
 const MENUS: { label: string; items: (string | "-")[] }[] = [
   { label: "Datei", items: ["file.new", "file.open", "@recent", "-", "file.save", "file.saveAs", "file.versions", "-", "file.import", "file.importFolder", "-", "file.export", "file.recovery", "-", "app.preferences", "-", "file.quit"] },
-  { label: "Bearbeiten", items: ["edit.undo", "edit.redo", "-", "edit.cut", "edit.copy", "edit.paste", "edit.duplicate", "-", "edit.delete", "edit.rippleDelete", "-", "edit.selectAll", "edit.deselect", "edit.selectForward", "edit.selectBackward", "-", "tool.select", "tool.razor", "tool.ripple", "tool.roll", "tool.slip", "tool.slide", "tool.hand", "tool.zoom", "-", "edit.shortcuts"] },
+  { label: "Bearbeiten", items: ["edit.undo", "edit.redo", "-", "edit.cut", "edit.copy", "edit.paste", "edit.duplicate", "-", "edit.delete", "edit.rippleDelete", "-", "edit.selectAll", "edit.deselect", "edit.selectForward", "edit.selectBackward", "-", "tool.select", "tool.razor", "tool.ripple", "tool.roll", "tool.slip", "tool.slide", "tool.hand", "tool.zoom", "-", "edit.shortcuts", "macro.manage", "macro.record"] },
   { label: "Ansicht", items: ["view.zoomIn", "view.zoomOut", "view.zoomFit", "view.zoomSelection", "-", "view.trackS", "view.trackM", "view.trackL", "-", "view.proxies", "-", "view.safe", "view.thirds", "view.center", "view.stats", "view.fullscreen"] },
   { label: "Sequenz", items: ["seq.new", "seq.settings", "-", "seq.razor", "seq.razorAll", "seq.insert", "seq.overwrite", "-", "seq.in", "seq.out", "seq.clearInOut", "seq.lift", "seq.extract", "-", "seq.marker", "seq.nextMarker", "seq.prevMarker", "-", "seq.addVideo", "seq.addAudio", "-", "clip.title", "clip.adjustment", "-", "seq.snap", "seq.linked"] },
   { label: "Clip", items: ["clip.rename", "@labels", "clip.reveal", "clip.matchFrame", "-", "clip.freeze", "clip.normalize", "-", "clip.enable", "clip.link", "clip.unlink", "-", "clip.nest", "clip.unnest", "-", "clip.nudgeLeft", "clip.nudgeRight"] },
@@ -42,7 +42,8 @@ function actionItem(id: string): MenuItem | null {
     shortcut: keys[0] ? formatCombo(keys[0]) : undefined,
     disabled: a.enabled ? !a.enabled() : false,
     checked: a.checked?.(),
-    onSelect: () => void a.run(),
+    // Through runAction, so a macro recording sees menu commands too.
+    onSelect: () => runAction(id),
   };
 }
 

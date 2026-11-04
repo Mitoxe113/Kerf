@@ -7,7 +7,9 @@ import { toggleOutputWindow } from "../shell/OutputWindow";
 import { switchAngle } from "./multicam";
 import { engine } from "../engine/playback";
 import { PANEL_LABELS, useEditor, WORKSPACES, type PanelId, type ToolId } from "../state/editor";
-import { useProject } from "../state/project";
+import { editFailureCount, editsSettled, useProject } from "../state/project";
+import { toast } from "../state/toasts";
+import { NUMBERED_MACROS, runSteps, useMacros, type Macro } from "./macros";
 import { LABEL_NAMES, LABELS } from "../lib/labels";
 import * as E from "./editing";
 import { matchFrame, source, sourceDuration, useSource } from "../state/source";
@@ -225,11 +227,83 @@ const panels: Action[] = (Object.keys(PANEL_LABELS) as PanelId[]).map((p) => ({
   run: () => ed().focusPanel(p),
 }));
 
-export const ACTIONS: Action[] = [...base, ...tools, ...workspaces, ...panels];
+// Macros: manage, record, and run the first few by number (so they can have shortcuts).
+const macros: Action[] = [
+  { id: "macro.manage", group: "Makros", label: "Makros …", keys: [], run: () => ed().set({ dialog: { kind: "macros" } }) },
+  { id: "macro.record", group: "Makros", label: "Makro aufzeichnen", keys: [], run: () => toggleMacroRecording(), checked: () => useMacros.getState().recording !== null },
+  ...Array.from({ length: NUMBERED_MACROS }, (_, i): Action => ({
+    id: `macro.run${i + 1}`,
+    group: "Makros",
+    label: `Makro ${i + 1} ausführen`,
+    keys: [],
+    run: () => {
+      const m = useMacros.getState().macros[i];
+      return m ? runMacro(m) : undefined;
+    },
+    enabled: () => !!useMacros.getState().macros[i],
+  })),
+];
+
+export const ACTIONS: Action[] = [...base, ...tools, ...workspaces, ...panels, ...macros];
 export const ACTION_BY_ID = new Map(ACTIONS.map((a) => [a.id, a]));
 
 export function runAction(id: string) {
   const a = ACTION_BY_ID.get(id);
   if (!a || (a.enabled && !a.enabled())) return;
+  useMacros.getState().record(id);
   void a.run();
+}
+
+/** Label of an action for messages and the macro editor ("Clip › Teilen"). */
+export const actionLabel = (id: string) => {
+  const a = ACTION_BY_ID.get(id);
+  return a ? `${a.group} › ${a.label}` : `Unbekannter Befehl (${id})`;
+};
+
+let macroRunning = false;
+
+/** Runs a macro's steps in order; stops (and says why) at the first one that cannot run. */
+export async function runMacro(m: Macro) {
+  if (macroRunning) return;
+  macroRunning = true;
+  try {
+    // A tick lets fire-and-forget commands send their edits before waiting
+    // for them; an edit the engine rejected stops the macro there.
+    let failures = editFailureCount();
+    const settle = async () => {
+      await new Promise<void>((r) => setTimeout(r, 0));
+      await editsSettled();
+      const now = editFailureCount();
+      if (now !== failures) {
+        failures = now;
+        throw new Error("edit rejected");
+      }
+    };
+    const { done, stop } = await runSteps(m.steps, (id) => ACTION_BY_ID.get(id), settle);
+    if (!stop) {
+      toast.success(`Makro „${m.name.trim() || "Makro"}“`, `${done} ${done === 1 ? "Schritt" : "Schritte"} ausgeführt`);
+      return;
+    }
+    const why = { unknown: "gibt es in dieser Version nicht", disabled: "ist gerade nicht möglich", failed: "ist fehlgeschlagen" }[stop.reason];
+    toast.error(`Makro „${m.name.trim() || "Makro"}“ angehalten`, `Schritt ${stop.index + 1} (${actionLabel(m.steps[stop.index])}) ${why}. ${done} ${done === 1 ? "Schritt lief" : "Schritte liefen"} davor.`);
+  } finally {
+    macroRunning = false;
+  }
+}
+
+/** Starts recording, or ends it and asks for a name to keep the steps under. */
+export async function toggleMacroRecording() {
+  const s = useMacros.getState();
+  if (s.recording === null) {
+    s.startRecording();
+    toast.info("Makro-Aufzeichnung läuft", "Befehle über Tastenkürzel, Menüs und die Befehlspalette werden aufgezeichnet. Erneut „Makro aufzeichnen“ beendet sie.");
+    return;
+  }
+  const steps = s.stopRecording();
+  if (!steps.length) {
+    toast.info("Aufzeichnung beendet", "Es wurden keine Befehle aufgezeichnet.");
+    return;
+  }
+  const name = await P.prompt({ title: "Makro speichern", label: `${steps.length} ${steps.length === 1 ? "Schritt" : "Schritte"}. Name des Makros:`, value: `Makro ${s.macros.length + 1}`, confirm: "Speichern" });
+  if (name?.trim() && useMacros.getState().add(name, steps)) toast.success("Makro gespeichert", name.trim());
 }

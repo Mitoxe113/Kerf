@@ -21,6 +21,7 @@ import { guardUnsaved, prompt } from "../actions/project";
 import { engine } from "../engine/playback";
 import { SmartBinDialog } from "./SmartBinDialog";
 import { WatchFolderDialog } from "./WatchFolderDialog";
+import { MacrosDialog } from "./MacrosDialog";
 
 const RESOLUTIONS = [
   { value: "3840x2160", label: "UHD 3840 × 2160" },
@@ -760,6 +761,8 @@ export function Dialogs() {
     }
     case "shortcuts":
       return <ShortcutEditor onClose={close} />;
+    case "macros":
+      return <MacrosDialog onClose={close} />;
     case "recovery":
       return <RecoveryDialog onClose={close} />;
     case "versions":
