@@ -3,7 +3,7 @@ import { keysOf, paramAt, playheadKeyPos, removeKey, shownFrame, slippedIn, upse
 import { hasBand, segmentKeys, shiftKeys, shiftVolume, volumeBand, volumeHitAt, type VolumeHit } from "../timeline/volume";
 import { Eye, EyeOff, Lock, Magnet, Plus, Unlock, Link2, Film, Music } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { nestSelection, openNested, openSequence } from "../actions/editing";
+import { nestSelection, openNested, openSequence, unnestClip } from "../actions/editing";
 import { startMediaDrag } from "../ui/dnd";
 import { MAX_ZOOM, MIN_ZOOM, placeMedia, selectClips, setTimelineViewport, zoomBy, copySelection, deleteSelection, paste, toggleEnabled, linkSelection, applyFades, addTrack, renameSelection, labelSelection, replaceClipMedia, revealInProject, freezeFrame, openNormalize, selectedAudioClips } from "../actions/editing";
 import { LABEL_NAMES, LABELS, labelColor } from "../lib/labels";
@@ -1205,7 +1205,12 @@ export function Timeline() {
       { separator: true },
       { label: "Am Mauszeiger schneiden", onSelect: () => void edit({ type: "splitAt", sequence: seq.id, frame: Math.round(frameAt(x)), clips: ids }) },
       { label: h.clip.enabled ? "Deaktivieren" : "Aktivieren", shortcut: "⇧+E", onSelect: () => void toggleEnabled() },
-      ...(nestedSequence(h.clip.mediaId) ? [{ label: "Verschachtelte Sequenz öffnen", onSelect: () => void openNested(h.clip) }] : []),
+      ...(nestedSequence(h.clip.mediaId)
+        ? [
+            { label: "Verschachtelte Sequenz öffnen", onSelect: () => void openNested(h.clip) },
+            { label: "Verschachtelung auflösen", onSelect: () => void unnestClip(h.clip.id) },
+          ]
+        : []),
       { label: "Verschachteln …", onSelect: () => void nestSelection() },
       { label: "Verknüpfen", disabled: ids.length < 2, onSelect: () => void linkSelection(true) },
       { label: "Verknüpfung lösen", disabled: !h.clip.link, onSelect: () => void linkSelection(false) },

@@ -110,6 +110,7 @@ const base: Action[] = [
   { id: "clip.link", group: "Clip", label: "Verknüpfen", keys: ["Ctrl+L"], run: () => E.linkSelection(true), enabled: hasSelection },
   { id: "clip.unlink", group: "Clip", label: "Verknüpfung lösen", keys: ["Ctrl+Alt+L"], run: () => E.linkSelection(false), enabled: hasSelection },
   { id: "clip.nest", group: "Clip", label: "Verschachteln …", keys: [], run: E.nestSelection, enabled: hasSelection },
+  { id: "clip.unnest", group: "Clip", label: "Verschachtelung auflösen", keys: [], run: () => { const c = E.selectedNested(); if (c) void E.unnestClip(c.id); }, enabled: () => !!E.selectedNested() },
   { id: "clip.copyEffects", group: "Clip", label: "Effekte kopieren", keys: ["Ctrl+Alt+C"], run: () => Fx.copyEffects(), enabled: Fx.firstSelectedHasEffects },
   { id: "clip.pasteEffects", group: "Clip", label: "Effekte einfügen", keys: ["Ctrl+Alt+V"], run: () => Fx.pasteEffects(), enabled: () => Fx.hasEffectClipboard() && Fx.selectedVideoClips().length > 0 },
   { id: "clip.bypassEffects", group: "Clip", label: "Alle Effekte umgehen", keys: [], run: () => Fx.toggleBypass(), enabled: () => Fx.selectedVideoClips().length > 0 },

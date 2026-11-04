@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 
-use kerf_core::error::EditError;
+use kerf_core::error::{EditError, UnnestBlock};
 use kerf_core::model::{Denoise, Derived, MediaAsset, MediaKind, MediaStatus, Project, TrackKind};
 use kerf_core::history::{HistoryList, Side};
 use kerf_core::ops::{EditCommand, EditOutcome};
@@ -53,6 +53,14 @@ impl From<EditError> for CommandError {
             EditError::NoNeighbor => "noNeighbor",
             EditError::LastSequence => "lastSequence",
             EditError::NestCycle => "nestCycle",
+            EditError::CannotUnnest(b) => match b {
+                UnnestBlock::NotNested => "unnestNotNested",
+                UnnestBlock::Settings => "unnestSettings",
+                UnnestBlock::ClipChanged => "unnestClipChanged",
+                UnnestBlock::TrackMix => "unnestTrackMix",
+                UnnestBlock::Edge => "unnestEdge",
+                UnnestBlock::BlendMode => "unnestBlendMode",
+            },
             EditError::SequenceInUse(_) => "sequenceInUse",
             EditError::NoFootage => "noFootage",
             EditError::Invalid(_) => "invalid",

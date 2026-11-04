@@ -39,9 +39,10 @@ Ein Konto, eine Anmeldung oder eine Internetverbindung braucht Kerf dafür nicht
 - Spuren lassen sich sperren, stummschalten, solo schalten und ausblenden; Einrasten mit `S`.
 - Marker mit `M`; das Panel *Marker* listet sie, filtert nach Kategorie und markiert Kapitel für den Export.
 - Verschachtelte Sequenzen, Multicam (Panel *Multicam*, Kamerawechsel mit `1` … `9`), Geschwindigkeitsrampen und Rückwärts-Clips.
+- Compound Clips: *Verschachteln …* (Kontextmenü eines Clips) packt die Auswahl in eine neue Sequenz und legt sie als einen Clip zurück. *Verschachtelung auflösen* legt die Clips wieder an seine Stelle, jede Spur der inneren Sequenz auf eine eigene Spur darüber (freie Spuren werden genutzt, sonst neue eingefügt); die innere Sequenz bleibt im Projekt. Kerf löst nur auf, wenn Bild und Ton gleich bleiben: Der verschachtelte Clip darf nicht verändert sein (Tempo, Keyframes, Effekte, Blenden, Bewegung, Deckkraft, Farbe, Ton), seine Grenzen dürfen keinen Übergang und keine Blende anschneiden, Clips darin keinen Mischmodus nutzen, beteiligte Spuren nicht ausgeblendet, stumm, solo oder mit Spureffekten sein, und beide Sequenzen brauchen dieselbe Bildrate und Größe. Sonst nennt eine Meldung den Grund.
 - Rückgängig `Strg+Z`, Wiederholen `Strg+Umschalt+Z`; das Panel *Verlauf* zeigt alle Schritte.
 - **Assistent** (Panel): Szenen, Stille, Beats und Momente lokal erkennen, Ergebnisse prüfen und als ein Rückgängig-Schritt übernehmen; Ducking senkt Musik unter Sprache ab.
-- Nicht vorhanden: Einstellungsebenen, Compound Clips, Spurgruppen.
+- Nicht vorhanden: Einstellungsebenen, Spurgruppen.
 
 ## Effekte, Übergänge, Text
 

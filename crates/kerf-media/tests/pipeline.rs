@@ -1099,7 +1099,8 @@ fn nested_sequences_render() {
     let grey = run(&mut p, place(outer, bg_id, None)).created[0];
     let nested = run(&mut p, place(outer, inner, Some(v2))).created;
     assert_eq!(nested.len(), 2, "picture and sound of the nested sequence");
-    let wrap = run(&mut p, EditCommand::NestClips { sequence: outer, clips: vec![grey, nested[0]], name: "Ebene 2".into() }).created[0];
+    let wrapped = run(&mut p, EditCommand::NestClips { sequence: outer, clips: vec![grey, nested[0]], name: "Ebene 2".into() }).created;
+    let wrap = wrapped[0];
     assert!(p.nests(outer, inner) && p.nests(wrap, inner));
 
     let file = d.join("nested.mp4");
@@ -1140,6 +1141,29 @@ fn nested_sequences_render() {
     let rms = audio_rms(&tools, &file, 1.0);
     eprintln!("rms {rms:.3}");
     assert!(rms > 0.25, "tone through two levels");
+
+    // Unnesting both levels puts the clips back into the outer sequence; the
+    // export shows and sounds the same.
+    run(&mut p, EditCommand::UnnestClip { sequence: outer, clip: wrapped[1] });
+    let s = p.sequence(outer).unwrap();
+    let inner_clip = s.tracks.iter().filter(|t| t.kind == TrackKind::Video).flat_map(|t| &t.clips).find(|c| c.media_id == inner).unwrap().id;
+    run(&mut p, EditCommand::UnnestClip { sequence: outer, clip: inner_clip });
+    assert!(!p.nests(outer, inner) && !p.nests(outer, wrap));
+    let flat = d.join("flat.mp4");
+    let plan = render::plan(&p, p.sequence(outer).unwrap(), &ExportSettings { output: flat.clone(), ..export.clone() }, d, &[]).unwrap();
+    assert!(plan.nested.is_empty());
+    render::render(&tools, &plan, &AtomicBool::new(false), |_| {}).expect("render unnested");
+    for n in [5, 25, 40] {
+        let (a, b) = (frame_rgb(&tools, &file, n), frame_rgb(&tools, &flat, n));
+        assert_eq!(a.len(), b.len());
+        let diff: Vec<u32> = a.iter().zip(&b).map(|(x, y)| x.abs_diff(*y) as u32).collect();
+        let (max, mean) = (diff.iter().max().copied().unwrap_or(0), diff.iter().sum::<u32>() as f64 / diff.len() as f64);
+        eprintln!("unnested frame {n}: max {max}, mean {mean:.3}");
+        assert!(max <= 3 && mean < 0.5, "frame {n} differs: max {max}, mean {mean:.3}");
+    }
+    let flat_rms = audio_rms(&tools, &flat, 1.0);
+    eprintln!("unnested rms {flat_rms:.4} (nested {rms:.4})");
+    assert!((flat_rms - rms).abs() < 0.005);
 }
 
 #[test]

@@ -581,6 +581,7 @@ export type EditCommand =
   | { type: "removeSequence"; sequence: Uuid }
   | { type: "renameSequence"; sequence: Uuid; name: string }
   | { type: "nestClips"; sequence: Uuid; clips: Uuid[]; name: string }
+  | { type: "unnestClip"; sequence: Uuid; clip: Uuid }
   | { type: "createMulticam"; multicam: Multicam }
   | { type: "placeMulticam"; sequence: Uuid; multicam: Uuid; at: Frame; mode: PlaceMode; videoAngle: number; audioAngle: number | null; videoTrack: Uuid | null; audioTrack: Uuid | null }
   | { type: "switchAngle"; sequence: Uuid; clip: Uuid; angle: number; at: Frame | null }

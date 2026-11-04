@@ -419,6 +419,24 @@ export async function nestSelection() {
   if (d) useEditor.getState().select(d.outcome.created.slice(1));
 }
 
+/** Puts the clips nested clip `clip` shows back in its place (the nested sequence stays). */
+export async function unnestClip(clip: Uuid) {
+  const s = seq();
+  if (!s) return;
+  const d = await edit({ type: "unnestClip", sequence: s.id, clip });
+  if (d) useEditor.getState().select(d.outcome.created);
+}
+
+/** The one selected nested clip (with its linked partner), if any. */
+export function selectedNested(): Clip | null {
+  const s = seq();
+  const ids = selection();
+  if (!s || !ids.length) return null;
+  const clips = ids.map((id) => findClip(s, id)).filter((c): c is Clip => !!c && !!nestedSequence(c.mediaId));
+  if (!clips.length || clips.some((c) => c.mediaId !== clips[0].mediaId || (c.id !== clips[0].id && (!c.link || c.link !== clips[0].link)))) return null;
+  return clips[0];
+}
+
 /** Opens the sequence a nested clip shows, at the frame under the playhead. */
 export async function openNested(clip: Clip) {
   const inner = nestedSequence(clip.mediaId);

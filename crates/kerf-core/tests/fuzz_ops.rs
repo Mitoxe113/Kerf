@@ -342,10 +342,15 @@ fn random_command(r: &mut Rng, p: &Project, clipboard: &[PasteItem]) -> EditComm
             EditCommand::SetInOut { sequence, in_point: r.chance(70).then_some(a), out_point: r.chance(70).then(|| a + r.range(-10, 100)) }
         }
         22 => {
-            if r.chance(60) {
+            if r.chance(50) {
                 EditCommand::AddMarker { sequence, frame: r.range(-5, 300), name: "m".into(), color: MarkerColor::Blue }
-            } else {
+            } else if r.chance(55) {
                 EditCommand::NestClips { sequence, clips: some_clips(r), name: "Nest".into() }
+            } else {
+                // Mostly a nested clip, sometimes any clip.
+                let nested: Vec<Uuid> = seq.tracks.iter().flat_map(|t| &t.clips).filter(|c| p.sequence(c.media_id).is_some()).map(|c| c.id).collect();
+                let pick = if r.chance(80) { r.pick(&nested).or(clip) } else { clip };
+                EditCommand::UnnestClip { sequence, clip: pick.unwrap_or_default() }
             }
         }
         _ => {

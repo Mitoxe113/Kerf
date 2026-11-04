@@ -16,6 +16,7 @@ Format nach [Keep a Changelog](https://keepachangelog.com/de/1.1.0/), Versionen 
 - Metadaten-Editor im Panel *Projekt*: Name, Favorit, Farbe, Tags und Notiz; für mehrere Medien Favorit, Farbe und Tags auf einmal. Die Suche im Medienbrowser findet auch Notizen und Tags.
 - Überwachte Ordner: neue Video-, Audio- und Bilddateien werden, solange das Projekt geöffnet ist, in eine gewählte Ablage importiert, sobald sie fertig kopiert sind; vorhandene Dateien auf Wunsch sofort, beim Öffnen gemeldete mit *Abgleichen*.
 - Farbmatrix je Video wählbar (Automatisch, BT.601, BT.709) im Panel *Projekt › Metadaten*; die Wahl gilt in Vorschau und Export.
+- Verschachtelung auflösen (Compound Clips): legt die Clips eines verschachtelten Clips an seine Stelle zurück, jede Spur der inneren Sequenz auf eine eigene Spur. Wo das Bild oder Ton ändern würde (veränderter Clip, angeschnittene Übergänge oder Blenden, Mischmodi, Spurmischung, andere Bildrate oder Größe), lehnt Kerf mit Begründung ab.
 
 ### Behoben
 - Schnitt: Teilen und Slip runden die Quellposition nicht mehr auf; ein Teil konnte sonst ein Bild über das Clipende oder das Medium hinausreichen.

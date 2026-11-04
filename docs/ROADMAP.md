@@ -56,7 +56,8 @@ Zuverlässigkeit (Deltas, geteilte Undo-Schnappschüsse, Autosave, Versionen, Wi
 - ✅ Stapel-Export: mehrere Vorgaben in einem Schritt in die Render-Warteschlange
 - ✅ Überwachte Ordner: neue Mediendateien landen automatisch in einer Ablage
 - ✅ Farbmatrix je Video wählbar; Vorschau-Regel je Codec in Chromium gemessen
-- ☐ Einstellungsebenen, Compound Clips, Plugins und Makros
+- ✅ Compound Clips: Auswahl verschachteln und Verschachtelung wieder auflösen; der Export ist vor und nach dem Auflösen gemessen gleich
+- ☐ Einstellungsebenen, Plugins und Makros
 
 ## Als Nächstes
 

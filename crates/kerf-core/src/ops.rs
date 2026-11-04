@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::error::{EditError, Result};
+use crate::error::{EditError, Result, UnnestBlock};
 use crate::model::*;
 use crate::text::clean_cues;
 use crate::time::{Frame, Rational};
@@ -250,6 +250,11 @@ pub enum EditCommand {
     /// sequence named `name` and puts one clip of it where they were (video
     /// and audio, linked). `created` = [new sequence, its clips].
     NestClips { sequence: Uuid, clips: Vec<Uuid>, name: String },
+    /// Puts the clips nested clip `clip` (and its linked partner of the other
+    /// kind) shows back into `sequence` in its place, each track of the nested
+    /// sequence on a track of its own. Refused when that would change the
+    /// picture or sound. The nested sequence stays. `created` = the new clips.
+    UnnestClip { sequence: Uuid, clip: Uuid },
     UpdateSequenceSettings { sequence: Uuid, settings: SequenceSettings },
 
     // --- tracks -----------------------------------------------------------
@@ -389,6 +394,7 @@ impl EditCommand {
             C::RemoveWatchFolder { .. } => "removeWatchFolder",
             C::AddSequence { .. } => "addSequence",
             C::NestClips { .. } => "nestClips",
+            C::UnnestClip { .. } => "unnestClip",
             C::CreateMulticam { .. } => "createMulticam",
             C::PlaceMulticam { .. } => "placeMulticam",
             C::SwitchAngle { .. } => "switchAngle",
@@ -802,6 +808,7 @@ pub fn apply(project: &mut Project, cmd: &EditCommand) -> Result<EditOutcome> {
             out.sequences_changed = true;
         }
         C::NestClips { sequence, clips, name } => nest_clips(project, *sequence, clips, name, &mut out)?,
+        C::UnnestClip { sequence, clip } => unnest_clip(project, *sequence, *clip, &mut out)?,
         C::CreateMulticam { multicam } => {
             let mut m = multicam.clone();
             m.name = non_empty(&m.name)?;
@@ -1047,6 +1054,176 @@ fn nest_clips(project: &mut Project, seq_id: Uuid, ids: &[Uuid], name: &str, out
     out.sequence = Some(seq_id);
     out.changed = true;
     out.sequences_changed = true;
+    Ok(())
+}
+
+/// A track that passes its clips on unchanged: shown (video), or audible at
+/// 0 dB without solo, mono or track effects (audio).
+fn plain_mix(t: &Track) -> bool {
+    match t.kind {
+        TrackKind::Video => !t.hidden,
+        TrackKind::Audio => !t.muted && !t.solo && t.volume_db == 0.0 && !t.mono && !t.effects.iter().any(|e| e.enabled),
+    }
+}
+
+/// A nested clip that shows its sequence as it is: no speed change, keys,
+/// fades, transitions, effects or changes to the picture or sound.
+fn plain_nested(c: &Clip, kind: TrackKind) -> bool {
+    let time = c.speed == 1.0 && !c.reverse && c.keys.is_empty() && c.fade_in == 0 && c.fade_out == 0 && c.transition.is_none() && c.multicam.is_none();
+    time && match kind {
+        TrackKind::Video => {
+            c.transform.is_identity() && c.opacity == 1.0 && c.color.is_identity() && c.active_effects().next().is_none() && c.blend_mode == BlendMode::Normal
+        }
+        TrackKind::Audio => {
+            c.volume_db == 0.0 && c.pan == 0.0 && !c.audio_effects.iter().any(|e| e.enabled) && c.channels == ChannelMap::Stereo && c.denoise.is_none()
+        }
+    }
+}
+
+/// The clips of `track` inside `[lo, hi)` (trimmed to it), or why taking them
+/// out would change what the window shows.
+fn window_of(track: &Track, lo: Frame, hi: Frame) -> Result<Vec<Clip>> {
+    let block = |b| Err(EditError::CannotUnnest(b));
+    for b in 0..track.clips.len() {
+        if let Some(s) = track.transition_into(b) {
+            // A transition the window shows only in part, or one with a clip outside.
+            if s.t0 < hi && s.t1 > lo && (s.t0 < lo || s.t1 > hi || s.cut <= lo || s.cut >= hi) {
+                return block(UnnestBlock::Edge);
+            }
+        }
+    }
+    for c in &track.clips {
+        if (c.start < lo && lo < c.end() && c.start + c.fade_in > lo) || (c.start < hi && hi < c.end() && c.end() - c.fade_out < hi) {
+            return block(UnnestBlock::Edge);
+        }
+        if track.kind == TrackKind::Video && c.start < hi && c.end() > lo && c.blend_mode != BlendMode::Normal {
+            return block(UnnestBlock::BlendMode);
+        }
+    }
+    let mut copy = track.clone();
+    clear_range(&mut copy, Frame::MIN, lo);
+    clear_range(&mut copy, hi, Frame::MAX);
+    for c in copy.clips.iter_mut().filter(|c| c.start == lo) {
+        // Its transition came from a clip before the window (and was not shown).
+        c.transition = None;
+    }
+    Ok(copy.clips)
+}
+
+fn unnest_clip(project: &mut Project, seq_id: Uuid, clip_id: Uuid, out: &mut EditOutcome) -> Result<()> {
+    let block = EditError::CannotUnnest;
+    let mut outer = project.sequence(seq_id).ok_or(EditError::SequenceNotFound)?.clone();
+    let (ti, ci) = outer.locate(clip_id).ok_or(EditError::ClipNotFound)?;
+    let clip = outer.tracks[ti].clips[ci].clone();
+    let inner = project.sequence(clip.media_id).filter(|s| s.id != seq_id).ok_or(block(UnnestBlock::NotNested))?;
+    let (a, b) = (&inner.settings, &outer.settings);
+    if (a.fps, a.width, a.height) != (b.fps, b.width, b.height) {
+        return Err(block(UnnestBlock::Settings));
+    }
+    // The clip and its linked partner of the other kind showing the same sequence.
+    let mut members = vec![(outer.tracks[ti].id, outer.tracks[ti].kind, clip.clone())];
+    if let Some(l) = clip.link {
+        let other = outer.tracks.iter().filter(|t| t.kind != outer.tracks[ti].kind).find_map(|t| {
+            t.clips.iter().find(|c| c.link == Some(l) && c.media_id == clip.media_id).map(|c| (t.id, t.kind, c.clone()))
+        });
+        members.extend(other);
+    }
+    for (track, kind, m) in &members {
+        let t = outer.track(*track).expect("exists");
+        if t.locked {
+            return Err(EditError::TrackLocked);
+        }
+        if !plain_nested(m, *kind) {
+            return Err(block(UnnestBlock::ClipChanged));
+        }
+        // A transition from the nested clip into the next one.
+        if t.clips.iter().any(|c| c.start == m.end() && c.transition.is_some()) {
+            return Err(block(UnnestBlock::ClipChanged));
+        }
+    }
+    for (track, _, m) in &members {
+        outer.track_mut(*track).expect("exists").clips.retain(|c| c.id != m.id);
+    }
+
+    let mut links = HashMap::new();
+    for (track, kind, m) in &members {
+        let (lo, hi) = (m.source_in, m.source_in + m.duration);
+        if *kind == TrackKind::Audio && inner.tracks.iter().any(|t| t.kind == TrackKind::Audio && t.solo) {
+            return Err(block(UnnestBlock::TrackMix));
+        }
+        // The tracks of this kind with something in the window, by position among them.
+        let mut layers = Vec::new();
+        for (k, &i) in inner.tracks_of(*kind).iter().enumerate() {
+            let t = &inner.tracks[i];
+            if !t.clips.iter().any(|c| c.start < hi && c.end() > lo) {
+                continue;
+            }
+            if !plain_mix(t) {
+                return Err(block(UnnestBlock::TrackMix));
+            }
+            layers.push((k, window_of(t, lo, hi)?));
+        }
+        let Some(&(k0, _)) = layers.first() else { continue };
+        let span = layers.last().expect("not empty").0 - k0;
+        let host = outer.track_index(*track).expect("exists");
+        // Several layers are mixed on their own tracks instead of through this one.
+        if layers.len() > 1 && !plain_mix(&outer.tracks[host]) {
+            return Err(block(UnnestBlock::TrackMix));
+        }
+        let (from, to) = (m.start, m.end());
+        let free = |t: &Track| !t.locked && plain_mix(t) && t.clips.iter().all(|c| c.end() <= from || c.start >= to);
+        let host_k = outer.tracks_of(*kind).iter().position(|&i| i == host).expect("kind matches");
+        // The tracks above the clip keep the layout of the nested sequence when
+        // they are free there; otherwise new tracks go right above it.
+        let in_place = (1..=span).all(|o| outer.tracks_of(*kind).get(host_k + o).is_none_or(|&i| free(&outer.tracks[i])));
+        let mut targets = Vec::with_capacity(layers.len());
+        if in_place {
+            for (k, _) in &layers {
+                let at = host_k + (k - k0);
+                while outer.tracks_of(*kind).len() <= at {
+                    add_track(&mut outer, *kind);
+                }
+                targets.push(outer.tracks[outer.tracks_of(*kind)[at]].id);
+            }
+        } else {
+            targets.push(*track);
+            for j in 1..layers.len() {
+                let n = outer.tracks.iter().filter(|t| t.kind == *kind).count() + 1;
+                let t = Track::new(*kind, format!("{}{n}", if *kind == TrackKind::Video { 'V' } else { 'A' }));
+                targets.push(t.id);
+                outer.tracks.insert(host + j, t);
+            }
+        }
+        let shift = m.start - lo;
+        for ((_, clips), target) in layers.into_iter().zip(targets) {
+            let t = outer.track_mut(target).expect("exists");
+            for mut c in clips {
+                c.id = Uuid::new_v4();
+                c.start += shift;
+                c.link = c.link.map(|l| *links.entry(l).or_insert_with(Uuid::new_v4));
+                c.enabled &= m.enabled;
+                out.created.push(c.id);
+                insert_sorted(t, c);
+            }
+        }
+    }
+    // Links whose other clips stayed outside the window.
+    let mut count: HashMap<Uuid, usize> = HashMap::new();
+    let created: HashSet<Uuid> = out.created.iter().copied().collect();
+    for l in outer.tracks.iter().flat_map(|t| &t.clips).filter(|c| created.contains(&c.id)).filter_map(|c| c.link) {
+        *count.entry(l).or_default() += 1;
+    }
+    for c in outer.tracks.iter_mut().flat_map(|t| t.clips.iter_mut()).filter(|c| created.contains(&c.id)) {
+        if c.link.is_some_and(|l| count.get(&l) == Some(&1)) {
+            c.link = None;
+        }
+    }
+    for t in &mut outer.tracks {
+        t.tidy_transitions();
+    }
+    *project.sequence_mut(seq_id).expect("exists") = outer;
+    out.sequence = Some(seq_id);
+    out.changed = true;
     Ok(())
 }
 
@@ -3696,6 +3873,142 @@ mod tests {
         assert_eq!(fx.v1().clips[1].duration, 50);
         fx.run(EditCommand::TrimClip { sequence: fx.seq, clip: vid, edge: Edge::Start, delta: 10, ripple: false, linked: true });
         assert_eq!((fx.v1().clips[1].start, fx.v1().clips[1].source_in), (160, 10));
+    }
+
+    /// (media, start, duration, source in) of every clip, by track.
+    fn layout(s: &Sequence) -> Vec<Vec<(Uuid, Frame, Frame, Frame)>> {
+        s.tracks.iter().map(|t| t.clips.iter().map(|c| (c.media_id, c.start, c.duration, c.source_in)).collect()).collect()
+    }
+
+    #[test]
+    fn unnesting_puts_the_clips_back() {
+        let mut fx = Fx::new(4.0, true);
+        fx.place(0, None, None, PlaceMode::Overwrite);
+        let a = fx.place(150, Some(0), Some(50), PlaceMode::Overwrite);
+        let v2 = fx.s().tracks[1].id;
+        let b = fx.run(EditCommand::PlaceMedia {
+            sequence: fx.seq,
+            media: fx.media,
+            video_track: Some(v2),
+            audio_track: None,
+            at: 170,
+            mode: PlaceMode::Overwrite,
+            source_in: Some(10),
+            source_out: Some(40),
+            match_sequence: false,
+        })
+        .created;
+        let before = layout(fx.s());
+        let tracks = fx.s().tracks.len();
+        let nested = fx.run(EditCommand::NestClips { sequence: fx.seq, clips: vec![a[0], b[0]], name: "N".into() });
+        let (inner, vclip) = (nested.created[0], nested.created[1]);
+        assert_ne!(layout(fx.s()), before);
+
+        let out = fx.run(EditCommand::UnnestClip { sequence: fx.seq, clip: vclip });
+        assert_eq!(layout(fx.s()), before);
+        assert_eq!(fx.s().tracks.len(), tracks);
+        assert_eq!(out.created.len(), 4);
+        // The pairs stay linked, with new ids; the nested sequence stays.
+        let s = fx.s();
+        let link = |media_start: Frame| -> Vec<Option<Uuid>> {
+            s.tracks.iter().flat_map(|t| &t.clips).filter(|c| c.start == media_start).map(|c| c.link).collect()
+        };
+        for start in [150, 170] {
+            let l = link(start);
+            assert!(l.len() == 2 && l[0].is_some() && l[0] == l[1], "{start}: {l:?}");
+        }
+        assert!(s.tracks.iter().flat_map(|t| &t.clips).all(|c| !a.contains(&c.id) && !b.contains(&c.id)));
+        assert!(fx.p.sequence(inner).is_some());
+        // Undo brings the nested clip back.
+        let mut h = crate::history::History::new(10);
+        let mut p = fx.clone_project();
+        h.apply(&mut p, &EditCommand::NestClips { sequence: fx.seq, clips: out.created.clone(), name: "M".into() }).unwrap();
+        let again = p.sequence(fx.seq).unwrap().tracks[0].clips.iter().find(|c| c.start == 150).unwrap().id;
+        let snapshot = p.clone();
+        h.apply(&mut p, &EditCommand::UnnestClip { sequence: fx.seq, clip: again }).unwrap();
+        assert_eq!(layout(p.sequence(fx.seq).unwrap()), before);
+        h.undo(&mut p);
+        assert_eq!(p, snapshot);
+    }
+
+    #[test]
+    fn unnesting_takes_the_shown_part_and_finds_free_tracks() {
+        let mut fx = Fx::new(4.0, false);
+        let v2 = fx.s().tracks[1].id;
+        let (seq, media) = (fx.seq, fx.media);
+        let place = move |track: Uuid, at: Frame, sin: Frame, sout: Frame| EditCommand::PlaceMedia {
+            sequence: seq,
+            media,
+            video_track: Some(track),
+            audio_track: None,
+            at,
+            mode: PlaceMode::Overwrite,
+            source_in: Some(sin),
+            source_out: Some(sout),
+            match_sequence: false,
+        };
+        let v1 = fx.s().tracks[0].id;
+        let lower = fx.run(place(v1, 0, 0, 60)).created;
+        let upper = fx.run(place(v2, 20, 0, 40)).created;
+        let n = fx.run(EditCommand::NestClips { sequence: fx.seq, clips: vec![lower[0], upper[0]], name: "N".into() });
+        let clip = n.created[1];
+        // Show frames 10..50 of the nested sequence at 100; something else sits on V2 there.
+        fx.run(EditCommand::MoveClips { sequence: fx.seq, clips: vec![clip], delta: 100, track_delta: 0, track_kind: None });
+        fx.run(EditCommand::TrimClip { sequence: fx.seq, clip, edge: Edge::Start, delta: 10, ripple: false, linked: true });
+        fx.run(EditCommand::TrimClip { sequence: fx.seq, clip, edge: Edge::End, delta: -10, ripple: false, linked: true });
+        fx.run(place(v2, 120, 0, 10));
+        let busy = layout(fx.s())[1].clone();
+        fx.run(EditCommand::UnnestClip { sequence: fx.seq, clip });
+        let s = fx.s();
+        // The upper layer gets a new track right above the nested clip's; V2 is untouched.
+        assert_eq!(s.tracks.iter().filter(|t| t.kind == TrackKind::Video).count(), 3);
+        let l = layout(s);
+        assert_eq!(l[0], vec![(fx.media, 110, 40, 10)]);
+        assert_eq!(l[1], vec![(fx.media, 120, 30, 0)]);
+        assert_eq!(l[2], busy);
+    }
+
+    #[test]
+    fn unnesting_refuses_what_would_look_different() {
+        let mut fx = Fx::new(4.0, true);
+        let ids = fx.place(0, Some(0), Some(50), PlaceMode::Overwrite);
+        let n = fx.run(EditCommand::NestClips { sequence: fx.seq, clips: ids.clone(), name: "N".into() });
+        let (inner, clip) = (n.created[0], n.created[1]);
+        let seq = fx.seq;
+        let unnest = move |p: &mut Project, clip: Uuid| apply(p, &EditCommand::UnnestClip { sequence: seq, clip });
+        let refused = |b| Err(EditError::CannotUnnest(b));
+
+        // A clip that does not show a sequence.
+        let mut p = fx.clone_project();
+        let plain = fx.place(200, None, None, PlaceMode::Overwrite)[0];
+        assert_eq!(unnest(&mut fx.p, plain), refused(UnnestBlock::NotNested));
+        fx.p = p.clone();
+        // A nested clip with less opacity.
+        let patch = ClipPatch { opacity: Some(0.5), ..Default::default() };
+        apply(&mut p, &EditCommand::UpdateClips { sequence: fx.seq, clips: vec![clip], patch }).unwrap();
+        assert_eq!(unnest(&mut p, clip), refused(UnnestBlock::ClipChanged));
+        // A hidden track in the nested sequence.
+        let mut p = fx.clone_project();
+        let hidden = p.sequence(inner).unwrap().tracks[0].id;
+        let patch = TrackPatch { hidden: Some(true), ..Default::default() };
+        apply(&mut p, &EditCommand::UpdateTrack { sequence: inner, track: hidden, patch }).unwrap();
+        assert_eq!(unnest(&mut p, clip), refused(UnnestBlock::TrackMix));
+        // Another frame rate.
+        let mut p = fx.clone_project();
+        let settings = SequenceSettings { fps: Rational::new(30, 1), ..p.sequence(inner).unwrap().settings };
+        apply(&mut p, &EditCommand::UpdateSequenceSettings { sequence: inner, settings }).unwrap();
+        assert_eq!(unnest(&mut p, clip), refused(UnnestBlock::Settings));
+        // The clip starts inside a fade of the nested sequence.
+        let mut p = fx.clone_project();
+        let patch = ClipPatch { fade_in: Some(20), ..Default::default() };
+        let inner_clip = p.sequence(inner).unwrap().tracks[0].clips[0].id;
+        apply(&mut p, &EditCommand::UpdateClips { sequence: inner, clips: vec![inner_clip], patch }).unwrap();
+        apply(&mut p, &EditCommand::TrimClip { sequence: fx.seq, clip, edge: Edge::Start, delta: 10, ripple: false, linked: true }).unwrap();
+        assert_eq!(unnest(&mut p, clip), refused(UnnestBlock::Edge));
+        // The plain case works.
+        let before = fx.clone_project();
+        assert_eq!(unnest(&mut fx.p, clip).map(|_| ()), Ok(()));
+        assert_ne!(fx.p, before);
     }
 
     #[test]
