@@ -68,7 +68,14 @@ impl Session {
 }
 
 pub struct AppPaths {
+    /// Derived media (`<cache root>/media`).
     pub cache: PathBuf,
+    /// The cache folder in use this session (chosen or the default).
+    pub cache_root: PathBuf,
+    /// The app's own cache folder, used when none is chosen.
+    pub cache_default: PathBuf,
+    /// Settings file of the cache folder and its limit.
+    pub cache_config: PathBuf,
     pub recovery: PathBuf,
     pub versions: PathBuf,
     /// Freeze frames of projects that have not been saved yet.
@@ -84,11 +91,13 @@ pub struct AppPaths {
 pub struct Prefs {
     pub autosave_secs: AtomicU64,
     pub keep_versions: AtomicUsize,
+    /// Cache size limit in bytes, 0 for none (read from the cache settings at startup).
+    pub cache_limit: AtomicU64,
 }
 
 impl Default for Prefs {
     fn default() -> Self {
-        Self { autosave_secs: AtomicU64::new(30), keep_versions: AtomicUsize::new(20) }
+        Self { autosave_secs: AtomicU64::new(30), keep_versions: AtomicUsize::new(20), cache_limit: AtomicU64::new(0) }
     }
 }
 

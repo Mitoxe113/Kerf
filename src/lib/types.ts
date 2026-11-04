@@ -1016,4 +1016,6 @@ export interface RelinkSuggestion { media: Uuid; name: string; oldPath: string; 
 export interface RelinkSearch { suggestions: RelinkSuggestion[]; scanned: number; truncated: boolean }
 
 export type CacheKind = "proxies" | "thumbnails" | "waveforms" | "other";
+/** Cache folder in use, the one chosen for the next start, and the size limit. */
+export interface CacheSettings { active: string; default: string; configured: string | null; limitBytes: number | null }
 export interface CacheInfo { root: string; kinds: { kind: CacheKind; bytes: number; files: number; unusedBytes: number }[]; totalBytes: number; freeBytes: number | null }

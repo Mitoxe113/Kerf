@@ -11,6 +11,7 @@ import type {
   ArchiveProgress,
   ArchiveReport,
   CacheInfo,
+  CacheSettings,
   CacheKind,
   RelinkSearch,
   AnalysisRequest,
@@ -103,6 +104,11 @@ export const api = {
   relinkSearch: (media: Uuid[], dirs: string[]) => invoke<RelinkSearch>("relink_search", { media, dirs }),
   cacheInfo: () => invoke<CacheInfo>("cache_info"),
   cacheClear: (kinds: CacheKind[], includeOpen: boolean) => invoke<number>("cache_clear", { kinds, includeOpen }),
+  cacheSettings: () => invoke<CacheSettings>("cache_settings"),
+  /** Cache folder for the next start; null: the app's own. */
+  cacheLocationSet: (root: string | null) => invoke<CacheSettings>("cache_location_set", { root }),
+  /** Size limit in bytes (null: none), applied at once; returns the bytes freed. */
+  cacheLimitSet: (bytes: number | null) => invoke<number>("cache_limit_set", { bytes }),
   mediaMetadata: (media: Uuid) => invoke<Record<string, unknown>>("media_metadata", { media }),
   syncAngles: (media: Uuid[]) => invoke<(number | null)[]>("sync_angles", { media }),
   freezeFrame: (sequence: Uuid, clip: Uuid, frame: number, seconds: number) => serial(() => invoke<Delta>("freeze_frame", { sequence, clip, frame, seconds })),

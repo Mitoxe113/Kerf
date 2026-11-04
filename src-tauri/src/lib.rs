@@ -1,6 +1,7 @@
 //! Kerf application shell: wires the engine crates to the Tauri window.
 
 mod assist;
+mod cache_config;
 mod commands;
 mod export_jobs;
 mod library;
@@ -79,10 +80,17 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
-            let cache_root = app.path().app_cache_dir()?;
+            let cache_default = app.path().app_cache_dir()?;
             let data_root = app.path().app_data_dir()?;
+            std::fs::create_dir_all(&data_root)?;
+            let cache_config = data_root.join(cache_config::FILE);
+            let cache_settings = cache_config::load(&cache_config);
+            let cache_root = cache_config::resolve(&cache_settings, &cache_default);
             let paths = AppPaths {
                 cache: cache_root.join("media"),
+                cache_root: cache_root.clone(),
+                cache_default,
+                cache_config,
                 recovery: data_root.join("recovery"),
                 versions: data_root.join("versions"),
                 stills: data_root.join("stills"),
@@ -109,10 +117,12 @@ pub fn run() {
                     None
                 }
             };
+            let prefs = state::Prefs::default();
+            prefs.cache_limit.store(cache_settings.limit_bytes.unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
             let state = AppState {
                 session: Mutex::new(Session::new(Project::new("Unbenanntes Projekt", now_ms()), None)),
                 paths,
-                prefs: Default::default(),
+                prefs,
                 media: MediaService::new(tools),
                 exports: ExportService::new(),
                 launch_file: Mutex::new(project_arg(std::env::args(), &std::env::current_dir().unwrap_or_default())),
@@ -131,6 +141,7 @@ pub fn run() {
             state.media.start(handle);
             state.exports.start(handle);
             recovery::start(handle);
+            project_tools::start_cache_upkeep(handle);
 
             // Built here rather than from the config alone, so the page can open
             // the program output window (see output_window).
@@ -158,6 +169,9 @@ pub fn run() {
             project_tools::relink_search,
             project_tools::cache_info,
             project_tools::cache_clear,
+            project_tools::cache_settings,
+            project_tools::cache_location_set,
+            project_tools::cache_limit_set,
             project_tools::media_metadata,
             commands::app_info,
             commands::project_state,

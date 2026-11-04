@@ -51,6 +51,7 @@ Zuverlässigkeit (Deltas, geteilte Undo-Schnappschüsse, Autosave, Versionen, Wi
 - ✅ Szenen, Stille, Beats und Momente lokal erkennen, prüfen und als ein Undo-Schritt übernehmen; Ducking als Lautstärke-Keyframes
 - ✅ Marker mit Kategorie, Bereich und Kapitel, Marker-Panel, Kapitel im Export
 - ✅ Projektprüfung, Relink-Suche, Projekt archivieren, portable Pfade, Cache-Verwaltung, Metadaten
+- ✅ Cache-Ordner wählbar, Größengrenze mit automatischem Aufräumen
 - ✅ Intelligente Ablagen (Smart Bins) mit Regeln, Metadaten-Editor (Tags, Notiz, Farbe, Favorit, auch für mehrere Medien)
 - ☐ Transkription und automatische Untertitel (lokales Sprachmodell nötig), Smart Reframe
 - ✅ Stapel-Export: mehrere Vorgaben in einem Schritt in die Render-Warteschlange

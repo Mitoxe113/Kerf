@@ -20,8 +20,11 @@ Format nach [Keep a Changelog](https://keepachangelog.com/de/1.1.0/), Versionen 
 - Einstellungsebenen (*Sequenz › Einstellungsebene einfügen*): Farbkorrektur, Effekte, Deckkraft, Blenden und Mischmodus der Ebene wirken auf alle Spuren darunter. In verschachtelten Sequenzen bleiben durchsichtige Stellen durchsichtig. Vorschau und Export sind in denselben Fällen gemessen (höchstens 2 Stufen Abstand), der segmentierte Export gleicht dem in einem Stück.
 - HDR-Erkennung: Videos mit PQ- oder HLG-Kennzeichnung tragen im Medienbrowser das Zeichen *HDR (PQ)* bzw. *HDR (HLG)*, die Projektprüfung nennt sie, und vor einem Export mit solchen Clips (auch in verschachtelten Sequenzen) fragt Kerf nach. Umgerechnet wird HDR weiterhin nicht.
 - Makros (*Bearbeiten › Makros …*): Befehle aufzeichnen (*Bearbeiten › Makro aufzeichnen*) oder Schritt für Schritt zusammenstellen, umbenennen und ordnen; ausführen über die Befehlspalette, den Dialog oder *Makro 1 ausführen* bis *Makro 9 ausführen* (Tastenkürzel zuweisbar). Jeder Schritt ist ein eigener Rückgängig-Schritt; ein Makro hält beim ersten Befehl an, der gerade nicht möglich ist.
+- Cache-Ordner wählbar (*Einstellungen › Cache*, gilt ab dem nächsten Start) und Größengrenze: Wird der Cache größer, löscht Kerf die am längsten nicht geschriebenen Einträge, die das geöffnete Projekt nicht braucht, sofort und danach alle zehn Minuten.
 
 ### Behoben
+- Vorschaubilder, Wellenformen und Proxys, deren Datei außerhalb des aktuellen Cache-Ordners liegt (Projekt von einem anderen Rechner, verlegter Cache), werden neu erstellt, statt als vorhanden zu gelten; die Vorschau durfte sie nicht laden.
+- Überwachte Ordner importieren keine Dateien aus Kerfs eigenem Cache- oder Download-Ordner, falls dieser darin liegt.
 - Schnitt: Teilen und Slip runden die Quellposition nicht mehr auf; ein Teil konnte sonst ein Bild über das Clipende oder das Medium hinausreichen.
 - Trimm- und Slip-Grenzen messen vom ungerundeten Bereichsende; in Zeitlupe vor einer Rampe ließ sich sonst weit über das Medium hinaus trimmen.
 - Rückwärts-Clips zeigen kein Bild mehr hinter dem Medienende (Umschalten auf rückwärts, Tempoänderung).

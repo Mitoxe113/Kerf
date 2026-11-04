@@ -110,6 +110,7 @@ const ERRORS: Record<string, string> = {
   versionNotFound: "Diese Version existiert nicht mehr.",
   openFileFailed: "Die Datei konnte nicht geöffnet werden.",
   ioFailed: "Die Datei konnte nicht gelesen oder geschrieben werden.",
+  cacheFolder: "In diesen Ordner kann Kerf nicht schreiben. Wähle einen anderen Ordner für den Cache.",
   libraryFailed: "Die lokale Bibliothek (Presets, Favoriten) ist nicht verfügbar.",
   notFound: "Der Eintrag existiert nicht mehr.",
   invalid: "Die Daten sind ungültig.",

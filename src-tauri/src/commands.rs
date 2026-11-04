@@ -123,11 +123,14 @@ pub(crate) fn activate_media(app: &AppHandle, state: &AppState, assets: &[MediaA
     let scope = app.asset_protocol_scope();
     for a in assets {
         let _ = scope.allow_file(&a.path);
+        // A file outside this session's cache (another computer, or the
+        // cache folder before it was moved) is out of the webview's reach.
+        let gone = |p: &Path| !p.is_file() || !p.starts_with(&state.paths.cache);
         let derived_missing = |d: &Derived| {
-            d.poster.as_ref().is_some_and(|p| !p.is_file())
-                || d.filmstrip.as_ref().is_some_and(|f| !f.path.is_file())
-                || d.peaks.as_ref().is_some_and(|p| !p.path.is_file())
-                || d.proxy.as_ref().is_some_and(|p| !p.is_file())
+            d.poster.as_deref().is_some_and(gone)
+                || d.filmstrip.as_ref().is_some_and(|f| gone(&f.path))
+                || d.peaks.as_ref().is_some_and(|p| gone(&p.path))
+                || d.proxy.as_deref().is_some_and(gone)
         };
         let needs = match &a.status {
             MediaStatus::Analyzing => true,
@@ -492,7 +495,7 @@ const WATCH_SCAN_LIMIT: usize = 20_000;
 
 /// Media files in `dir` (subfolders up to 8 levels deep when asked), sorted;
 /// stops after [`WATCH_SCAN_LIMIT`] entries.
-fn watched_files(dir: &Path, subfolders: bool) -> Vec<WatchedFile> {
+fn watched_files(dir: &Path, subfolders: bool, skip: &[&Path]) -> Vec<WatchedFile> {
     let mut out = Vec::new();
     let mut seen = 0usize;
     let mut stack = vec![(dir.to_path_buf(), 0usize)];
@@ -508,6 +511,9 @@ fn watched_files(dir: &Path, subfolders: bool) -> Vec<WatchedFile> {
             }
             let Ok(meta) = e.metadata() else { continue };
             let path = e.path();
+            if skip.iter().any(|s| path.starts_with(s)) {
+                continue;
+            }
             if meta.is_dir() {
                 if subfolders && depth + 1 < 8 {
                     stack.push((path, depth + 1));
@@ -522,15 +528,21 @@ fn watched_files(dir: &Path, subfolders: bool) -> Vec<WatchedFile> {
     out
 }
 
-/// Lists the media files of watch folders (`None` = the folder is missing or unreadable).
+/// Lists the media files of watch folders (`None` = the folder is missing or
+/// unreadable). Kerf's own folders (cache, downloaded assets) are left out,
+/// so proxies and previews written there never come back as imports.
 #[tauri::command(async)]
-pub fn watch_scan(folders: Vec<WatchScan>) -> Vec<Option<Vec<WatchedFile>>> {
+pub fn watch_scan(state: State<'_, AppState>, folders: Vec<WatchScan>) -> Vec<Option<Vec<WatchedFile>>> {
+    scan_watch_folders(folders, &[&state.paths.cache_root, &state.paths.assets])
+}
+
+fn scan_watch_folders(folders: Vec<WatchScan>, skip: &[&Path]) -> Vec<Option<Vec<WatchedFile>>> {
     folders
         .into_iter()
         .take(kerf_core::model::MAX_WATCH_FOLDERS)
         .map(|f| {
             let dir = Path::new(&f.path);
-            (dir.is_dir() && std::fs::read_dir(dir).is_ok()).then(|| watched_files(dir, f.subfolders))
+            (dir.is_dir() && std::fs::read_dir(dir).is_ok()).then(|| watched_files(dir, f.subfolders, skip))
         })
         .collect()
 }
@@ -1005,7 +1017,7 @@ pub fn reversed_audio(state: State<'_, AppState>, media: Uuid, denoise: Option<D
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_text, watch_scan, with_project_extension, WatchScan};
+    use super::{decode_text, scan_watch_folders, with_project_extension, WatchScan};
     use std::path::PathBuf;
 
     #[test]
@@ -1017,15 +1029,19 @@ mod tests {
             std::fs::write(d.join(f), b"12345").unwrap();
         }
         let scan = |subfolders| {
-            let r = watch_scan(vec![WatchScan { path: d.to_string_lossy().into_owned(), subfolders }]);
+            let r = scan_watch_folders(vec![WatchScan { path: d.to_string_lossy().into_owned(), subfolders }], &[]);
             let files = r.into_iter().next().unwrap().unwrap();
             assert!(files.iter().all(|f| f.size == 5 && f.modified > 0));
             files.into_iter().map(|f| PathBuf::from(f.path).strip_prefix(d).unwrap().to_string_lossy().replace('\\', "/")).collect::<Vec<_>>()
         };
         assert_eq!(scan(false), ["a.mp4", "b.WAV"]);
         assert_eq!(scan(true), ["Tag 1/Karte/d.jpg", "Tag 1/c.mov", "a.mp4", "b.WAV"]);
-        let missing = watch_scan(vec![WatchScan { path: d.join("fehlt").to_string_lossy().into_owned(), subfolders: true }]);
+        let missing = scan_watch_folders(vec![WatchScan { path: d.join("fehlt").to_string_lossy().into_owned(), subfolders: true }], &[]);
         assert_eq!(missing, vec![None]);
+        // A cache folder inside the watched folder: its proxies are no imports.
+        let cache = d.join("Tag 1");
+        let r = scan_watch_folders(vec![WatchScan { path: d.to_string_lossy().into_owned(), subfolders: true }], &[cache.as_path()]);
+        assert_eq!(r[0].as_ref().unwrap().len(), 2);
     }
 
     #[test]

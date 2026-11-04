@@ -3,12 +3,16 @@
 // autosave/version settings are pushed to the engine by App.
 
 import { FolderOpen } from "lucide-react";
-import type { ReactNode } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
+import { useEffect, useState, type ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { checkForUpdate } from "../actions/update";
 import { api } from "../lib/ipc";
+import { formatBytes } from "../lib/media";
+import type { CacheSettings } from "../lib/types";
 import { useEditor } from "../state/editor";
-import { useProject } from "../state/project";
+import { reportError, useProject } from "../state/project";
+import { toast } from "../state/toasts";
 import { Button, Field, Modal, NumberField, Segmented, Select, Toggle } from "../ui/primitives";
 
 const AUTOSAVE = [15, 30, 60, 120, 300, 600].map((s) => ({ value: s, label: s < 60 ? `alle ${s} Sekunden` : s === 60 ? "jede Minute" : `alle ${s / 60} Minuten` }));
@@ -19,6 +23,73 @@ function Group({ title, children }: { title: string; children: ReactNode }) {
       <div className="panel-title">{title}</div>
       {children}
     </div>
+  );
+}
+
+const GB = 1024 ** 3;
+const LIMITS = [0, 5, 10, 20, 50, 100, 200].map((g) => ({ value: g * GB, label: g ? `${g} GB` : "unbegrenzt" }));
+
+/** Where the cache lives (from the next start) and how large it may grow (at once). */
+function CacheGroup() {
+  const [c, setC] = useState<CacheSettings | null>(null);
+  useEffect(() => {
+    api.cacheSettings().then(setC).catch(reportError);
+  }, []);
+  if (!c) return null;
+  const next = c.configured ?? c.default;
+  const moving = next !== c.active;
+  const limit = c.limitBytes ?? 0;
+  const limits = LIMITS.some((o) => o.value === limit) ? LIMITS : [...LIMITS, { value: limit, label: formatBytes(limit) }];
+  const choose = async () => {
+    const picked = await open({ directory: true, title: "Ordner für den Cache wählen", defaultPath: next });
+    if (typeof picked !== "string") return;
+    try {
+      setC(await api.cacheLocationSet(picked));
+    } catch (e) {
+      reportError(e);
+    }
+  };
+  const setLimit = async (bytes: number) => {
+    try {
+      const freed = await api.cacheLimitSet(bytes || null);
+      setC({ ...c, limitBytes: bytes || null });
+      if (freed > 0) toast.success("Cache verkleinert", `${formatBytes(freed)} freigegeben`);
+    } catch (e) {
+      reportError(e);
+    }
+  };
+  return (
+    <Group title="Cache">
+      <Field label="Ordner">
+        <span className="min-w-0 flex-1 truncate text-xs text-fg-2" title={c.active}>
+          {c.active}
+        </span>
+        <Button size="sm" onClick={() => void api.revealPath(c.active)} title="Im Explorer anzeigen">
+          <FolderOpen size={12} />
+        </Button>
+        <Button size="sm" onClick={() => void choose()}>
+          Ändern …
+        </Button>
+        {c.configured && (
+          <Button size="sm" onClick={() => void api.cacheLocationSet(null).then(setC).catch(reportError)}>
+            Standard
+          </Button>
+        )}
+      </Field>
+      {moving ? (
+        <Note>
+          Ab dem nächsten Start: {next}. Vorschaubilder, Wellenformen und die für die Vorschau nötigen Proxys entstehen dort neu. Der bisherige Ordner bleibt mit seinen Dateien liegen; wer ihn nicht mehr braucht, leert ihn vorher unter <i>Projekt › Cache</i>.
+        </Note>
+      ) : (
+        <Note>Vorschaubilder, Wellenformen, Proxys und aufbereiteter Ton. Ein anderer Ordner gilt ab dem nächsten Start.</Note>
+      )}
+      <Field label="Höchstens">
+        <Select width={180} value={limit} onChange={(v) => void setLimit(v)} options={limits} />
+      </Field>
+      <Note>
+        Wird der Cache größer, löscht Kerf die am längsten nicht geschriebenen Einträge, sofort und danach alle zehn Minuten. Was die Medien des geöffneten Projekts brauchen, bleibt. Fehlende Vorschaubilder, Wellenformen und nötige Proxys erstellt Kerf beim nächsten Öffnen eines Projekts neu.
+      </Note>
+    </Group>
   );
 }
 
@@ -148,13 +219,9 @@ export function Preferences({ onClose }: { onClose: () => void }) {
           <Field label="Encoder">
             <span className="truncate text-xs text-fg-2">{info?.hwEncoders?.length ? info.hwEncoders.join(", ") : info?.hwEncoders === null ? "wird erkannt …" : "nur Software"}</span>
           </Field>
-          <Field label="Cache">
-            <span className="min-w-0 flex-1 truncate text-xs text-fg-2" title={info?.cacheDir}>
-              {info?.cacheDir}
-            </span>
-            {info?.cacheDir && <Button size="sm" onClick={() => void api.revealPath(info.cacheDir)}><FolderOpen size={12} /></Button>}
-          </Field>
         </Group>
+
+        <CacheGroup />
       </div>
     </Modal>
   );

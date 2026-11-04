@@ -10,10 +10,11 @@ use kerf_core::error::EditError;
 use kerf_core::model::MediaStatus;
 use kerf_media::analysis;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
 
 use crate::assist::Job;
+use crate::cache_config;
 use crate::commands::{activate_media, free_space, CmdResult, CommandError};
 use crate::state::{lock, AppState};
 
@@ -304,6 +305,126 @@ pub fn cache_clear(app: AppHandle, state: State<'_, AppState>, kinds: Vec<CacheK
     freed
 }
 
+// --- cache folder and limit ---------------------------------------------------------------
+
+/// Serialises deleting cache entries (the timer, the limit command).
+static UPKEEP: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Deletes unused cache entries, least recently written first, until the
+/// cache fits under the limit. Entries of the open project's media stay.
+/// Returns the bytes freed.
+pub fn enforce_limit(state: &AppState) -> u64 {
+    let limit = state.prefs.cache_limit.load(std::sync::atomic::Ordering::Relaxed);
+    if limit == 0 {
+        return 0;
+    }
+    let _guard = lock(&UPKEEP);
+    let freed = evict(&state.paths.cache, &open_entries(state), limit);
+    if freed > 0 {
+        log::info!("cache limit: freed {freed} bytes");
+    }
+    freed
+}
+
+/// The work of `enforce_limit` on the cache folder `root`.
+fn evict(root: &Path, keep: &HashSet<PathBuf>, limit: u64) -> u64 {
+    let mut entries: Vec<cache_config::Entry> = Vec::new();
+    scan(root, |entry, file, _, size| {
+        let written = fs::metadata(file).and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH);
+        match entries.last_mut() {
+            Some(e) if e.path == entry => {
+                e.bytes += size;
+                e.newest = e.newest.max(written);
+            }
+            _ => entries.push(cache_config::Entry { path: entry.to_path_buf(), bytes: size, newest: written }),
+        }
+    });
+    let mut freed = 0;
+    for dir in cache_config::over_limit(entries, keep, limit) {
+        let Ok(files) = fs::read_dir(&dir) else { continue };
+        for f in files.flatten() {
+            if f.file_type().is_ok_and(|t| t.is_file()) {
+                let size = f.metadata().map(|m| m.len()).unwrap_or(0);
+                if fs::remove_file(f.path()).is_ok() {
+                    freed += size;
+                } else {
+                    log::warn!("could not delete cache file {}", f.path().display());
+                }
+            }
+        }
+        let _ = fs::remove_dir(&dir); // only when empty
+    }
+    freed
+}
+
+/// Keeps the cache under its limit while Kerf runs: a minute after the start, then every ten minutes.
+pub fn start_cache_upkeep(app: &AppHandle) {
+    let app = app.clone();
+    let spawned = std::thread::Builder::new().name("kerf-cache-upkeep".into()).spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(60));
+        loop {
+            enforce_limit(&app.state::<AppState>());
+            std::thread::sleep(std::time::Duration::from_secs(600));
+        }
+    });
+    if let Err(e) = spawned {
+        log::error!("cache upkeep thread: {e}");
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CacheSettings {
+    /// The folder in use this session.
+    active: PathBuf,
+    /// The app's own cache folder.
+    default: PathBuf,
+    /// The folder chosen for the next start (`None`: the default).
+    configured: Option<PathBuf>,
+    limit_bytes: Option<u64>,
+}
+
+fn cache_settings_of(state: &AppState) -> CacheSettings {
+    let c = cache_config::load(&state.paths.cache_config);
+    CacheSettings { active: state.paths.cache_root.clone(), default: state.paths.cache_default.clone(), configured: c.root, limit_bytes: c.limit_bytes }
+}
+
+#[tauri::command]
+pub fn cache_settings(state: State<'_, AppState>) -> CacheSettings {
+    cache_settings_of(&state)
+}
+
+/// Chooses the cache folder for the next start (`None`: the default). The
+/// current folder and its files stay where they are.
+#[tauri::command]
+pub fn cache_location_set(state: State<'_, AppState>, root: Option<String>) -> CmdResult<CacheSettings> {
+    let mut c = cache_config::load(&state.paths.cache_config);
+    c.root = match root.map(PathBuf::from) {
+        None => None,
+        Some(dir) if dir == state.paths.cache_default => None,
+        Some(dir) => {
+            cache_config::check_root(&dir).map_err(|e| CommandError::new("cacheFolder", e))?;
+            Some(dir)
+        }
+    };
+    cache_config::save(&state.paths.cache_config, &c).map_err(|e| CommandError::new("ioFailed", e))?;
+    Ok(cache_settings_of(&state))
+}
+
+/// Sets the cache size limit (`None`: no limit) and applies it at once.
+/// Returns the bytes freed.
+#[tauri::command(async)]
+pub fn cache_limit_set(state: State<'_, AppState>, bytes: Option<u64>) -> CmdResult<u64> {
+    if bytes.is_some_and(|b| b < cache_config::MIN_LIMIT) {
+        return Err(CommandError::new("invalid", "cache limit below 1 GB"));
+    }
+    let mut c = cache_config::load(&state.paths.cache_config);
+    c.limit_bytes = bytes;
+    cache_config::save(&state.paths.cache_config, &c).map_err(|e| CommandError::new("ioFailed", e))?;
+    state.prefs.cache_limit.store(bytes.unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
+    Ok(enforce_limit(&state))
+}
+
 // --- metadata ---------------------------------------------------------------------------------
 
 /// Everything ffprobe reports about a media file (format, streams, tags such
@@ -347,5 +468,37 @@ mod tests {
         let mut seen = Vec::new();
         scan(dir.path(), |e, _, k, s| seen.push((e.to_path_buf(), k, s)));
         assert_eq!(seen, vec![(entry, CacheKind::Thumbnails, 1)]);
+    }
+
+    #[test]
+    fn the_limit_deletes_the_oldest_unused_entries_and_nothing_else() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let at = |secs: u64| std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000 + secs);
+        let make = |name: &str, bytes: usize, secs: u64| {
+            let e = root.join(name);
+            fs::create_dir_all(&e).unwrap();
+            let f = e.join("proxy.mp4");
+            fs::write(&f, vec![0u8; bytes]).unwrap();
+            fs::File::options().write(true).open(&f).unwrap().set_modified(at(secs)).unwrap();
+            e
+        };
+        let old = make("00000000000000aa", 4000, 0);
+        let open = make("00000000000000bb", 3000, 10);
+        let mid = make("00000000000000cc", 2000, 20);
+        let new = make("00000000000000dd", 1000, 30);
+        // Not a cache entry: never counted, never deleted.
+        fs::create_dir_all(root.join("titles")).unwrap();
+        fs::write(root.join("titles").join("poster.jpg"), vec![0u8; 9000]).unwrap();
+        let keep: HashSet<PathBuf> = [open.clone()].into();
+
+        assert_eq!(evict(root, &keep, 10_000), 0);
+        // 10 000 in entries: the oldest (4000) goes, the open one stays though older than the rest.
+        assert_eq!(evict(root, &keep, 6_500), 4000);
+        assert!(!old.exists() && open.exists() && mid.exists() && new.exists());
+        // Below what the open project needs: all but its entry.
+        assert_eq!(evict(root, &keep, 1), 3000);
+        assert!(open.exists() && !mid.exists() && !new.exists());
+        assert!(root.join("titles").join("poster.jpg").exists());
     }
 }

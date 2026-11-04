@@ -102,7 +102,9 @@ Kerf hat kein Plugin- oder Skriptsystem.
 
 ## Einstellungen
 
-`Strg+,`: Sichern, Vorschauqualität und Proxys, Timeline, Updates, Tastatur, Datenschutz, System (FFmpeg, Encoder, Cache-Ordner).
+`Strg+,`: Sichern, Vorschauqualität und Proxys, Timeline, Updates, Tastatur, Datenschutz, System (FFmpeg, Encoder) und Cache.
+
+**Cache:** *Ändern …* wählt einen anderen Ordner für Vorschaubilder, Wellenformen, Proxys und aufbereiteten Ton; er gilt ab dem nächsten Start, der bisherige Ordner bleibt mit seinen Dateien liegen (vorher unter *Projekt › Cache* leeren, wenn er nicht mehr gebraucht wird). *Höchstens* begrenzt die Größe: Kerf löscht dann die am längsten nicht geschriebenen Einträge, sofort und danach alle zehn Minuten, aber nie, was die Medien des geöffneten Projekts brauchen.
 
 ## Fehlerbehebung
 
@@ -115,6 +117,6 @@ Kerf hat kein Plugin- oder Skriptsystem.
 | Export schlägt fehl | Export-Protokoll öffnen (Symbol am Auftrag); es enthält Befehlszeile, Filtergraph und FFmpeg-Meldungen. |
 | Oberfläche zeigt einen Fehler | *Oberfläche neu laden*; das Projekt liegt in der Engine und bleibt erhalten. Danach speichern. |
 | Projektdatei beschädigt | Kerf lädt automatisch die `.bak`. Sonst *Datei › Versionen* oder die Wiederherstellung beim Start. |
-| Cache zu groß | *Projekt › Cache*: Arten einzeln leeren; Kerf erzeugt Benötigtes neu. |
+| Cache zu groß | *Projekt › Cache*: Arten einzeln leeren; Kerf erzeugt Benötigtes neu. Dauerhaft: *Einstellungen › Cache › Höchstens* oder einen Ordner auf einem anderen Laufwerk wählen. |
 
 **Protokoll für Fehlerberichte:** *Hilfe › Über Kerf* zeigt Version, Build-Kennung und den Protokollordner (Datei `kerf.log`). Das Protokoll enthält keine API-Schlüssel.

@@ -184,7 +184,8 @@ fn run_analysis(app: &AppHandle, id: Uuid) {
         a.info = Some(info.clone());
         a.status = MediaStatus::Ready;
         a.derived.preview_native = native;
-        if a.derived.proxy.as_ref().is_some_and(|x| !x.is_file()) {
+        // Made again when gone or left in a cache folder Kerf no longer uses.
+        if a.derived.proxy.as_ref().is_some_and(|x| !x.is_file() || !x.starts_with(&state.paths.cache)) {
             a.derived.proxy = None;
         }
     });
