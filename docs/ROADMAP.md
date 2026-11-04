@@ -72,5 +72,5 @@ Zuverlässigkeit (Deltas, geteilte Undo-Schnappschüsse, Autosave, Versionen, Wi
 
 ## Später
 
-- Farbmanagement: Primärfarben und Übertragung im Export wie in der Vorschau, HDR-Metadaten
+- Farbmanagement: Primärfarben und Übertragung im Export wie in der Vorschau, HDR mit Tonemapping (bisher nur erkannt und gemeldet)
 - Native Render-Pipeline (wgpu), falls der segmentierte Export bei sehr langen Timelines nicht reicht

@@ -19,6 +19,41 @@ export interface Issue {
   track?: Uuid;
 }
 
+/**
+ * HDR transfer of a video from its tag (FFmpeg's names): PQ (SMPTE ST 2084)
+ * or HLG (ARIB STD-B67), else null. Kerf converts neither to SDR.
+ */
+export function hdrOf(m: MediaAsset): "PQ" | "HLG" | null {
+  const t = m.info?.video?.color?.transfer;
+  return t === "smpte2084" ? "PQ" : t === "arib-std-b67" ? "HLG" : null;
+}
+
+/** What an export does with HDR material (shown in the check and before exporting). */
+export const HDR_NOTE = "Kerf rechnet PQ und HLG nicht in SDR um (kein Tonemapping). Der Export schreibt SDR mit BT.709-Kennzeichnung und übernimmt die Werte dieser Clips unverändert; Helligkeit und Farben weichen daher vom Original ab.";
+
+/** HDR videos an export of sequence `seq` shows (enabled clips on video tracks, nested sequences included). */
+export function hdrMediaIn(p: Pick<Project, "media" | "sequences">, seq: Uuid): MediaAsset[] {
+  const media = new Map(p.media.map((m) => [m.id, m]));
+  const seen = new Set<Uuid>();
+  const out = new Map<Uuid, MediaAsset>();
+  const visit = (id: Uuid) => {
+    if (seen.has(id)) return;
+    seen.add(id);
+    const s = p.sequences.find((x) => x.id === id);
+    for (const t of s?.tracks ?? []) {
+      if (t.kind !== "video") continue;
+      for (const c of t.clips) {
+        if (!c.enabled) continue;
+        const m = media.get(c.mediaId);
+        if (m && m.kind === "video" && hdrOf(m)) out.set(m.id, m);
+        else if (!m) visit(c.mediaId);
+      }
+    }
+  };
+  visit(seq);
+  return [...out.values()];
+}
+
 const STANDARD_FPS = [23.976, 24, 25, 29.97, 30, 47.952, 48, 50, 59.94, 60, 100, 119.88, 120];
 const rate = (r: { num: number; den: number }) => r.num / r.den;
 const isStandard = (fps: number) => STANDARD_FPS.some((s) => Math.abs(s - fps) < 0.01);
@@ -64,6 +99,8 @@ export function checkProject(p: Project, ctx: HealthContext): Issue[] {
     else if (m.status.state === "error") out.push({ id: `error-${m.id}`, severity: "error", title: `Medium nicht lesbar: ${m.name}`, detail: m.status.message, media: m.id });
     else if (m.status.state === "ready" && m.info?.video && !m.derived.previewNative && !m.derived.proxy && m.kind !== "image")
       out.push({ id: `proxy-${m.id}`, severity: "info", title: `Vorschau braucht einen Proxy: ${m.name}`, detail: `Die Vorschau kann ${m.info.video.codec} nicht direkt abspielen; der Proxy wird noch erzeugt oder ist abgeschaltet. Der Export liest das Original.`, media: m.id });
+    const hdr = m.kind === "video" ? hdrOf(m) : null;
+    if (hdr) out.push({ id: `hdr-${m.id}`, severity: used.has(m.id) ? "warning" : "info", title: `HDR-Material (${hdr}): ${m.name}`, detail: `${HDR_NOTE}\n${where}`, media: m.id });
   }
 
   const fonts = new Map<string, string>();

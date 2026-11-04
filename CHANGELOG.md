@@ -18,6 +18,7 @@ Format nach [Keep a Changelog](https://keepachangelog.com/de/1.1.0/), Versionen 
 - Farbmatrix je Video wählbar (Automatisch, BT.601, BT.709) im Panel *Projekt › Metadaten*; die Wahl gilt in Vorschau und Export.
 - Verschachtelung auflösen (Compound Clips): legt die Clips eines verschachtelten Clips an seine Stelle zurück, jede Spur der inneren Sequenz auf eine eigene Spur. Wo das Bild oder Ton ändern würde (veränderter Clip, angeschnittene Übergänge oder Blenden, Mischmodi, Einstellungsebenen, Spurmischung, andere Bildrate oder Größe), lehnt Kerf mit Begründung ab.
 - Einstellungsebenen (*Sequenz › Einstellungsebene einfügen*): Farbkorrektur, Effekte, Deckkraft, Blenden und Mischmodus der Ebene wirken auf alle Spuren darunter. In verschachtelten Sequenzen bleiben durchsichtige Stellen durchsichtig. Vorschau und Export sind in denselben Fällen gemessen (höchstens 2 Stufen Abstand), der segmentierte Export gleicht dem in einem Stück.
+- HDR-Erkennung: Videos mit PQ- oder HLG-Kennzeichnung tragen im Medienbrowser das Zeichen *HDR (PQ)* bzw. *HDR (HLG)*, die Projektprüfung nennt sie, und vor einem Export mit solchen Clips (auch in verschachtelten Sequenzen) fragt Kerf nach. Umgerechnet wird HDR weiterhin nicht.
 
 ### Behoben
 - Schnitt: Teilen und Slip runden die Quellposition nicht mehr auf; ein Teil konnte sonst ein Bild über das Clipende oder das Medium hinausreichen.

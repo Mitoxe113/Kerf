@@ -68,7 +68,8 @@ Ein Konto, eine Anmeldung oder eine Internetverbindung braucht Kerf dafür nicht
 - Arbeitsbereich *Farbe*: Belichtung, Kontrast, Sättigung, Temperatur, Tönung, Farbräder, Kurven, LUTs (`.cube`).
 - Scopes: Luma-Wellenform, RGB-Parade, Vektorskop, Histogramm.
 - Masken wirken auf die Deckkraft eines Clips (Effekte *Formmaske* und *Freiform-Maske*), nicht als Auswahl für eine Farbkorrektur.
-- Nicht vorhanden: Qualifier für die Farbkorrektur, HDR.
+- HDR: Videos mit PQ- oder HLG-Kennzeichnung zeigt der Medienbrowser als *HDR (PQ)* bzw. *HDR (HLG)*, die Projektprüfung nennt sie, und vor dem Export fragt Kerf nach. Kerf rechnet HDR nicht in SDR um: Der Export schreibt SDR (BT.709) mit den unveränderten Werten, Helligkeit und Farben weichen ab. Solches Material vorher in SDR umwandeln.
+- Nicht vorhanden: Qualifier für die Farbkorrektur, HDR-Bearbeitung und Tonemapping.
 
 ## Export
 

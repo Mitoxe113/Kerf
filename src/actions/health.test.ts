@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { IDENTITY_COLOR, IDENTITY_TRANSFORM } from "../engine/math";
 import { NO_SUBTITLES } from "../engine/text";
 import type { Clip, MediaAsset, Project, Sequence, Track } from "../lib/types";
-import { checkProject, describePixFmt, videoGaps } from "./health";
+import { checkProject, describePixFmt, hdrMediaIn, hdrOf, videoGaps } from "./health";
 
 const clip = (id: string, start: number, duration: number, mediaId = "m1", enabled = true): Clip => ({
   id, mediaId, name: id, start, duration, sourceIn: 0, speed: 1, link: null, enabled,
@@ -47,6 +47,29 @@ describe("project health check", () => {
     const fifty = media("fifty", { state: "ready" }, 50);
     const ok = checkProject(project([seq([track("v1", [clip("a", 0, 10, "fifty")])])], [fifty]), ctx);
     expect(ok).toEqual([]);
+  });
+
+  it("finds HDR material by its transfer tag, also inside nested sequences", () => {
+    const tagged = (id: string, transfer: string | null) => {
+      const m = media(id, { state: "ready" });
+      m.info!.video!.color = { space: "bt2020nc", range: "tv", transfer, primaries: "bt2020" };
+      return m;
+    };
+    const pq = tagged("pq", "smpte2084");
+    const hlg = tagged("hlg", "arib-std-b67");
+    const sdr = tagged("sdr", "bt709");
+    expect([hdrOf(pq), hdrOf(hlg), hdrOf(sdr), hdrOf(media("m1", { state: "ready" }))]).toEqual(["PQ", "HLG", null, null]);
+    const inner = seq([track("iv", [clip("i", 0, 10, "hlg")])], { id: "inner", name: "Innen" });
+    const outer = seq([track("v1", [clip("a", 0, 10, "pq"), clip("b", 10, 10, "sdr"), clip("n", 20, 10, "inner")])]);
+    const p = project([outer, inner], [pq, hlg, sdr]);
+    expect(hdrMediaIn(p, "s").map((m) => m.id).sort()).toEqual(["hlg", "pq"]);
+    // A disabled clip is not exported.
+    outer.tracks[0].clips[0].enabled = false;
+    expect(hdrMediaIn(p, "s").map((m) => m.id)).toEqual(["hlg"]);
+    const issues = checkProject(p, ctx);
+    expect(issues.find((i) => i.id === "hdr-hlg")?.severity).toBe("warning");
+    expect(issues.find((i) => i.id === "hdr-pq")?.title).toBe("HDR-Material (PQ): pq.mp4");
+    expect(issues.some((i) => i.id === "hdr-sdr")).toBe(false);
   });
 
   it("reads subsampling and bit depth from pixel formats", () => {

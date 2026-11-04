@@ -210,7 +210,7 @@ Dieser Abschnitt hat einen anderen Prüfstand als „Fertig und verifiziert“: 
 | `kerf-library` | 13 | Migrationen, Presets (Prüfung, Export/Import), Favoriten, Recents, Titelvorlagen, Assets und Sammlungen, Schriften (Import, Ablehnung, Entfernen) |
 | `kerf-assets` | 10 | Anbieter-Parser, Lizenzzuordnung, URL-Regeln, Inhaltsprüfung, Berichte; Mock-Server: Suche, Schlüssel, Download, abgelehnte Inhalte und Weiterleitungen, Abbruch, 429 |
 | App-Crate | 8 | Auflisten überwachter Ordner, Versionen, Projektdatei-Argument, Endung beim Speichern, Untertitel-Kodierung, Datumsformat, Relink-Suche, Wiederherstellung nach Absturz |
-| Frontend (Vitest) | 136 | Timecode, Importentscheidung der überwachten Ordner, Farbmatrix der Vorschau und ihre Korrektur, Regeln der intelligenten Ablagen, Dateinamen des Stapel-Exports, Timeline-Constraints, Lautstärke-Gummiband, Lernbereich des Rauschprofils, Keyframes/Easing/Bezier, Zeitabbildung, Effekte und Kurven, Effekt-Keyframes, Rasterung der Freiform-Maske mit den Werten der Rust-Tests, Audio-DSP gegen FFmpeg-Fixtures, Textsatz und Textanimation, Deltas, Docking, unscharfe Suche, Tastaturprofile, Assistenten-Befehle (Bereiche entfernen, Marker, Szenen), Projektprüfung, Beenden mit laufenden Aufträgen, unbekannte Projektfelder, Codec-Prüfung der Vorschau |
+| Frontend (Vitest) | 137 | Timecode, Importentscheidung der überwachten Ordner, Farbmatrix der Vorschau und ihre Korrektur, Regeln der intelligenten Ablagen, Dateinamen des Stapel-Exports, Timeline-Constraints, Lautstärke-Gummiband, Lernbereich des Rauschprofils, Keyframes/Easing/Bezier, Zeitabbildung, Effekte und Kurven, Effekt-Keyframes, Rasterung der Freiform-Maske mit den Werten der Rust-Tests, Audio-DSP gegen FFmpeg-Fixtures, Textsatz und Textanimation, Deltas, Docking, unscharfe Suche, Tastaturprofile, Assistenten-Befehle (Bereiche entfernen, Marker, Szenen), Projektprüfung (auch HDR-Erkennung), Beenden mit laufenden Aufträgen, unbekannte Projektfelder, Codec-Prüfung der Vorschau |
 
 In dieser Arbeitsumgebung lief die Pipeline mit FFmpeg 6.1 über einen Adapter für `-/filter_complex`: 20 von 21 bestanden, `reverse_and_speed_ramps_render` scheitert nur dort (Rampen-Frame 116 statt 115). Mit aktuellem FFmpeg in der CI unter Windows bestand dieser Test in jedem Lauf, zuletzt für Commit `9867ea9` mit damals 17 Pipeline-Tests. Zusätzlich gibt es einen Zeitmesstest für große Projekte (`cargo test -p kerf-core --release --test large_project -- --ignored --nocapture`).
 
@@ -232,7 +232,7 @@ Alle Tests laufen in der CI unter Windows.
 - **Normalisieren** misst die Quelle ohne Blenden und Spurlautstärke.
 - **Programmausgabe-Fenster:** Der Ton bleibt beim Hauptfenster; das Fenster zeigt nur etwas, solange der Programmmonitor im Arbeitsbereich sichtbar ist (es sagt das dann an).
 - **Multicam-Synchronisation** über den Ton braucht gemeinsamen Ton der Kameras; sonst werden sie am Anfang ausgerichtet.
-- **Farbmanagement:** Abweichende Primärfarben und Übertragungsfunktionen rechnet die Vorschau (Chromium) in die Anzeige um, der Export übernimmt nur die Matrix (gemessen: H.264 mit BT.470BG-Primärfarben und Gamma 2,8 zeigt Chromium als 183/10/71 statt 192/31/95). Die Regeln, wie die Vorschau Material ohne gültigen Tag dekodiert, sind in Chromium unter Linux gemessen, nicht in WebView2 unter Windows; weicht WebView2 ab, lässt sich die Matrix je Video von Hand wählen.
+- **Farbmanagement:** Abweichende Primärfarben und Übertragungsfunktionen rechnet die Vorschau (Chromium) in die Anzeige um, der Export übernimmt nur die Matrix (gemessen: H.264 mit BT.470BG-Primärfarben und Gamma 2,8 zeigt Chromium als 183/10/71 statt 192/31/95). HDR (PQ, HLG) erkennt Kerf an der Kennzeichnung und warnt in Medienbrowser, Projektprüfung und vor dem Export; umgerechnet wird es nicht. Die Regeln, wie die Vorschau Material ohne gültigen Tag dekodiert, sind in Chromium unter Linux gemessen, nicht in WebView2 unter Windows; weicht WebView2 ab, lässt sich die Matrix je Video von Hand wählen.
 - **Verworfene Frames:** gezählt werden Sprünge in der Bildfolge der Vorschau und Decoder-Drops; ob ein Videoelement einen Frame zu spät lieferte, sieht die Statistik nicht.
 
 ## Noch nicht umgesetzt
@@ -242,7 +242,7 @@ Alle Tests laufen in der CI unter Windows.
 - Spurgruppen
 - AV1 und DNxHR als Export-Codecs
 - Plugins, Makros, Skripte; universelle Suche über die Befehlspalette hinaus, visuelle Zwischenablage, Referenzmonitor, Brand Kits, Versionsvergleich
-- HDR; Primärfarben und Übertragungsfunktion im Export wie in der Vorschau
+- HDR-Bearbeitung und Tonemapping (HDR-Material wird nur erkannt und gemeldet); Primärfarben und Übertragungsfunktion im Export wie in der Vorschau
 - Native GPU-Pipeline (wgpu) für den Export
 - Code-Signatur-Zertifikate (der Release-Workflow ist vorbereitet), Absturzberichte (bewusst ausgelassen)
 

@@ -2,6 +2,7 @@ import { useShallow } from "zustand/react/shallow";
 import { AlertTriangle, ChevronRight, Film, Folder, FolderPlus, FolderSearch, Image as ImageIcon, LayoutGrid, List, Loader2, Music, Plus, Search, SlidersHorizontal, Star } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { placeMedia } from "../actions/editing";
+import { HDR_NOTE, hdrOf } from "../actions/health";
 import { importMedia, relinkMedia } from "../actions/project";
 import { api } from "../lib/ipc";
 import { codecLabel, fileUrl, formatBytes } from "../lib/media";
@@ -16,12 +17,15 @@ import { cx, IconButton, openContextMenu, PanelHeader, Segmented, Select, useInP
 
 const KIND_ICON = { video: Film, audio: Music, image: ImageIcon };
 
-function statusOf(a: MediaAsset, proxyJob: number | undefined): { label: string; tone: "busy" | "error" | "warn" } | null {
+function statusOf(a: MediaAsset, proxyJob: number | undefined): { label: string; tone: "busy" | "error" | "warn"; hint?: string } | null {
   if (a.status.state === "analyzing") return { label: "Analyse …", tone: "busy" };
   if (a.status.state === "missing") return { label: "Offline", tone: "error" };
   if (a.status.state === "error") return { label: "Nicht lesbar", tone: "error" };
   if (proxyJob !== undefined) return { label: `Proxy ${Math.round(proxyJob * 100)} %`, tone: "busy" };
   if (!a.title && !a.derived.previewNative && !a.derived.proxy) return { label: "Proxy ausstehend", tone: "warn" };
+  // Kerf has no tone mapping: say so where the clip is picked.
+  const hdr = a.kind === "video" ? hdrOf(a) : null;
+  if (hdr) return { label: `HDR (${hdr})`, tone: "warn", hint: HDR_NOTE };
   return null;
 }
 
@@ -410,7 +414,7 @@ export function MediaBrowser() {
                         <Icon size={13} className={cx("shrink-0", sel ? "text-signal" : "text-fg-3")} />
                         <span className="truncate">{renaming === a.id ? <InlineRename id={a.id} initial={a.name} isBin={false} onDone={stopRename} /> : a.name}</span>
                         {a.favorite && <Star size={10} className="shrink-0 fill-signal text-signal" />}
-                        {st && <span className={cx("shrink-0 text-[10px]", st.tone === "error" ? "text-danger" : st.tone === "warn" ? "text-warn" : "text-fg-3")}>{st.label}</span>}
+                        {st && <span className={cx("shrink-0 text-[10px]", st.tone === "error" ? "text-danger" : st.tone === "warn" ? "text-warn" : "text-fg-3")} title={st.hint}>{st.label}</span>}
                       </span>
                     </td>
                     <td className="tc">{a.kind === "image" ? "–" : a.info ? formatDuration(a.info.duration) : ""}</td>
@@ -519,7 +523,7 @@ function GridItem({
               status.tone === "error" ? "text-danger" : status.tone === "warn" ? "text-warn" : "text-fg-2",
               a.favorite && "left-5",
             )}
-            title={a.status.state === "error" ? a.status.message : undefined}
+            title={status.hint ?? (a.status.state === "error" ? a.status.message : undefined)}
           >
             {status.tone === "busy" ? <Loader2 size={9} className="animate-spin" /> : <AlertTriangle size={9} />}
             {status.label}

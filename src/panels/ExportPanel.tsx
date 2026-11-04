@@ -1,6 +1,7 @@
 import { open as openDialog, save } from "@tauri-apps/plugin-dialog";
 import { CheckCircle2, CircleSlash, FolderOpen, Loader2, Play, RotateCcw, Save, ScrollText, Trash2, TriangleAlert, X, XCircle } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { HDR_NOTE, hdrMediaIn } from "../actions/health";
 import { confirm, prompt } from "../actions/project";
 import { batchOutputs } from "../lib/batch";
 import { api } from "../lib/ipc";
@@ -245,6 +246,14 @@ export function ExportPanel() {
         body: `Nicht vorhanden: ${[...missing].join(", ")}. Betroffene Titel und Untertitel werden mit der Ersatzschrift Inter Variable gerendert. Die Schrift kann im Titel-Inspektor importiert werden.`,
         confirm: "Mit Ersatzschrift exportieren",
       });
+      if (go !== true) return false;
+    }
+    // HDR is exported as it is, without tone mapping.
+    const project = useProject.getState().project;
+    const hdr = project ? hdrMediaIn(project, seq.id) : [];
+    if (hdr.length) {
+      const names = hdr.slice(0, 5).map((m) => m.name).join(", ") + (hdr.length > 5 ? ` und ${hdr.length - 5} weitere` : "");
+      const go = await confirm({ title: "HDR-Material in der Sequenz", body: `${names}. ${HDR_NOTE}`, confirm: "Trotzdem exportieren" });
       if (go !== true) return false;
     }
     // License hints for downloaded assets (information only; Kerf cannot clear rights).
