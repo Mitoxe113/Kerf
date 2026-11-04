@@ -1,11 +1,12 @@
 // Project management: health check, relinking moved media, archiving the
-// project with its media, Kerf's cache of derived files, and the metadata of
-// media (editable project fields plus the technical data of the file).
+// project with its media, Kerf's cache of derived files, watch folders, and
+// the metadata of media (editable project fields plus the technical data of
+// the file).
 // Nothing here changes the project without an explicit action; relinking and
 // metadata changes are undoable edits.
 
 import { open } from "@tauri-apps/plugin-dialog";
-import { AlertCircle, AlertTriangle, FolderSearch, Info, Loader2, RefreshCw, X } from "lucide-react";
+import { AlertCircle, AlertTriangle, Eye, FolderSearch, Info, Loader2, RefreshCw, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { checkProject, describePixFmt, type Issue } from "../actions/health";
 import { openSequence } from "../actions/editing";
@@ -17,10 +18,11 @@ import { useEditor } from "../state/editor";
 import { fontAvailable, useFonts } from "../state/fonts";
 import { edit, reportError, useProject } from "../state/project";
 import { toast } from "../state/toasts";
+import { folderName, syncWatchFolder, useWatch } from "../state/watch";
 import { MediaFields } from "./MediaFields";
 import { Button, cx, PanelHeader, Progress, Segmented, Toggle } from "../ui/primitives";
 
-type Tab = "check" | "relink" | "archive" | "cache" | "meta";
+type Tab = "check" | "relink" | "archive" | "cache" | "watch" | "meta";
 
 const SEVERITY = {
   error: { icon: <AlertCircle size={13} className="text-danger" />, label: "Fehler" },
@@ -274,6 +276,71 @@ function ArchiveView() {
 
 const KIND_NAMES: Record<CacheKind, string> = { proxies: "Proxys", thumbnails: "Vorschaubilder und Filmstreifen", waveforms: "Wellenformen", other: "Sonstiges (rückwärts abgespielter Ton)" };
 
+function WatchView() {
+  const folders = useProject((s) => s.project?.watchFolders ?? []);
+  const bins = useProject((s) => s.project?.bins ?? []);
+  const status = useWatch((s) => s.status);
+  const [busy, setBusy] = useState<string | null>(null);
+  const currentBin = useEditor((s) => s.currentBin);
+  const add = () => {
+    const b = bins.find((x) => x.id === currentBin);
+    useEditor.getState().set({ dialog: { kind: "watchFolder", bin: b && !b.smart ? b.id : null } });
+  };
+  const sync = async (id: string) => {
+    setBusy(id);
+    try {
+      const n = await syncWatchFolder(id);
+      if (n === null) toast.error("Ordner nicht erreichbar");
+      else toast.success(n === 1 ? "1 Medium importiert" : `${n} Medien importiert`);
+    } catch (e) {
+      reportError(e);
+    } finally {
+      setBusy(null);
+    }
+  };
+  return (
+    <div className="min-h-0 flex-1 space-y-2 overflow-auto px-2 py-2 text-xs text-fg-2">
+      <div className="flex items-center gap-2">
+        <span className="text-fg-3">Neue Mediendateien in diesen Ordnern werden importiert, solange das Projekt geöffnet ist.</span>
+        <Button size="sm" className="ml-auto shrink-0" onClick={add}>
+          Ordner überwachen …
+        </Button>
+      </div>
+      {!folders.length && <p className="text-fg-4">Kein Ordner wird überwacht.</p>}
+      {folders.map((w) => {
+        const st = status[w.id];
+        const bin = w.bin ? bins.find((b) => b.id === w.bin)?.name : null;
+        return (
+          <div key={w.id} className="space-y-1 rounded-sm bg-ground px-2 py-1.5">
+            <div className="flex items-center gap-2">
+              <Eye size={13} className={st?.missing ? "text-warn" : "text-fg-3"} />
+              <span className="min-w-0 flex-1 truncate font-medium text-fg" title={w.path}>
+                {folderName(w.path)}
+              </span>
+              <Button size="sm" disabled={busy === w.id || !!st?.missing} onClick={() => void sync(w.id)} title="Dateien des Ordners importieren, die nicht im Projekt sind">
+                Abgleichen
+              </Button>
+              <button className="text-fg-4 hover:text-danger" title="Überwachung beenden (importierte Medien bleiben)" aria-label={`Überwachung von ${folderName(w.path)} beenden`} onClick={() => void edit({ type: "removeWatchFolder", id: w.id })}>
+                <X size={13} />
+              </button>
+            </div>
+            <div className="truncate text-fg-4" title={w.path}>
+              {w.path}
+            </div>
+            <div className="text-fg-3">
+              In {bin ? `„${bin}“` : "die oberste Ebene"}
+              {w.subfolders ? " · mit Unterordnern" : ""}
+              {" · "}
+              {!st ? "wird gelesen …" : st.missing ? <span className="text-warn">Ordner nicht erreichbar</span> : st.outside ? `${st.outside} ${st.outside === 1 ? "Datei" : "Dateien"} nicht im Projekt` : "alles im Projekt"}
+              {st?.imported ? ` · ${st.imported} in dieser Sitzung importiert` : ""}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function CacheView() {
   const [info, setInfo] = useState<CacheInfo | null>(null);
   const [kinds, setKinds] = useState<CacheKind[]>(["proxies"]);
@@ -425,11 +492,12 @@ export function ProjectPanel() {
             { value: "relink", label: missing ? `Verknüpfen (${missing})` : "Verknüpfen" },
             { value: "archive", label: "Archiv" },
             { value: "cache", label: "Cache" },
+            { value: "watch", label: "Ordner" },
             { value: "meta", label: "Metadaten" },
           ]}
         />
       </PanelHeader>
-      {tab === "check" ? <CheckView goRelink={() => setTab("relink")} /> : tab === "relink" ? <RelinkView /> : tab === "archive" ? <ArchiveView /> : tab === "cache" ? <CacheView /> : <MetaView />}
+      {tab === "check" ? <CheckView goRelink={() => setTab("relink")} /> : tab === "relink" ? <RelinkView /> : tab === "archive" ? <ArchiveView /> : tab === "cache" ? <CacheView /> : tab === "watch" ? <WatchView /> : <MetaView />}
     </div>
   );
 }

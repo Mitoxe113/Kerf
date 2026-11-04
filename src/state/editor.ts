@@ -136,6 +136,7 @@ export type Dialog =
   | { kind: "trackEffects"; sequence: Uuid; track: Uuid }
   | { kind: "multicam"; media: Uuid[] }
   | { kind: "smartBin"; bin: Uuid | null; parent: Uuid | null }
+  | { kind: "watchFolder"; bin: Uuid | null }
   | { kind: "curve"; sequence: Uuid; clip: Uuid; params: KeyParam[]; at: number }
   | { kind: "palette"; query: string }
   | { kind: "preferences" }

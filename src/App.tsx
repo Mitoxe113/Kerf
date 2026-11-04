@@ -29,6 +29,7 @@ import { Workspace } from "./shell/Workspace";
 import { EffectsBrowser } from "./panels/EffectsBrowser";
 import { useEditor, type PanelId } from "./state/editor";
 import { activeSequence, useProject } from "./state/project";
+import { startWatchFolders } from "./state/watch";
 import { ContextMenuHost } from "./ui/primitives";
 import { AssistantPanel } from "./panels/Assistant";
 import { MarkersPanel } from "./panels/Markers";
@@ -91,7 +92,7 @@ export function App() {
   const fullscreen = useEditor((s) => s.fullscreen);
 
   useEffect(() => {
-    const cleanups: (() => void)[] = [installKeyboard(), syncEngine(), syncEnginePrefs()];
+    const cleanups: (() => void)[] = [installKeyboard(), syncEngine(), syncEnginePrefs(), startWatchFolders()];
     const st = useProject.getState();
     void api.projectState().then(st.applyState);
     void api.appInfo().then(st.setAppInfo);

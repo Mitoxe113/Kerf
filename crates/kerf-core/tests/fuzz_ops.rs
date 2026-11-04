@@ -161,6 +161,13 @@ fn invariants(p: &Project) -> Result<(), String> {
     }
     // Media and bins sit in existing bins that hold things (not smart ones), without loops.
     let holds = |id: Uuid| p.bins.iter().any(|b| b.id == id && b.smart.is_none());
+    if let Some(w) = p.watch_folders.iter().find(|w| w.bin.is_some_and(|b| !holds(b))) {
+        return Err(format!("watch folder {} imports into a missing or smart bin", w.path.display()));
+    }
+    let keys: std::collections::HashSet<String> = p.watch_folders.iter().map(|w| WatchFolder::key(&w.path)).collect();
+    if keys.len() != p.watch_folders.len() || p.watch_folders.len() > MAX_WATCH_FOLDERS {
+        return Err("duplicate or too many watch folders".into());
+    }
     if let Some(m) = p.media.iter().find(|m| m.bin.is_some_and(|b| !holds(b))) {
         return Err(format!("media {} in a missing or smart bin", m.name));
     }
@@ -201,7 +208,9 @@ fn random_command(r: &mut Rng, p: &Project, clipboard: &[PasteItem]) -> EditComm
             if r.chance(20) {
                 media.push(Uuid::new_v4());
             }
-            match r.below(6) {
+            match r.below(8) {
+                6 => EditCommand::AddWatchFolder { path: format!("C:\\Footage\\{}", r.below(4)).into(), bin: r.chance(70).then(|| r.pick(&bins)).flatten(), subfolders: r.chance(50) },
+                7 => EditCommand::RemoveWatchFolder { id: r.pick(&p.watch_folders.iter().map(|w| w.id).chain([Uuid::new_v4()]).collect::<Vec<_>>()).unwrap_or_default() },
                 0 => EditCommand::UpdateMedia { media, patch: MediaPatch { favorite: Some(r.chance(50)), tags: Some(vec![" a ".into(), "b".into(), "a".into()]), note: Some("Notiz".into()), ..Default::default() } },
                 1 => EditCommand::SetMediaFavorite { media, favorite: r.chance(50) },
                 2 => EditCommand::MoveMediaToBin { media, bin: r.chance(80).then(|| r.pick(&bins)).flatten() },

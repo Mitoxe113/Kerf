@@ -23,6 +23,7 @@ import type {
   ClipLoudness,
   CommandError,
   Delta,
+  WatchedFile,
   EditCommand,
   ExportJob,
   ExportSettings,
@@ -128,6 +129,8 @@ export const api = {
   /** Free bytes on the drive holding `path`, null when unknown. */
   diskFree: (path: string) => invoke<number | null>("disk_free", { path }),
   existingPaths: (paths: string[]) => invoke<string[]>("existing_paths", { paths }),
+  /** Media files per watch folder; null = folder missing or unreadable. */
+  watchScan: (folders: { path: string; subfolders: boolean }[]) => invoke<(WatchedFile[] | null)[]>("watch_scan", { folders }),
   openPath: (path: string) => invoke<void>("open_path", { path }),
   jsonRead: (path: string) => invoke<string>("json_read", { path }),
   /** The project Kerf was launched with (double-click on a .kerf file), once. */

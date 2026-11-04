@@ -451,6 +451,70 @@ pub fn existing_paths(paths: Vec<String>) -> Vec<String> {
     paths.into_iter().take(1000).filter(|p| Path::new(p).exists()).collect()
 }
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WatchScan {
+    path: String,
+    subfolders: bool,
+}
+
+#[derive(Serialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WatchedFile {
+    path: String,
+    size: u64,
+    /// Last change, ms since the epoch (0 if unknown).
+    modified: i64,
+}
+
+/// Most entries (files and folders) a scan of one watch folder looks at.
+const WATCH_SCAN_LIMIT: usize = 20_000;
+
+/// Media files in `dir` (subfolders up to 8 levels deep when asked), sorted;
+/// stops after [`WATCH_SCAN_LIMIT`] entries.
+fn watched_files(dir: &Path, subfolders: bool) -> Vec<WatchedFile> {
+    let mut out = Vec::new();
+    let mut seen = 0usize;
+    let mut stack = vec![(dir.to_path_buf(), 0usize)];
+    while let Some((d, depth)) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&d) else { continue };
+        let mut children: Vec<_> = entries.flatten().collect();
+        children.sort_by_key(|e| e.file_name());
+        for e in children.into_iter().rev() {
+            seen += 1;
+            if seen > WATCH_SCAN_LIMIT {
+                out.sort_by(|a: &WatchedFile, b| a.path.cmp(&b.path));
+                return out;
+            }
+            let Ok(meta) = e.metadata() else { continue };
+            let path = e.path();
+            if meta.is_dir() {
+                if subfolders && depth + 1 < 8 {
+                    stack.push((path, depth + 1));
+                }
+            } else if meta.is_file() && probe::is_media_path(&path) {
+                let modified = meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_millis() as i64);
+                out.push(WatchedFile { path: path.to_string_lossy().into_owned(), size: meta.len(), modified });
+            }
+        }
+    }
+    out.sort_by(|a, b| a.path.cmp(&b.path));
+    out
+}
+
+/// Lists the media files of watch folders (`None` = the folder is missing or unreadable).
+#[tauri::command(async)]
+pub fn watch_scan(folders: Vec<WatchScan>) -> Vec<Option<Vec<WatchedFile>>> {
+    folders
+        .into_iter()
+        .take(kerf_core::model::MAX_WATCH_FOLDERS)
+        .map(|f| {
+            let dir = Path::new(&f.path);
+            (dir.is_dir() && std::fs::read_dir(dir).is_ok()).then(|| watched_files(dir, f.subfolders))
+        })
+        .collect()
+}
+
 /// Free bytes on the volume holding `path` (a file or folder), if known.
 #[tauri::command]
 pub fn disk_free(path: String) -> Option<u64> {
@@ -920,8 +984,28 @@ pub fn reversed_audio(state: State<'_, AppState>, media: Uuid, denoise: Option<D
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_text, with_project_extension};
+    use super::{decode_text, watch_scan, with_project_extension, WatchScan};
     use std::path::PathBuf;
+
+    #[test]
+    fn watch_scan_lists_media_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        std::fs::create_dir_all(d.join("Tag 1/Karte")).unwrap();
+        for f in ["a.mp4", "b.WAV", "notes.txt", "Tag 1/c.mov", "Tag 1/Karte/d.jpg", "e.mp4.part"] {
+            std::fs::write(d.join(f), b"12345").unwrap();
+        }
+        let scan = |subfolders| {
+            let r = watch_scan(vec![WatchScan { path: d.to_string_lossy().into_owned(), subfolders }]);
+            let files = r.into_iter().next().unwrap().unwrap();
+            assert!(files.iter().all(|f| f.size == 5 && f.modified > 0));
+            files.into_iter().map(|f| PathBuf::from(f.path).strip_prefix(d).unwrap().to_string_lossy().replace('\\', "/")).collect::<Vec<_>>()
+        };
+        assert_eq!(scan(false), ["a.mp4", "b.WAV"]);
+        assert_eq!(scan(true), ["Tag 1/Karte/d.jpg", "Tag 1/c.mov", "a.mp4", "b.WAV"]);
+        let missing = watch_scan(vec![WatchScan { path: d.join("fehlt").to_string_lossy().into_owned(), subfolders: true }]);
+        assert_eq!(missing, vec![None]);
+    }
 
     #[test]
     fn saving_appends_the_project_extension() {

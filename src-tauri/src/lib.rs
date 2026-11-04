@@ -180,6 +180,7 @@ pub fn run() {
             commands::export_log,
             commands::disk_free,
             commands::existing_paths,
+            commands::watch_scan,
             commands::open_path,
             commands::json_read,
             commands::json_write,

@@ -33,5 +33,6 @@ export function applyDeltaToProject(p: Project, d: Delta): Project {
   if (d.media) next.media = d.media;
   if (d.bins) next.bins = d.bins;
   if (d.multicams) next.multicams = d.multicams;
+  if (d.watchFolders) next.watchFolders = d.watchFolders;
   return next;
 }

@@ -11,6 +11,8 @@ const EDIT_LABELS: Record<string, string> = {
   renameBin: "Ablage umbenennen",
   removeBin: "Ablage löschen",
   setSmartRules: "Regeln der Ablage ändern",
+  addWatchFolder: "Ordner überwachen",
+  removeWatchFolder: "Überwachung beenden",
   addSequence: "Neue Sequenz",
   removeSequence: "Sequenz löschen",
   renameSequence: "Sequenz umbenennen",

@@ -20,6 +20,7 @@ import { Preferences } from "./Preferences";
 import { guardUnsaved, prompt } from "../actions/project";
 import { engine } from "../engine/playback";
 import { SmartBinDialog } from "./SmartBinDialog";
+import { WatchFolderDialog } from "./WatchFolderDialog";
 
 const RESOLUTIONS = [
   { value: "3840x2160", label: "UHD 3840 × 2160" },
@@ -777,6 +778,8 @@ export function Dialogs() {
       return <MulticamDialog media={dialog.media} onClose={close} />;
     case "smartBin":
       return <SmartBinDialog bin={dialog.bin} parent={dialog.parent} onClose={close} />;
+    case "watchFolder":
+      return <WatchFolderDialog bin={dialog.bin} onClose={close} />;
     case "curve":
       return <CurveDialog sequence={dialog.sequence} clip={dialog.clip} params={dialog.params} at={dialog.at} onClose={close} />;
     case "saveWorkspace":

@@ -195,7 +195,9 @@ export function MediaBrowser() {
 
   const binMenu = (b: Bin): MenuItem[] => [
     { label: "Öffnen", onSelect: () => ed.set({ currentBin: b.id }) },
-    ...(b.smart ? [{ label: "Regeln bearbeiten …", onSelect: () => ed.set({ dialog: { kind: "smartBin", bin: b.id, parent: b.parent } }) }] : []),
+    ...(b.smart
+      ? [{ label: "Regeln bearbeiten …", onSelect: () => ed.set({ dialog: { kind: "smartBin", bin: b.id, parent: b.parent } }) }]
+      : [{ label: "Ordner in diese Ablage überwachen …", onSelect: () => ed.set({ dialog: { kind: "watchFolder", bin: b.id } }) }]),
     { label: "Umbenennen", onSelect: () => setRenaming(b.id) },
     { separator: true },
     b.smart
@@ -295,6 +297,7 @@ export function MediaBrowser() {
           openContextMenu(e, [
             { label: "Medien importieren …", shortcut: "Strg+I", onSelect: () => void importMedia() },
             { label: "Ordner importieren …", onSelect: () => void importMedia(undefined, true) },
+            { label: "Ordner überwachen …", onSelect: () => ed.set({ dialog: { kind: "watchFolder", bin: holdingBin(bins, ed.currentBin) } }) },
             { label: "Neue Ablage", onSelect: () => void newBin() },
             { label: "Neue intelligente Ablage …", onSelect: newSmartBin },
             ...(smart ? [{ label: "Regeln bearbeiten …", onSelect: () => ed.set({ dialog: { kind: "smartBin" as const, bin: ed.currentBin, parent: null } }) }] : []),

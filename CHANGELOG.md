@@ -14,6 +14,7 @@ Format nach [Keep a Changelog](https://keepachangelog.com/de/1.1.0/), Versionen 
 - Intelligente Ablagen (Smart Bins): zeigen alle Medien, die Regeln zu Typ, Text, Tags, Farbe, Favorit, Verwendung und Offline-Status erfüllen.
 - Stapel-Export: mehrere Export-Vorgaben ankreuzen und in einem Schritt als Aufträge in die Render-Warteschlange stellen; vorhandene Dateien werden vorher genannt.
 - Metadaten-Editor im Panel *Projekt*: Name, Favorit, Farbe, Tags und Notiz; für mehrere Medien Favorit, Farbe und Tags auf einmal. Die Suche im Medienbrowser findet auch Notizen und Tags.
+- Überwachte Ordner: neue Video-, Audio- und Bilddateien werden, solange das Projekt geöffnet ist, in eine gewählte Ablage importiert, sobald sie fertig kopiert sind; vorhandene Dateien auf Wunsch sofort, beim Öffnen gemeldete mit *Abgleichen*.
 - Farbmatrix je Video wählbar (Automatisch, BT.601, BT.709) im Panel *Projekt › Metadaten*; die Wahl gilt in Vorschau und Export.
 
 ### Behoben

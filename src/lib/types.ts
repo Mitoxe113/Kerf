@@ -462,6 +462,27 @@ export interface Project {
   sequences: Sequence[];
   activeSequence: Uuid;
   multicams?: Multicam[];
+  watchFolders?: WatchFolder[];
+}
+
+/** A folder whose new media files are imported while the project is open (kerf_core::model::WatchFolder). */
+export interface WatchFolder {
+  id: Uuid;
+  path: string;
+  /** Bin the files go into; null = project root. */
+  bin: Uuid | null;
+  subfolders: boolean;
+}
+
+/** Most watch folders a project keeps (kerf_core MAX_WATCH_FOLDERS). */
+export const MAX_WATCH_FOLDERS = 16;
+
+/** A media file in a watch folder (watch_scan). */
+export interface WatchedFile {
+  path: string;
+  size: number;
+  /** Last change, ms since the epoch (0 if unknown). */
+  modified: number;
 }
 
 export interface HistoryState {
@@ -498,6 +519,7 @@ export interface Delta {
   media: MediaAsset[] | null;
   bins: Bin[] | null;
   multicams?: Multicam[] | null;
+  watchFolders?: WatchFolder[] | null;
 }
 
 /** Clip-level change of one track; `track.clips` is empty. */
@@ -553,6 +575,8 @@ export type EditCommand =
   | { type: "setSmartRules"; bin: Uuid; rules: SmartRules }
   | { type: "renameBin"; bin: Uuid; name: string }
   | { type: "removeBin"; bin: Uuid }
+  | { type: "addWatchFolder"; path: string; bin: Uuid | null; subfolders: boolean }
+  | { type: "removeWatchFolder"; id: Uuid }
   | { type: "addSequence"; name: string; settings: SequenceSettings }
   | { type: "removeSequence"; sequence: Uuid }
   | { type: "renameSequence"; sequence: Uuid; name: string }

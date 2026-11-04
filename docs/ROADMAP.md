@@ -54,7 +54,9 @@ Zuverlässigkeit (Deltas, geteilte Undo-Schnappschüsse, Autosave, Versionen, Wi
 - ✅ Intelligente Ablagen (Smart Bins) mit Regeln, Metadaten-Editor (Tags, Notiz, Farbe, Favorit, auch für mehrere Medien)
 - ☐ Transkription und automatische Untertitel (lokales Sprachmodell nötig), Smart Reframe
 - ✅ Stapel-Export: mehrere Vorgaben in einem Schritt in die Render-Warteschlange
-- ☐ Einstellungsebenen, Compound Clips, überwachte Ordner, Plugins und Makros
+- ✅ Überwachte Ordner: neue Mediendateien landen automatisch in einer Ablage
+- ✅ Farbmatrix je Video wählbar; Vorschau-Regel je Codec in Chromium gemessen
+- ☐ Einstellungsebenen, Compound Clips, Plugins und Makros
 
 ## Als Nächstes
 
@@ -62,12 +64,11 @@ Zuverlässigkeit (Deltas, geteilte Undo-Schnappschüsse, Autosave, Versionen, Wi
 2. **Updates über GitHub einschalten:** 0.1.0 ist ohne Update-Daten veröffentlicht. Den privaten Updater-Schlüssel (passend zum öffentlichen in `tauri.conf.json`) und sein Passwort als Secrets `TAURI_SIGNING_PRIVATE_KEY` und `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` hinterlegen, dann bekommt 0.1.1 ein `latest.json`. Den Weg 0.1.0 → 0.1.1 über GitHub einmal mit einer installierten 0.1.0 durchspielen.
 3. **Code-Signierung:** Ein Authenticode-Zertifikat für Windows besorgen und als Secret hinterlegen; der Release-Workflow ist dafür vorbereitet. Bis dahin warnt SmartScreen beim Installer.
 4. **macOS und Linux (derzeit nicht geplant):** Vor einer Rückkehr müsste unter Linux die Wiedergabe über das `asset:`-Protokoll in WebKitGTK gelöst werden (siehe STATUS, *Release 0.1.0*); unter macOS Dateizuordnung über `RunEvent::Opened`, Dialoge und Wiedergabe in WKWebView prüfen.
-5. **Assistenten in der App durchspielen:** Szenen, Stille, Beats, Ducking, Archiv, Relink, Cache, intelligente Ablagen und den Metadaten-Editor mit echten Projekten in der Tauri-App bedienen; Kapitel in einem Abspieler prüfen.
+5. **Assistenten in der App durchspielen:** Szenen, Stille, Beats, Ducking, Archiv, Relink, Cache, intelligente Ablagen, überwachte Ordner (Dateien während des Kopierens) und den Metadaten-Editor mit echten Projekten in der Tauri-App bedienen; Kapitel in einem Abspieler prüfen.
 6. **Effekt-Keyframes und Freiform-Maske in der App durchspielen:** im Programmmonitor der Tauri-App (WebView2) Punkte setzen, animieren und gegen den Export vergleichen.
 7. **Farbmatrix in WebView2 prüfen:** Die Regeln für Material ohne gültigen Tag sind in Chromium unter Linux gemessen. Unter Windows einfarbige Testclips erzeugen, z. B. `ffmpeg -f lavfi -i color=c=0xC02060:s=1280x720:r=25:d=2 -vf format=yuv420p -c:v libx264 h264.mp4` und dasselbe mit `-c:v libvpx-vp9 -b:v 1M vp9.webm`, importieren und die Farbe im Programmmonitor (Pipette eines Bildschirmfotos) mit 205/50/95 (BT.709) und 192/31/95 (BT.601) vergleichen: erwartet sind BT.709 für H.264 und BT.601 für VP9. Weicht WebView2 ab, die Regel in `VideoInfo::webview_ycc` und `src/engine/ycc.ts` anpassen.
 
 ## Später
 
-- Medienverwaltung: überwachte Ordner
 - Farbmanagement: Primärfarben und Übertragung im Export wie in der Vorschau, HDR-Metadaten
 - Native Render-Pipeline (wgpu), falls der segmentierte Export bei sehr langen Timelines nicht reicht

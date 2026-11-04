@@ -13,7 +13,7 @@ use std::sync::Arc;
 use serde::Serialize;
 use uuid::Uuid;
 
-use crate::model::{Bin, MediaAsset, Multicam, Project, Sequence, Track};
+use crate::model::{Bin, MediaAsset, Multicam, Project, Sequence, Track, WatchFolder};
 use crate::ops::{self, EditCommand, EditOutcome};
 use crate::Result;
 
@@ -31,6 +31,7 @@ struct Snapshot {
     media: Arc<Vec<MediaAsset>>,
     bins: Arc<Vec<Bin>>,
     multicams: Arc<Vec<Multicam>>,
+    watch_folders: Arc<Vec<WatchFolder>>,
     sequences: Vec<SeqSnap>,
     active_sequence: Uuid,
 }
@@ -69,6 +70,7 @@ impl Snapshot {
             media: share(&p.media, prev.map(|s| &s.media)),
             bins: share(&p.bins, prev.map(|s| &s.bins)),
             multicams: share(&p.multicams, prev.map(|s| &s.multicams)),
+            watch_folders: share(&p.watch_folders, prev.map(|s| &s.watch_folders)),
             sequences,
             active_sequence: p.active_sequence,
         }
@@ -78,6 +80,7 @@ impl Snapshot {
         p.media = (*self.media).clone();
         p.bins = (*self.bins).clone();
         p.multicams = (*self.multicams).clone();
+        p.watch_folders = (*self.watch_folders).clone();
         p.sequences = self
             .sequences
             .iter()
@@ -141,6 +144,7 @@ pub struct ProjectDiff {
     pub media: Option<Vec<MediaAsset>>,
     pub bins: Option<Vec<Bin>>,
     pub multicams: Option<Vec<Multicam>>,
+    pub watch_folders: Option<Vec<WatchFolder>>,
     /// Set when sequences were added, removed or reordered (then `patches` is empty).
     pub sequences: Option<Vec<Sequence>>,
     pub patches: Vec<SequenceDelta>,
@@ -151,6 +155,7 @@ fn diff(before: &Snapshot, after: &Project) -> ProjectDiff {
         media: (*before.media != after.media).then(|| after.media.clone()),
         bins: (*before.bins != after.bins).then(|| after.bins.clone()),
         multicams: (*before.multicams != after.multicams).then(|| after.multicams.clone()),
+        watch_folders: (*before.watch_folders != after.watch_folders).then(|| after.watch_folders.clone()),
         ..Default::default()
     };
     let same_list = before.sequences.len() == after.sequences.len()

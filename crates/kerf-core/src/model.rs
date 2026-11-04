@@ -38,6 +38,35 @@ pub struct Project {
     /// it (set by archiving, so the folder can be moved as a whole).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub portable_paths: bool,
+    /// Folders whose new media files are imported while the project is open.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub watch_folders: Vec<WatchFolder>,
+}
+
+/// Most watch folders a project keeps.
+pub const MAX_WATCH_FOLDERS: usize = 16;
+
+/// A folder that is watched for new media files (the app scans it; the
+/// project only stores where to look and where the files go).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WatchFolder {
+    pub id: Uuid,
+    pub path: PathBuf,
+    /// Bin the files are imported into (`None` = project root).
+    #[serde(default)]
+    pub bin: Option<Uuid>,
+    /// Include subfolders (up to 8 levels, like importing a folder).
+    #[serde(default)]
+    pub subfolders: bool,
+}
+
+impl WatchFolder {
+    /// Key for comparing folders: case-insensitive, `/` and `\` alike, no trailing separator.
+    pub fn key(path: &std::path::Path) -> String {
+        let s = path.to_string_lossy().replace('\\', "/").to_lowercase();
+        s.trim_end_matches('/').to_string()
+    }
 }
 
 /// Camera angles of one take, in sync. Clips of the group show one angle
@@ -75,6 +104,7 @@ impl Project {
             sequences: vec![seq],
             multicams: Vec::new(),
             portable_paths: false,
+            watch_folders: Vec::new(),
         }
     }
 
@@ -164,8 +194,9 @@ impl Project {
         self.normalize_bins();
     }
 
-    /// Drops bin references that a damaged file could hold: media in a
-    /// missing or smart bin, bins under a missing or smart bin, parent loops.
+    /// Drops bin references that a damaged file could hold: media or watch
+    /// folders in a missing or smart bin, bins under a missing or smart bin,
+    /// parent loops; and duplicate watch folders.
     fn normalize_bins(&mut self) {
         let mut seen = HashSet::new();
         self.bins.retain(|b| seen.insert(b.id));
@@ -194,6 +225,15 @@ impl Project {
                 if !holds(&self.bins, b) {
                     m.bin = None;
                 }
+            }
+        }
+        // Watch folders: one per id and folder, at most MAX_WATCH_FOLDERS, into a bin that holds media.
+        let (mut ids, mut keys) = (HashSet::new(), HashSet::new());
+        self.watch_folders.retain(|w| !w.path.as_os_str().is_empty() && ids.insert(w.id) && keys.insert(WatchFolder::key(&w.path)));
+        self.watch_folders.truncate(MAX_WATCH_FOLDERS);
+        for w in &mut self.watch_folders {
+            if w.bin.is_some_and(|b| !holds(&self.bins, b)) {
+                w.bin = None;
             }
         }
     }

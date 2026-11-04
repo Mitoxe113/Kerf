@@ -232,6 +232,15 @@ pub enum EditCommand {
     SetSmartRules { bin: Uuid, rules: SmartRules },
     RenameBin { bin: Uuid, name: String },
     RemoveBin { bin: Uuid },
+    /// Watches `path` for new media files that go into `bin` (the app scans
+    /// it). `created` = [the watch folder's id].
+    AddWatchFolder {
+        path: PathBuf,
+        bin: Option<Uuid>,
+        #[serde(default)]
+        subfolders: bool,
+    },
+    RemoveWatchFolder { id: Uuid },
 
     // --- sequences --------------------------------------------------------
     AddSequence { name: String, settings: SequenceSettings },
@@ -376,6 +385,8 @@ impl EditCommand {
             C::RenameBin { .. } => "renameBin",
             C::RemoveBin { .. } => "removeBin",
             C::SetSmartRules { .. } => "setSmartRules",
+            C::AddWatchFolder { .. } => "addWatchFolder",
+            C::RemoveWatchFolder { .. } => "removeWatchFolder",
             C::AddSequence { .. } => "addSequence",
             C::NestClips { .. } => "nestClips",
             C::CreateMulticam { .. } => "createMulticam",
@@ -475,12 +486,20 @@ pub struct EditOutcome {
     pub changed: bool,
     /// Sequence whose content changed.
     pub sequence: Option<Uuid>,
-    /// True when the media list or bins changed.
+    /// True when the media list, bins or watch folders changed.
     pub media_changed: bool,
     /// True when sequences were added, removed or renamed.
     pub sequences_changed: bool,
     /// Ids created by the edit (clips, tracks, markers, bins, sequences).
     pub created: Vec<Uuid>,
+}
+
+/// Absolute on this or another system (`/x`, `C:\x`, `C:/x`, `\\server\x`): a
+/// project saved on Windows keeps its paths when it is opened elsewhere.
+fn absolute_path(p: &std::path::Path) -> bool {
+    let s = p.to_string_lossy();
+    let b = s.as_bytes();
+    p.is_absolute() || s.starts_with('/') || s.starts_with("\\\\") || (b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && matches!(b[2], b'\\' | b'/'))
 }
 
 /// Applies `cmd` to `project`. On error the project is left untouched.
@@ -717,7 +736,44 @@ pub fn apply(project: &mut Project, cmd: &EditCommand) -> Result<EditOutcome> {
                     m.bin = parent;
                 }
             }
+            for w in &mut project.watch_folders {
+                if w.bin == Some(*bin) {
+                    w.bin = parent;
+                }
+            }
             project.bins.retain(|b| b.id != *bin);
+            out.changed = true;
+            out.media_changed = true;
+        }
+        C::AddWatchFolder { path, bin, subfolders } => {
+            if !absolute_path(path) {
+                return Err(EditError::Invalid("watch folder path".into()));
+            }
+            if let Some(b) = bin {
+                let target = project.bins.iter().find(|x| x.id == *b).ok_or(EditError::BinNotFound)?;
+                if target.smart.is_some() {
+                    return Err(EditError::Invalid("a smart bin holds no media".into()));
+                }
+            }
+            let key = WatchFolder::key(path);
+            if project.watch_folders.iter().any(|w| WatchFolder::key(&w.path) == key) {
+                return Err(EditError::Invalid("the folder is watched already".into()));
+            }
+            if project.watch_folders.len() >= MAX_WATCH_FOLDERS {
+                return Err(EditError::Invalid(format!("at most {MAX_WATCH_FOLDERS} watch folders")));
+            }
+            let w = WatchFolder { id: Uuid::new_v4(), path: path.clone(), bin: *bin, subfolders: *subfolders };
+            out.created.push(w.id);
+            project.watch_folders.push(w);
+            out.changed = true;
+            out.media_changed = true;
+        }
+        C::RemoveWatchFolder { id } => {
+            let n = project.watch_folders.len();
+            project.watch_folders.retain(|w| w.id != *id);
+            if project.watch_folders.len() == n {
+                return Err(EditError::Invalid("watch folder not found".into()));
+            }
             out.changed = true;
             out.media_changed = true;
         }
@@ -3414,6 +3470,51 @@ mod tests {
         }
         assert!(p.bins.iter().filter(|x| x.name == "c" || x.name == "d").all(|x| x.parent.is_none()));
         assert_eq!(p.media.iter().map(|m| m.bin).collect::<Vec<_>>(), vec![None, None, Some(b)]);
+    }
+
+    #[test]
+    fn watch_folders_are_checked_undone_and_repaired() {
+        let mut p = Project::new("t", 0);
+        let mut h = crate::history::History::new(10);
+        let bin = h.apply(&mut p, &EditCommand::CreateBin { name: "Kamera".into(), parent: None, smart: None }).unwrap().created[0];
+        let smart = h.apply(&mut p, &EditCommand::CreateBin { name: "s".into(), parent: None, smart: Some(SmartRules::default()) }).unwrap().created[0];
+        let add = |path: &str, bin: Option<Uuid>| EditCommand::AddWatchFolder { path: path.into(), bin, subfolders: true };
+        let o = h.apply(&mut p, &add("C:\\Footage\\Tag 1", Some(bin))).unwrap();
+        assert!(o.changed && o.media_changed && o.created.len() == 1);
+        let id = o.created[0];
+        // Same folder in another spelling, relative paths, smart or missing bins: rejected, nothing changes.
+        let before = p.clone();
+        for cmd in [add("c:/footage/tag 1/", None), add("Footage", None), add("", None), add("D:\\x", Some(smart)), add("D:\\x", Some(Uuid::new_v4()))] {
+            assert!(apply(&mut p, &cmd).is_err(), "{cmd:?}");
+        }
+        assert!(apply(&mut p, &EditCommand::RemoveWatchFolder { id: Uuid::new_v4() }).is_err());
+        assert_eq!(p, before);
+        for path in ["/media/card", "\\\\nas\\share", "E:/clips"] {
+            apply(&mut p, &add(path, None)).unwrap();
+        }
+        for i in p.watch_folders.len()..MAX_WATCH_FOLDERS {
+            apply(&mut p, &add(&format!("/w/{i}"), None)).unwrap();
+        }
+        assert!(apply(&mut p, &add("/w/one-too-many", None)).is_err());
+        p.watch_folders.truncate(1);
+        // Removing the bin moves the folder's imports to the parent (root); undo brings both back.
+        h.apply(&mut p, &EditCommand::RemoveBin { bin }).unwrap();
+        assert_eq!(p.watch_folders[0].bin, None);
+        h.undo(&mut p);
+        assert_eq!(p.watch_folders[0].bin, Some(bin));
+        h.apply(&mut p, &EditCommand::RemoveWatchFolder { id }).unwrap();
+        assert!(p.watch_folders.is_empty());
+        assert!(h.diff(crate::history::Side::Undo, &p).unwrap().watch_folders.is_some());
+        h.undo(&mut p);
+        assert_eq!(p.watch_folders[0].id, id);
+        // Loading drops duplicates and references to missing or smart bins.
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(json.contains("\"watchFolders\"") && json.contains("\"subfolders\":true"));
+        let w = |path: &str, bin| WatchFolder { id: Uuid::new_v4(), path: path.into(), bin, subfolders: false };
+        p.watch_folders = vec![w("/a", Some(smart)), w("/A/", None), w("/b", Some(Uuid::new_v4())), w("", None), w("/c", Some(bin))];
+        p.normalize();
+        assert_eq!(p.watch_folders.iter().map(|w| (w.path.to_string_lossy().into_owned(), w.bin)).collect::<Vec<_>>(), vec![("/a".into(), None), ("/b".into(), None), ("/c".into(), Some(bin))]);
+        assert!(!serde_json::to_string(&Project::new("e", 0)).unwrap().contains("watchFolders"));
     }
 
     #[test]
